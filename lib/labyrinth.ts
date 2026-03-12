@@ -3,6 +3,17 @@ export const PATH = " ";
 export const PLAYER = "@";
 export const GOAL = "X";
 export const START = "S";
+export const MULT_X2 = "2";
+export const MULT_X3 = "3";
+export const MULT_X4 = "4";
+
+export function isMultiplierCell(cell: string): cell is "2" | "3" | "4" {
+  return cell === MULT_X2 || cell === MULT_X3 || cell === MULT_X4;
+}
+
+export function getMultiplierValue(cell: string): number {
+  return cell === MULT_X2 ? 2 : cell === MULT_X3 ? 3 : cell === MULT_X4 ? 4 : 1;
+}
 
 function shuffle<T>(arr: T[]): T[] {
   const result = [...arr];
@@ -126,6 +137,21 @@ export class Labyrinth {
     return count;
   }
 
+  private _addMultiplierCells(): void {
+    const pathCells: [number, number][] = [];
+    for (let y = 1; y < this.height - 1; y++)
+      for (let x = 1; x < this.width - 1; x++)
+        if (this.grid[y][x] === PATH && (x !== this.goalX || y !== this.goalY))
+          pathCells.push([x, y]);
+    const mults: ("2" | "3" | "4")[] = ["2", "3", "4"];
+    const count = Math.min(6, Math.floor(pathCells.length / 4));
+    for (let i = 0; i < count; i++) {
+      const idx = Math.floor(Math.random() * pathCells.length);
+      const [x, y] = pathCells.splice(idx, 1)[0];
+      this.grid[y][x] = mults[i % 3];
+    }
+  }
+
   private _addExtraPaths(): void {
     // Prefer walls with 2+ path neighbors - these create loops (alternative routes)
     let walls: [number, number][] = [];
@@ -153,6 +179,7 @@ export class Labyrinth {
     this._carvePath(1, 1);
     this._ensureGoalReachable();
     this._addExtraPaths();
+    this._addMultiplierCells();
     this.grid[0][0] = PATH;
     this.grid[this.height - 1][this.width - 1] = PATH;
     if (this.height > 1) this.grid[1][0] = PATH;

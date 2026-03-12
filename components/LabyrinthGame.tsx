@@ -7,6 +7,8 @@ import {
   DIFFICULTY,
   PLAYER_COLORS,
   PLAYER_COLORS_ACTIVE,
+  isMultiplierCell,
+  getMultiplierValue,
 } from "@/lib/labyrinth";
 
 const CELL_SIZE = 32;
@@ -22,6 +24,7 @@ export default function LabyrinthGame() {
   const [difficulty, setDifficulty] = useState(25);
   const [numPlayers, setNumPlayers] = useState(3);
   const [rolling, setRolling] = useState(false);
+  const [bonusAdded, setBonusAdded] = useState<number | null>(null);
   const diceRef = useRef<Dice3DRef>(null);
 
   const getDimensions = useCallback(() => {
@@ -41,6 +44,7 @@ export default function LabyrinthGame() {
     setDiceResult(null);
     setWinner(null);
     setError("");
+    setBonusAdded(null);
   }, [getDimensions, numPlayers]);
 
   const generateWithAI = useCallback(async () => {
@@ -74,6 +78,7 @@ export default function LabyrinthGame() {
         setDiceResult(null);
         setWinner(null);
         setError("");
+        setBonusAdded(null);
       } else {
         setError("Invalid maze from AI, using random maze.");
         newGame();
@@ -90,6 +95,7 @@ export default function LabyrinthGame() {
     setDiceResult(value);
     setMovesLeft(value);
     setRolling(false);
+    setBonusAdded(null);
   }, []);
 
   const rollDice = useCallback(async () => {
@@ -103,30 +109,42 @@ export default function LabyrinthGame() {
     setCurrentPlayer((p) => (p + 1) % lab.numPlayers);
     setMovesLeft(0);
     setDiceResult(null);
+    setBonusAdded(null);
   }, [lab, winner]);
 
   const doMove = useCallback(
     (dx: number, dy: number) => {
       if (winner !== null || !lab || movesLeft <= 0) return;
+      setBonusAdded(null);
       const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers);
       next.grid = lab.grid.map((r) => [...r]);
       next.players = lab.players.map((p) => ({ ...p }));
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
       if (next.movePlayer(dx, dy, currentPlayer)) {
-        setMovesLeft((m) => m - 1);
+        const newMovesLeft = movesLeft - 1;
+        setMovesLeft(newMovesLeft);
         setTotalMoves((t) => t + 1);
         if (next.isGoalReached(currentPlayer)) {
           setWinner(currentPlayer);
         }
         setLab(next);
         if (movesLeft === 1 && winner === null) {
-          setCurrentPlayer((p) => (p + 1) % lab.numPlayers);
-          setDiceResult(null);
+          const p = next.players[currentPlayer];
+          const cell = p && next.grid[p.y]?.[p.x];
+          if (cell && isMultiplierCell(cell) && diceResult !== null) {
+            const mult = getMultiplierValue(cell);
+            const bonus = diceResult * mult;
+            setMovesLeft(bonus);
+            setBonusAdded(bonus);
+          } else {
+            setCurrentPlayer((p) => (p + 1) % lab.numPlayers);
+            setDiceResult(null);
+          }
         }
       }
     },
-    [lab, currentPlayer, movesLeft, winner]
+    [lab, currentPlayer, movesLeft, winner, diceResult]
   );
 
   useEffect(() => {
@@ -215,6 +233,9 @@ export default function LabyrinthGame() {
               } else if (x === 0 && y === 0 && !playerCells["0,0"]) {
                 content = "S";
                 cellClass += " start";
+              } else if (isMultiplierCell(lab.grid[y][x])) {
+                content = `×${lab.grid[y][x]}`;
+                cellClass += " path multiplier mult-x" + lab.grid[y][x];
               } else {
                 cellClass += lab.grid[y][x] === "#" ? " wall" : " path";
                 if (lab.grid[y][x] === "#") content = null;
@@ -235,6 +256,12 @@ export default function LabyrinthGame() {
               if (cellClass.includes("goal")) {
                 cellBg.background = "#2e1e1e";
                 cellBg.color = "#ff4444";
+              }
+              if (cellClass.includes("multiplier")) {
+                cellBg.background = "#2e2a1e";
+                cellBg.color = "#ffcc00";
+                cellBg.fontWeight = "bold";
+                cellBg.fontSize = "0.85rem";
               }
 
               return (
@@ -258,11 +285,17 @@ export default function LabyrinthGame() {
               ? `Player ${currentPlayer + 1}`
               : `Player ${winner + 1} wins!`}
           </span>
-          &nbsp;|&nbsp; Moves left: <span>{movesLeft}</span> &nbsp;|&nbsp; Moves:{" "}
-          <span>{totalMoves}</span>
+          &nbsp;|&nbsp; Moves left:{" "}
+          <span style={bonusAdded !== null ? bonusHighlightStyle : undefined}>
+            {movesLeft}
+            {bonusAdded !== null && (
+              <span style={bonusBadgeStyle}> +{bonusAdded} bonus!</span>
+            )}
+          </span>
+          &nbsp;|&nbsp; Moves: <span>{totalMoves}</span>
         </div>
         <div className="info" style={{ ...infoStyle, marginTop: 4 }}>
-          S=Start &nbsp; X=Goal
+          S=Start &nbsp; X=Goal &nbsp; ×2/×3/×4=Bonus
         </div>
         <div className="player-legend" style={playerLegendStyle}>
           {lab.players.map((_, i) => {
@@ -586,4 +619,15 @@ const errorStyle: React.CSSProperties = {
   color: "#ff6666",
   fontSize: "0.85rem",
   marginTop: "0.5rem",
+};
+
+const bonusHighlightStyle: React.CSSProperties = {
+  color: "#ffcc00",
+  fontWeight: "bold",
+};
+
+const bonusBadgeStyle: React.CSSProperties = {
+  color: "#00ff88",
+  fontSize: "0.8rem",
+  marginLeft: 4,
 };
