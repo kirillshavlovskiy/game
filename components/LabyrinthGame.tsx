@@ -441,12 +441,8 @@ export default function LabyrinthGame() {
         </div>
 
         <div className="row" style={rowStyle}>
-          <button onClick={generateWithAI} style={buttonStyle}>
-            Generate with AI
-          </button>
           <button
             onClick={newGame}
-            className="secondary"
             style={{ ...buttonStyle, ...secondaryButtonStyle }}
           >
             Random Maze
