@@ -115,7 +115,7 @@ export async function POST(request) {
   }
   try {
     const { numPaths = 3, width = 11, height = 11 } = await request.json().catch(() => ({}));
-    const n = Math.min(Math.max(1, parseInt(numPaths, 10) || 3), 10);
+    const n = Math.min(Math.max(1, parseInt(numPaths, 10) || 3), 20);
     const w = Math.min(Math.max(5, parseInt(width, 10) || 11), 21);
     const h = Math.min(Math.max(5, parseInt(height, 10) || 11), 21);
 

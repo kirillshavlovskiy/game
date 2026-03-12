@@ -123,6 +123,7 @@
       justify-content: center;
       touch-action: none;
       position: relative;
+      perspective: 300px;
     }
     .dice-tray .hint { position: absolute; bottom: 0.5rem; left: 0; right: 0; text-align: center; font-size: 0.7rem; color: #555; }
     .dice-physical {
@@ -138,6 +139,8 @@
       justify-content: center;
       position: relative;
       touch-action: none;
+      transform-style: preserve-3d;
+      perspective: 200px;
     }
     .dice-physical:active { cursor: grabbing; }
     .dice-physical.rolling { cursor: default; pointer-events: none; }
@@ -164,19 +167,31 @@
     .dice-physical .face.f6 .p1 { grid-column: 1; grid-row: 1; } .dice-physical .face.f6 .p2 { grid-column: 3; grid-row: 1; } .dice-physical .face.f6 .p3 { grid-column: 1; grid-row: 2; } .dice-physical .face.f6 .p4 { grid-column: 3; grid-row: 2; } .dice-physical .face.f6 .p5 { grid-column: 1; grid-row: 3; } .dice-physical .face.f6 .p6 { grid-column: 3; grid-row: 3; }
     .dice-physical .face { display: none; }
     .dice-physical .face.show { display: grid; }
-    @keyframes diceTumble {
-      0% { transform: translateY(0) rotate(0deg) scale(1); }
-      20% { transform: translateY(-20px) rotate(90deg) scale(1.1); }
-      40% { transform: translateY(-5px) rotate(180deg) scale(1.05); }
-      60% { transform: translateY(-15px) rotate(270deg) scale(1.08); }
-      80% { transform: translateY(-3px) rotate(360deg) scale(1.02); }
-      100% { transform: translateY(0) rotate(450deg) scale(1); }
-    }
-    @keyframes diceDrop {
-      0% { transform: translateY(var(--drop-from, -30px)) scale(1.1); opacity: 0.9; }
-      60% { transform: translateY(4px) scale(1.02); }
-      80% { transform: translateY(-2px) scale(1); }
-      100% { transform: translateY(0) scale(1); opacity: 1; }
+    @keyframes diceRoll {
+      0% {
+        transform: translateY(0) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(1);
+      }
+      15% {
+        transform: translateY(var(--rise, -25px)) rotateX(120deg) rotateY(80deg) rotateZ(60deg) scale(1.05);
+      }
+      30% {
+        transform: translateY(var(--peak, -35px)) rotateX(240deg) rotateY(160deg) rotateZ(120deg) scale(1.08);
+      }
+      45% {
+        transform: translateY(var(--fall, -15px)) rotateX(360deg) rotateY(240deg) rotateZ(200deg) scale(1.04);
+      }
+      60% {
+        transform: translateY(6px) rotateX(480deg) rotateY(320deg) rotateZ(280deg) scale(1.02);
+      }
+      75% {
+        transform: translateY(-3px) rotateX(600deg) rotateY(400deg) rotateZ(350deg) scale(1.01);
+      }
+      90% {
+        transform: translateY(2px) rotateX(700deg) rotateY(450deg) rotateZ(400deg) scale(1);
+      }
+      100% {
+        transform: translateY(0) rotateX(720deg) rotateY(480deg) rotateZ(450deg) scale(1);
+      }
     }
   </style>
 </head>
@@ -472,7 +487,8 @@
     function newGame() {
       const numPlayers = Math.min(Math.max(1, parseInt(document.getElementById('numPaths').value, 10) || 1), 9);
       const size = getDimensions();
-      lab = new Labyrinth(size, size, 4, numPlayers);
+      const extraPaths = Math.max(4, numPlayers * 2);
+      lab = new Labyrinth(size, size, extraPaths, numPlayers);
       lab.generate();
       currentPlayer = 0;
       movesLeft = 0;
@@ -484,7 +500,8 @@
     }
 
     async function generateWithAI() {
-      const numPaths = parseInt(document.getElementById('numPaths').value, 10) || 3;
+      const numPlayers = Math.min(Math.max(1, parseInt(document.getElementById('numPaths').value, 10) || 1), 9);
+      const numPaths = numPlayers * 2;
       const btn = document.getElementById('aiMaze');
       btn.disabled = true;
       setError('Generating maze...');
@@ -503,7 +520,6 @@
         const size = getDimensions();
         const w = data.width || size;
         const h = data.height || size;
-        const numPlayers = Math.min(Math.max(1, parseInt(document.getElementById('numPaths').value, 10) || 1), 9);
         lab = new Labyrinth(w, h, 0, numPlayers);
         if (lab.loadGrid(data.grid)) {
           currentPlayer = 0;
@@ -534,11 +550,26 @@
     }
 
     function rollDice(result) {
-      if (winner !== null) return;
-      diceResult = typeof result === 'number' ? result : Math.floor(Math.random() * 6) + 1;
-      movesLeft = diceResult;
-      showDiceFace(diceResult);
-      render();
+      if (winner !== null || !lab) return;
+      const dice = document.getElementById('dicePhysical');
+      if (!dice || dice.classList.contains('rolling')) return;
+      const finalValue = typeof result === 'number' ? result : Math.floor(Math.random() * 6) + 1;
+      dice.classList.add('rolling');
+      dice.style.setProperty('--rise', '-30px');
+      dice.style.setProperty('--peak', '-40px');
+      dice.style.setProperty('--fall', '-15px');
+      dice.style.animation = 'diceRoll 900ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards';
+      let f = 0;
+      const iv = setInterval(() => { f++; showDiceFace((f % 6) + 1); if (f >= 10) clearInterval(iv); }, 80);
+      setTimeout(() => {
+        clearInterval(iv);
+        showDiceFace(finalValue);
+        dice.classList.remove('rolling');
+        dice.style.animation = '';
+        diceResult = finalValue;
+        movesLeft = finalValue;
+        render();
+      }, 900);
     }
 
     function setupDiceThrow() {
@@ -551,7 +582,9 @@
         dice.classList.remove('rolling');
         dice.style.animation = '';
         dice.style.transform = '';
-        dice.style.setProperty('--drop-from', '');
+        dice.style.removeProperty('--rise');
+        dice.style.removeProperty('--peak');
+        dice.style.removeProperty('--fall');
         diceResult = finalValue;
         movesLeft = finalValue;
         showDiceFace(finalValue);
@@ -562,14 +595,24 @@
         if (winner !== null || movesLeft > 0) return;
         dice.classList.add('rolling');
         const power = Math.min(1, Math.sqrt(velX * velX + velY * velY) / 80);
-        const tumbleDur = 400 + Math.round(power * 600);
-        dice.style.animation = `diceTumble ${tumbleDur}ms ease-out, diceDrop ${Math.min(400, tumbleDur)}ms ease-out ${tumbleDur - 200}ms both`;
-        dice.style.setProperty('--drop-from', `${-Math.abs(velY) - 20}px`);
+        const rollDur = 600 + Math.round(power * 500);
+        const rise = Math.min(50, Math.abs(velY) + 25);
+        dice.style.setProperty('--rise', `-${rise}px`);
+        dice.style.setProperty('--peak', `-${rise + 10}px`);
+        dice.style.setProperty('--fall', `-${rise / 2}px`);
+        dice.style.animation = `diceRoll ${rollDur}ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards`;
         const finalValue = Math.floor(Math.random() * 6) + 1;
+        let frame = 0;
+        const faceInterval = setInterval(() => {
+          frame++;
+          showDiceFace((frame % 6) + 1);
+          if (frame >= 12) clearInterval(faceInterval);
+        }, rollDur / 12);
         setTimeout(() => {
+          clearInterval(faceInterval);
           showDiceFace(finalValue);
-          setTimeout(() => applyRoll(finalValue), 200);
-        }, tumbleDur);
+          setTimeout(() => applyRoll(finalValue), 150);
+        }, rollDur);
       }
 
       function start(e) {
