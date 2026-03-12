@@ -236,9 +236,10 @@
       <div class="row">
         <label>Difficulty: <select id="difficulty">
           <option value="7">Easy (7×7)</option>
-          <option value="11" selected>Medium (11×11)</option>
+          <option value="11">Medium (11×11)</option>
           <option value="15">Hard (15×15)</option>
           <option value="21">Expert (21×21)</option>
+          <option value="25" selected>Large (25×25)</option>
         </select></label>
       </div>
       <div class="row">
@@ -254,12 +255,12 @@
   </div>
 
   <script>
-    const DIFFICULTY = { 7: 7, 11: 11, 15: 15, 21: 21 };
+    const DIFFICULTY = { 7: 7, 11: 11, 15: 15, 21: 21, 25: 25 };
     function getDimensions() {
-      const d = parseInt(document.getElementById('difficulty').value, 10) || 11;
-      return DIFFICULTY[d] || 11;
+      const d = parseInt(document.getElementById('difficulty').value, 10) || 25;
+      return DIFFICULTY[d] || 25;
     }
-    const DEFAULT_SIZE = 11;
+    const DEFAULT_SIZE = 25;
     const WALL = '#', PATH = ' ', PLAYER = '@', GOAL = 'X', START = 'S';
 
     function shuffle(arr) {

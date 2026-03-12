@@ -199,6 +199,7 @@ export const DIFFICULTY: Record<number, number> = {
   11: 11,
   15: 15,
   21: 21,
+  25: 25,
 };
 
 export const PLAYER_COLORS = [

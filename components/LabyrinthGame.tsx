@@ -19,13 +19,13 @@ export default function LabyrinthGame() {
   const [diceResult, setDiceResult] = useState<number | null>(null);
   const [winner, setWinner] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const [difficulty, setDifficulty] = useState(11);
+  const [difficulty, setDifficulty] = useState(25);
   const [numPlayers, setNumPlayers] = useState(3);
   const [rolling, setRolling] = useState(false);
   const diceRef = useRef<Dice3DRef>(null);
 
   const getDimensions = useCallback(() => {
-    return DIFFICULTY[difficulty] ?? 11;
+    return DIFFICULTY[difficulty] ?? 25;
   }, [difficulty]);
 
   const newGame = useCallback(() => {
@@ -387,6 +387,7 @@ export default function LabyrinthGame() {
               <option value={11}>Medium (11×11)</option>
               <option value={15}>Hard (15×15)</option>
               <option value={21}>Expert (21×21)</option>
+              <option value={25}>Large (25×25)</option>
             </select>
           </label>
         </div>
@@ -436,7 +437,7 @@ const mainStyle: React.CSSProperties = {
   flexWrap: "wrap",
   gap: "2rem",
   alignItems: "flex-start",
-  justifyContent: "center",
+  justifyContent: "flex-start",
   padding: "1.5rem",
 };
 
@@ -482,6 +483,7 @@ const markerStyle: React.CSSProperties = {
 const controlsPanelStyle: React.CSSProperties = {
   width: 280,
   flexShrink: 0,
+  marginLeft: "auto",
   background: "#1a1a24",
   padding: "1.5rem",
   borderRadius: 8,

@@ -130,14 +130,14 @@ export async function OPTIONS() {
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
-    const { numPaths = 3, width = 11, height = 11 } = body as {
+    const { numPaths = 3, width = 25, height = 25 } = body as {
       numPaths?: number;
       width?: number;
       height?: number;
     };
     const n = Math.min(Math.max(1, parseInt(String(numPaths), 10) || 3), 20);
-    const w = Math.min(Math.max(5, parseInt(String(width), 10) || 11), 21);
-    const h = Math.min(Math.max(5, parseInt(String(height), 10) || 11), 21);
+    const w = Math.min(Math.max(5, parseInt(String(width), 10) || 25), 31);
+    const h = Math.min(Math.max(5, parseInt(String(height), 10) || 25), 31);
 
     const anthropicKey = process.env.ANTHROPIC_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
