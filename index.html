@@ -33,8 +33,10 @@
       letter-spacing: 0.05em;
     }
     .cell {
-      width: 24px;
-      height: 24px;
+      min-width: 14px;
+      min-height: 14px;
+      width: var(--cell-size, 24px);
+      height: var(--cell-size, 24px);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -48,6 +50,14 @@
     .cell.p2 { color: #4488ff; background: #1e2e48; font-weight: bold; }
     .cell.p3 { color: #ff8844; background: #482e1e; font-weight: bold; }
     .cell.p4 { color: #ff44ff; background: #481e48; font-weight: bold; }
+    .cell.p5 { color: #44ff88; background: #1e4830; font-weight: bold; }
+    .cell.p6 { color: #88aaff; background: #2e3e58; font-weight: bold; }
+    .cell.p7 { color: #ffaa44; background: #58402e; font-weight: bold; }
+    .cell.p8 { color: #aa44ff; background: #382e58; font-weight: bold; }
+    .cell.p9 { color: #44ffcc; background: #1e4840; font-weight: bold; }
+    .player-legend { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; font-size: 0.8rem; }
+    .player-legend span { display: flex; align-items: center; gap: 0.25rem; }
+    .player-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
     .dice { font-size: 1.5rem; margin: 0 0.5rem; }
     .info { margin-top: 1rem; font-size: 0.85rem; color: #888; }
     .controls { margin-top: 0.5rem; font-size: 0.8rem; }
@@ -55,6 +65,7 @@
     .row { display: flex; gap: 1rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
     .row label { display: flex; align-items: center; gap: 0.5rem; }
     .row input[type="number"] { width: 3rem; padding: 0.25rem; font-family: inherit; background: #2a2a35; border: 1px solid #444; color: #c0c0c0; border-radius: 4px; }
+    .row select { padding: 0.25rem 0.5rem; font-family: inherit; background: #2a2a35; border: 1px solid #444; color: #c0c0c0; border-radius: 4px; }
     button {
       padding: 0.5rem 1rem;
       font-family: inherit;
@@ -81,6 +92,7 @@
       Moves left: <span id="movesLeft">0</span> &nbsp;|&nbsp;
       Moves: <span id="moves">0</span> &nbsp;|&nbsp; S=Start &nbsp; X=Goal
     </div>
+    <div id="playerLegend" class="player-legend"></div>
     <div class="row">
       <button id="rollDice">Roll dice</button>
       <span id="diceResult" class="dice" title="Dice result = moves you can make"></span>
@@ -88,6 +100,12 @@
     </div>
     <div class="controls">WASD or Arrow keys to move &nbsp;|&nbsp; R = New maze</div>
     <div class="row">
+      <label>Difficulty: <select id="difficulty">
+        <option value="7">Easy (7×7)</option>
+        <option value="11" selected>Medium (11×11)</option>
+        <option value="15">Hard (15×15)</option>
+        <option value="21">Expert (21×21)</option>
+      </select></label>
       <label>Paths (players): <input type="number" id="numPaths" min="1" max="10" value="3"></label>
       <button id="aiMaze">Generate with AI</button>
       <button id="newMaze" class="secondary">Random Maze</button>
@@ -97,7 +115,12 @@
   </div>
 
   <script>
-    const WIDTH = 11, HEIGHT = 11;
+    const DIFFICULTY = { 7: 7, 11: 11, 15: 15, 21: 21 };
+    function getDimensions() {
+      const d = parseInt(document.getElementById('difficulty').value, 10) || 11;
+      return DIFFICULTY[d] || 11;
+    }
+    const DEFAULT_SIZE = 11;
     const WALL = '#', PATH = ' ', PLAYER = '@', GOAL = 'X', START = 'S';
 
     function shuffle(arr) {
@@ -109,6 +132,7 @@
     }
 
     const PLAYER_SYMBOLS = ['@', '2', '3', '4', '5', '6', '7', '8', '9'];
+    const PLAYER_COLORS = ['#00ff88', '#4488ff', '#ff8844', '#ff44ff', '#44ff88', '#88aaff', '#ffaa44', '#aa44ff', '#44ffcc'];
 
     class Labyrinth {
       constructor(width, height, extraPaths = 4, numPlayers = 1) {
@@ -248,10 +272,20 @@
 
     let lab, moves, currentPlayer, movesLeft, totalMoves, diceResult, winner;
 
+    function cellSize() {
+      const s = lab.width;
+      if (s <= 7) return 28;
+      if (s <= 11) return 24;
+      if (s <= 15) return 18;
+      return 14;
+    }
+
     function render() {
       const el = document.getElementById('maze');
       el.innerHTML = '';
-      el.style.gridTemplateColumns = `repeat(${lab.width}, 24px)`;
+      const cs = cellSize();
+      el.style.setProperty('--cell-size', cs + 'px');
+      el.style.gridTemplateColumns = `repeat(${lab.width}, ${cs}px)`;
       const playerCells = {};
       lab.players.forEach((p, i) => { playerCells[`${p.x},${p.y}`] = i; });
       const cp = lab.players[currentPlayer];
@@ -285,6 +319,12 @@
         : `Player ${winner + 1} wins!`;
       document.getElementById('diceResult').textContent = diceResult || '—';
       document.getElementById('rollDice').disabled = movesLeft > 0 || winner !== null;
+      const legend = document.getElementById('playerLegend');
+      legend.innerHTML = lab.players.map((_, i) => {
+        const c = PLAYER_COLORS[i] || '#888';
+        const active = i === currentPlayer ? ' (turn)' : '';
+        return `<span><span class="dot" style="background:${c}"></span> P${i+1}${active}</span>`;
+      }).join('');
       const wonEl = document.getElementById('won');
       wonEl.style.display = winner !== null ? 'block' : 'none';
       if (winner !== null) document.getElementById('winnerNum').textContent = winner + 1;
@@ -296,7 +336,8 @@
 
     function newGame() {
       const numPlayers = Math.min(Math.max(1, parseInt(document.getElementById('numPaths').value, 10) || 1), 9);
-      lab = new Labyrinth(WIDTH, HEIGHT, 4, numPlayers);
+      const size = getDimensions();
+      lab = new Labyrinth(size, size, 4, numPlayers);
       lab.generate();
       currentPlayer = 0;
       movesLeft = 0;
@@ -317,15 +358,16 @@
         const res = await fetch(`${base}/api/generate-maze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ numPaths, width: WIDTH, height: HEIGHT }),
+          body: JSON.stringify({ numPaths, width: getDimensions(), height: getDimensions() }),
         });
         const data = await res.json();
         if (!res.ok) {
           setError(data.error || 'API error');
           return;
         }
-        const w = data.width || WIDTH;
-        const h = data.height || HEIGHT;
+        const size = getDimensions();
+        const w = data.width || size;
+        const h = data.height || size;
         const numPlayers = Math.min(Math.max(1, parseInt(document.getElementById('numPaths').value, 10) || 1), 9);
         lab = new Labyrinth(w, h, 0, numPlayers);
         if (lab.loadGrid(data.grid)) {
