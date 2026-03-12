@@ -58,6 +58,12 @@
     .player-legend { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; font-size: 0.8rem; }
     .player-legend span { display: flex; align-items: center; gap: 0.25rem; }
     .player-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .move-buttons { display: grid; grid-template-columns: repeat(3, 2.5rem); grid-template-rows: repeat(3, 2.5rem); gap: 2px; margin-top: 0.5rem; }
+    .move-buttons button { width: 2.5rem; height: 2.5rem; padding: 0; font-size: 1.2rem; }
+    .move-buttons .up { grid-column: 2; grid-row: 1; }
+    .move-buttons .left { grid-column: 1; grid-row: 2; }
+    .move-buttons .right { grid-column: 3; grid-row: 2; }
+    .move-buttons .down { grid-column: 2; grid-row: 3; }
     .dice { font-size: 1.5rem; margin: 0 0.5rem; }
     .info { margin-top: 1rem; font-size: 0.85rem; color: #888; }
     .controls { margin-top: 0.5rem; font-size: 0.8rem; }
@@ -97,6 +103,12 @@
       <button id="rollDice">Roll dice</button>
       <span id="diceResult" class="dice" title="Dice result = moves you can make"></span>
       <button id="endTurn" class="secondary">End turn</button>
+    </div>
+    <div class="move-buttons">
+      <button id="btnUp" class="up" title="Up">↑</button>
+      <button id="btnLeft" class="left" title="Left">←</button>
+      <button id="btnRight" class="right" title="Right">→</button>
+      <button id="btnDown" class="down" title="Down">↓</button>
     </div>
     <div class="controls">WASD or Arrow keys to move &nbsp;|&nbsp; R = New maze</div>
     <div class="row">
@@ -319,6 +331,10 @@
         : `Player ${winner + 1} wins!`;
       document.getElementById('diceResult').textContent = diceResult || '—';
       document.getElementById('rollDice').disabled = movesLeft > 0 || winner !== null;
+      const moveDisabled = movesLeft <= 0 || winner !== null;
+      ['btnUp','btnDown','btnLeft','btnRight'].forEach(id => {
+        document.getElementById(id).disabled = moveDisabled;
+      });
       const legend = document.getElementById('playerLegend');
       legend.innerHTML = lab.players.map((_, i) => {
         const c = PLAYER_COLORS[i] || '#888';
@@ -405,19 +421,31 @@
       render();
     }
 
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'r' || e.key === 'R') { newGame(); e.preventDefault(); return; }
+    function doMove(dx, dy) {
       if (winner !== null || movesLeft <= 0) return;
-      const map = { ArrowUp: [0,-1], ArrowDown: [0,1], ArrowLeft: [-1,0], ArrowRight: [1,0],
-        w: [0,-1], W: [0,-1], s: [0,1], S: [0,1], a: [-1,0], A: [-1,0], d: [1,0], D: [1,0] };
-      const d = map[e.key];
-      if (d && lab.movePlayer(d[0], d[1], currentPlayer)) {
+      if (lab.movePlayer(dx, dy, currentPlayer)) {
         movesLeft--;
         totalMoves++;
         if (lab.isGoalReached(currentPlayer)) winner = currentPlayer;
+        if (movesLeft === 0 && winner === null) {
+          currentPlayer = (currentPlayer + 1) % lab.numPlayers;
+          diceResult = null;
+        }
         render();
-        e.preventDefault();
       }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'r' || e.key === 'R') { newGame(); e.preventDefault(); return; }
+      const map = { ArrowUp: [0,-1], ArrowDown: [0,1], ArrowLeft: [-1,0], ArrowRight: [1,0],
+        w: [0,-1], W: [0,-1], s: [0,1], S: [0,1], a: [-1,0], A: [-1,0], d: [1,0], D: [1,0] };
+      const d = map[e.key];
+      if (d) { doMove(d[0], d[1]); e.preventDefault(); }
+    });
+
+    ['btnUp','btnDown','btnLeft','btnRight'].forEach((id, i) => {
+      const [dx, dy] = [[0,-1],[0,1],[-1,0],[1,0]][i];
+      document.getElementById(id).addEventListener('click', () => doMove(dx, dy));
     });
 
     document.getElementById('newMaze').addEventListener('click', newGame);
