@@ -14,6 +14,12 @@ export interface Dice3DProps {
 function getValueFromResult(result: unknown): number {
   if (result && typeof result === "object") {
     const r = result as Record<string, unknown>;
+    // dice-box-threejs returns { sets: [{ rolls: [{ value: N }, ...] }] }
+    const sets = r.sets as Array<{ rolls?: Array<{ value?: number }> }> | undefined;
+    if (Array.isArray(sets) && sets[0]?.rolls?.[0]) {
+      const v = sets[0].rolls[0].value;
+      if (typeof v === "number") return Math.min(6, Math.max(1, v));
+    }
     if (Array.isArray(r.values)) return Math.min(6, Math.max(1, r.values[0] ?? 1));
     if (Array.isArray(r.dice)) {
       const v = (r.dice[0] as { value?: number })?.value;
