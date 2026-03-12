@@ -64,9 +64,24 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
         if (!el) return;
         el.id = "dice-scene-" + Math.random().toString(36).slice(2);
         const id = el.id;
+
+        // Wait for container to have dimensions (layout complete)
+        await new Promise<void>((resolve) => {
+          if (el.clientWidth > 0 && el.clientHeight > 0) {
+            resolve();
+            return;
+          }
+          const check = () => {
+            if (el.clientWidth > 0 && el.clientHeight > 0) resolve();
+            else requestAnimationFrame(check);
+          };
+          requestAnimationFrame(check);
+        });
+
         const { default: DiceBox } = await import("@3d-dice/dice-box-threejs");
         const box = new DiceBox("#" + id, {
-          theme_surface: "green-felt",
+          assetPath: "https://cdn.jsdelivr.net/gh/MajorVictory/3DDiceRoller@master/textures/envmap/",
+          theme_surface: "taverntable",
           theme_material: "glass",
           theme_colorset: "white",
           sounds: false,
@@ -74,6 +89,7 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
           baseScale: 100,
           strength: 1.2,
         });
+        await box.initialize();
         diceBoxRef.current = box;
       };
 
@@ -87,8 +103,10 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
       <div className="dice-tray" style={{ position: "relative" }}>
         <div
           ref={containerRef}
+          className="dice-container"
           style={{
             width: "100%",
+            minWidth: 200,
             minHeight: 140,
             height: 140,
             borderRadius: 12,
