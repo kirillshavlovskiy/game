@@ -1,2 +1,2 @@
 # Labyrinth - DOS-like maze game
-# No external dependencies - uses Python stdlib only
+anthropic>=0.39.0

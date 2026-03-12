@@ -17,11 +17,7 @@
       background: #0a0a0f;
       color: #c0c0c0;
     }
-    h1 {
-      font-size: 1.5rem;
-      margin-bottom: 0.5rem;
-      color: #00ff88;
-    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: #00ff88; }
     .game-container {
       background: #1a1a24;
       padding: 1.5rem;
@@ -32,38 +28,29 @@
     .maze {
       display: inline-grid;
       gap: 0;
-      font-size: 1.25rem;
+      font-size: 1.1rem;
       line-height: 1.2;
-      letter-spacing: 0.1em;
+      letter-spacing: 0.05em;
     }
     .cell {
-      width: 28px;
-      height: 28px;
+      width: 24px;
+      height: 24px;
       display: flex;
       align-items: center;
       justify-content: center;
     }
-    .cell.wall { color: #444; background: #2a2a35; }
+    .cell.wall { color: #555; background: #2a2a35; }
     .cell.path { color: #333; background: #1e1e28; }
     .cell.start { color: #00ff88; background: #1e2e24; }
     .cell.goal { color: #ff4444; background: #2e1e1e; }
     .cell.player { color: #00ff88; background: #1e2e24; font-weight: bold; }
-    .info {
-      margin-top: 1rem;
-      font-size: 0.85rem;
-      color: #888;
-    }
-    .controls {
-      margin-top: 0.5rem;
-      font-size: 0.8rem;
-    }
-    .won {
-      margin-top: 1rem;
-      color: #00ff88;
-      font-weight: bold;
-    }
+    .info { margin-top: 1rem; font-size: 0.85rem; color: #888; }
+    .controls { margin-top: 0.5rem; font-size: 0.8rem; }
+    .won { margin-top: 1rem; color: #00ff88; font-weight: bold; }
+    .row { display: flex; gap: 1rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
+    .row label { display: flex; align-items: center; gap: 0.5rem; }
+    .row input[type="number"] { width: 3rem; padding: 0.25rem; font-family: inherit; background: #2a2a35; border: 1px solid #444; color: #c0c0c0; border-radius: 4px; }
     button {
-      margin-top: 1rem;
       padding: 0.5rem 1rem;
       font-family: inherit;
       font-size: 0.9rem;
@@ -74,6 +61,10 @@
       cursor: pointer;
     }
     button:hover { background: #00cc6a; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.secondary { background: #444; color: #c0c0c0; }
+    button.secondary:hover { background: #555; }
+    .error { color: #ff6666; font-size: 0.85rem; margin-top: 0.5rem; }
   </style>
 </head>
 <body>
@@ -82,12 +73,17 @@
     <div id="maze" class="maze"></div>
     <div class="info">Moves: <span id="moves">0</span> &nbsp;|&nbsp; S=Start &nbsp; @=You &nbsp; X=Goal</div>
     <div class="controls">WASD or Arrow keys to move &nbsp;|&nbsp; R = New maze</div>
+    <div class="row">
+      <label>Paths (players): <input type="number" id="numPaths" min="1" max="10" value="3"></label>
+      <button id="aiMaze">Generate with AI</button>
+      <button id="newMaze" class="secondary">Random Maze</button>
+    </div>
     <div id="won" class="won" style="display:none">*** YOU WON! ***</div>
-    <button id="newMaze">New Maze</button>
+    <div id="error" class="error"></div>
   </div>
 
   <script>
-    const WIDTH = 10, HEIGHT = 10;
+    const WIDTH = 11, HEIGHT = 11;
     const WALL = '#', PATH = ' ', PLAYER = '@', GOAL = 'X', START = 'S';
 
     function shuffle(arr) {
@@ -99,7 +95,7 @@
     }
 
     class Labyrinth {
-      constructor(width, height, extraPaths = 8) {
+      constructor(width, height, extraPaths = 4) {
         this.width = width;
         this.height = height;
         this.extraPaths = extraPaths;
@@ -117,10 +113,11 @@
 
       _carvePath(x, y) {
         this.grid[y][x] = PATH;
-        const dirs = shuffle([[0,-1],[1,0],[0,1],[-1,0]]);
+        const dirs = shuffle([[0,-2],[2,0],[0,2],[-2,0]]);
         for (const [dx, dy] of dirs) {
           const nx = x + dx, ny = y + dy;
-          if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height && this.grid[ny][nx] === WALL) {
+          if (nx >= 1 && nx <= this.width - 2 && ny >= 1 && ny <= this.height - 2 && this.grid[ny][nx] === WALL) {
+            this.grid[y + dy / 2][x + dx / 2] = PATH;
             this._carvePath(nx, ny);
           }
         }
@@ -177,11 +174,34 @@
 
       generate() {
         this._initGrid();
-        this._carvePath(0, 0);
+        this._carvePath(1, 1);
         this._ensureGoalReachable();
         this._addExtraPaths();
         this.grid[0][0] = PATH;
         this.grid[this.height - 1][this.width - 1] = PATH;
+        if (this.height > 1) this.grid[1][0] = PATH;
+        if (this.width > 1) this.grid[0][1] = PATH;
+        if (this.height > 1) this.grid[this.height - 2][this.width - 1] = PATH;
+        if (this.width > 1) this.grid[this.height - 1][this.width - 2] = PATH;
+      }
+
+      loadGrid(grid) {
+        if (!grid || !Array.isArray(grid) || grid.length !== this.height) return false;
+        this._initGrid();
+        for (let y = 0; y < this.height; y++) {
+          const row = grid[y];
+          if (!Array.isArray(row) || row.length !== this.width) return false;
+          for (let x = 0; x < this.width; x++) {
+            this.grid[y][x] = row[x] === '#' ? WALL : PATH;
+          }
+        }
+        this.grid[0][0] = PATH;
+        this.grid[this.goalY][this.goalX] = PATH;
+        if (this.height > 1) this.grid[1][0] = PATH;
+        if (this.width > 1) this.grid[0][1] = PATH;
+        if (this.height > 1) this.grid[this.height - 2][this.width - 1] = PATH;
+        if (this.width > 1) this.grid[this.height - 1][this.width - 2] = PATH;
+        return true;
       }
 
       canMove(x, y) {
@@ -208,7 +228,7 @@
     function render() {
       const el = document.getElementById('maze');
       el.innerHTML = '';
-      el.style.gridTemplateColumns = `repeat(${lab.width}, 28px)`;
+      el.style.gridTemplateColumns = `repeat(${lab.width}, 24px)`;
       for (let y = 0; y < lab.height; y++) {
         for (let x = 0; x < lab.width; x++) {
           const div = document.createElement('div');
@@ -234,11 +254,52 @@
       document.getElementById('won').style.display = lab.isGoalReached() ? 'block' : 'none';
     }
 
+    function setError(msg) {
+      document.getElementById('error').textContent = msg || '';
+    }
+
     function newGame() {
-      lab = new Labyrinth(WIDTH, HEIGHT, 8);
+      lab = new Labyrinth(WIDTH, HEIGHT, 4);
       lab.generate();
       moves = 0;
+      setError('');
       render();
+    }
+
+    async function generateWithAI() {
+      const numPaths = parseInt(document.getElementById('numPaths').value, 10) || 3;
+      const btn = document.getElementById('aiMaze');
+      btn.disabled = true;
+      setError('Generating maze...');
+      try {
+        const base = window.location.origin;
+        const res = await fetch(`${base}/api/generate-maze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ numPaths, width: WIDTH, height: HEIGHT }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || 'API error');
+          return;
+        }
+        const w = data.width || WIDTH;
+        const h = data.height || HEIGHT;
+        lab = new Labyrinth(w, h, 0);
+        if (lab.loadGrid(data.grid)) {
+          moves = 0;
+          setError('');
+          render();
+        } else {
+          setError('Invalid maze from AI, using random maze.');
+          newGame();
+        }
+      } catch (e) {
+        setError('Failed to reach API: ' + (e.message || 'network error'));
+        newGame();
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     document.addEventListener('keydown', (e) => {
@@ -251,6 +312,7 @@
     });
 
     document.getElementById('newMaze').addEventListener('click', newGame);
+    document.getElementById('aiMaze').addEventListener('click', generateWithAI);
 
     newGame();
   </script>
