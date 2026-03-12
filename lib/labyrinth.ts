@@ -29,12 +29,8 @@ export function isDiamondCell(cell: string): boolean {
   return /^D\d+$/.test(cell);
 }
 
-export function isCoinCell(cell: string): boolean {
-  return /^C\d+$/.test(cell);
-}
-
 export function getCollectibleOwner(cell: string): number | null {
-  const m = cell.match(/^[DC](\d+)$/);
+  const m = cell.match(/^D(\d+)$/);
   return m ? parseInt(m[1], 10) - 1 : null;
 }
 
@@ -57,7 +53,7 @@ export class Labyrinth {
   extraPaths: number;
   numPlayers: number;
   grid: string[][];
-  players: Array<{ x: number; y: number; jumps: number; diamonds: number; coins: number }>;
+  players: Array<{ x: number; y: number; jumps: number; diamonds: number }>;
   goalX: number;
   goalY: number;
 
@@ -72,7 +68,7 @@ export class Labyrinth {
     this.extraPaths = extraPaths;
     this.numPlayers = numPlayers;
     this.grid = [];
-    this.players = Array.from({ length: numPlayers }, () => ({ x: 0, y: 0, jumps: 0, diamonds: 0, coins: 0 }));
+    this.players = Array.from({ length: numPlayers }, () => ({ x: 0, y: 0, jumps: 0, diamonds: 0 }));
     this.goalX = width - 1;
     this.goalY = height - 1;
   }
@@ -186,10 +182,9 @@ export class Labyrinth {
     const multCount = Math.max(6, Math.min(15, Math.floor(pathCells.length * 0.12)));
     const magicCount = Math.max(2, Math.min(4, Math.floor(pathCells.length * 0.02)));
     const jumpCount = Math.max(1, Math.min(3, Math.floor(pathCells.length * 0.015)));
-    const diamondCount = Math.max(this.numPlayers, Math.min(this.numPlayers * 2, Math.floor(pathCells.length * 0.025)));
-    const coinCount = Math.max(this.numPlayers * 2, Math.min(this.numPlayers * 3, Math.floor(pathCells.length * 0.04)));
+    const diamondCount = Math.max(this.numPlayers, Math.min(this.numPlayers * 2, Math.floor(pathCells.length * 0.04)));
 
-    const total = multCount + magicCount + jumpCount + diamondCount + coinCount;
+    const total = multCount + magicCount + jumpCount + diamondCount;
     if (total > pathCells.length) return;
 
     const multCells = this._pickSpread(pathCells, multCount);
@@ -199,8 +194,6 @@ export class Labyrinth {
     const jumpCells = this._pickSpread(rest2, jumpCount);
     const rest3 = rest2.filter((c) => !jumpCells.some((j) => j[0] === c[0] && j[1] === c[1]));
     const diamondCells = this._pickSpread(rest3, diamondCount);
-    const rest4 = rest3.filter((c) => !diamondCells.some((d) => d[0] === c[0] && d[1] === c[1]));
-    const coinCells = this._pickSpread(rest4, coinCount);
 
     for (let i = 0; i < multCells.length; i++) {
       const [x, y] = multCells[i];
@@ -211,10 +204,6 @@ export class Labyrinth {
     for (let i = 0; i < diamondCells.length; i++) {
       const [x, y] = diamondCells[i];
       this.grid[y][x] = `D${(i % this.numPlayers) + 1}`;
-    }
-    for (let i = 0; i < coinCells.length; i++) {
-      const [x, y] = coinCells[i];
-      this.grid[y][x] = `C${(i % this.numPlayers) + 1}`;
     }
   }
 
@@ -276,7 +265,6 @@ export class Labyrinth {
       y: 0,
       jumps: 0,
       diamonds: 0,
-      coins: 0,
     }));
     return true;
   }
@@ -316,18 +304,25 @@ export class Labyrinth {
     return false;
   }
 
-  teleportToRandomMagicCell(playerIndex = 0): boolean {
+  getTeleportDestination(playerIndex = 0): [number, number] | null {
     const p = this.players[playerIndex];
-    if (!p) return false;
+    if (!p) return null;
     const magicCells: [number, number][] = [];
     for (let y = 0; y < this.height; y++)
       for (let x = 0; x < this.width; x++)
         if (this.grid[y][x] === MAGIC && (x !== p.x || y !== p.y))
           magicCells.push([x, y]);
-    if (magicCells.length === 0) return false;
-    const [x, y] = magicCells[Math.floor(Math.random() * magicCells.length)];
-    p.x = x;
-    p.y = y;
+    if (magicCells.length === 0) return null;
+    return magicCells[Math.floor(Math.random() * magicCells.length)];
+  }
+
+  teleportToRandomMagicCell(playerIndex = 0): boolean {
+    const dest = this.getTeleportDestination(playerIndex);
+    if (!dest) return false;
+    const p = this.players[playerIndex];
+    if (!p) return false;
+    p.x = dest[0];
+    p.y = dest[1];
     return true;
   }
 

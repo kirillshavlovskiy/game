@@ -12,7 +12,6 @@ import {
   isMagicCell,
   isJumpCell,
   isDiamondCell,
-  isCoinCell,
   getCollectibleOwner,
 } from "@/lib/labyrinth";
 
@@ -30,7 +29,18 @@ export default function LabyrinthGame() {
   const [numPlayers, setNumPlayers] = useState(3);
   const [rolling, setRolling] = useState(false);
   const [bonusAdded, setBonusAdded] = useState<number | null>(null);
+  const [teleportAnimation, setTeleportAnimation] = useState<{
+    from: [number, number];
+    to: [number, number];
+    playerIndex: number;
+  } | null>(null);
   const diceRef = useRef<Dice3DRef>(null);
+
+  useEffect(() => {
+    if (!teleportAnimation) return;
+    const t = setTimeout(() => setTeleportAnimation(null), 600);
+    return () => clearTimeout(t);
+  }, [teleportAnimation]);
 
   const getDimensions = useCallback(() => {
     return DIFFICULTY[difficulty] ?? 25;
@@ -50,6 +60,7 @@ export default function LabyrinthGame() {
     setWinner(null);
     setError("");
     setBonusAdded(null);
+    setTeleportAnimation(null);
   }, [getDimensions, numPlayers]);
 
   const generateWithAI = useCallback(async () => {
@@ -84,6 +95,7 @@ export default function LabyrinthGame() {
         setWinner(null);
         setError("");
         setBonusAdded(null);
+        setTeleportAnimation(null);
       } else {
         setError("Invalid maze from AI, using random maze.");
         newGame();
@@ -127,7 +139,6 @@ export default function LabyrinthGame() {
         ...p,
         jumps: p.jumps ?? 0,
         diamonds: p.diamonds ?? 0,
-        coins: p.coins ?? 0,
       }));
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
@@ -139,17 +150,17 @@ export default function LabyrinthGame() {
         if (p) {
           const cell = next.grid[p.y]?.[p.x];
           if (cell && isJumpCell(cell)) p.jumps = (p.jumps ?? 0) + 1;
-          if (cell && isMagicCell(cell)) next.teleportToRandomMagicCell(currentPlayer);
+          if (cell && isMagicCell(cell) && movesLeft === 1) {
+            const from: [number, number] = [p.x, p.y];
+            const dest = next.getTeleportDestination(currentPlayer);
+            if (dest && next.teleportToRandomMagicCell(currentPlayer)) {
+              setTeleportAnimation({ from, to: dest, playerIndex: currentPlayer });
+            }
+          }
           const owner = cell ? getCollectibleOwner(cell) : null;
-          if (owner === currentPlayer) {
-            if (cell && isDiamondCell(cell)) {
-              p.diamonds = (p.diamonds ?? 0) + 1;
-              next.grid[p.y][p.x] = " ";
-            }
-            if (cell && isCoinCell(cell)) {
-              p.coins = (p.coins ?? 0) + 1;
-              next.grid[p.y][p.x] = " ";
-            }
+          if (owner === currentPlayer && cell && isDiamondCell(cell)) {
+            p.diamonds = (p.diamonds ?? 0) + 1;
+            next.grid[p.y][p.x] = " ";
           }
         }
         if (next.isGoalReached(currentPlayer)) {
@@ -177,6 +188,12 @@ export default function LabyrinthGame() {
   useEffect(() => {
     newGame();
   }, []);
+
+  useEffect(() => {
+    if (!lab || winner !== null || movesLeft > 0 || rolling) return;
+    const t = setTimeout(() => rollDice(), 400);
+    return () => clearTimeout(t);
+  }, [lab, winner, movesLeft, rolling, rollDice]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -224,6 +241,33 @@ export default function LabyrinthGame() {
 
   return (
     <div className="main" style={mainStyle}>
+      <div
+        style={{
+          position: "fixed",
+          top: "1rem",
+          right: "1rem",
+          zIndex: 100,
+          background: "#1a1a24",
+          padding: "0.5rem",
+          borderRadius: 8,
+          border: "1px solid #333",
+          boxShadow: "0 0 20px rgba(0,255,136,0.1)",
+        }}
+      >
+        <div
+          onClick={() => !rollDisabled && rollDice()}
+          style={{ cursor: rollDisabled ? "default" : "pointer" }}
+        >
+          <Dice3D
+            ref={diceRef}
+            onRollComplete={handleRollComplete}
+            disabled={rollDisabled}
+          />
+        </div>
+        <div style={{ textAlign: "center", marginTop: 4, fontSize: "1.25rem", color: "#00ff88" }}>
+          {diceResult ?? "—"}
+        </div>
+      </div>
       <div className="maze-wrap" style={mazeWrapStyle}>
         <h1 style={h1Style}>LABYRINTH</h1>
         <div
@@ -245,9 +289,13 @@ export default function LabyrinthGame() {
                   pi === currentPlayer
                     ? PLAYER_COLORS_ACTIVE[pi] ?? "#888"
                     : PLAYER_COLORS[pi] ?? "#888";
+                const isTeleportRise =
+                  teleportAnimation?.to[0] === x &&
+                  teleportAnimation?.to[1] === y &&
+                  teleportAnimation?.playerIndex === pi;
                 content = (
                   <div
-                    className={`marker ${pi === currentPlayer ? "active" : ""}`}
+                    className={`marker ${pi === currentPlayer ? "active" : ""} ${isTeleportRise ? "teleport-rise" : ""}`}
                     style={{
                       ...markerStyle,
                       background: c,
@@ -265,14 +313,18 @@ export default function LabyrinthGame() {
                 content = `×${lab.grid[y][x]}`;
                 cellClass += " path multiplier mult-x" + lab.grid[y][x];
               } else if (showSecretCells && isMagicCell(lab.grid[y][x])) {
-                content = "M";
-                cellClass += " path magic";
+                content = (
+                  <span className="hole-cell" style={{ fontSize: "1.1rem" }} title="Teleport hole">
+                    ○
+                  </span>
+                );
+                cellClass += " path magic hole";
               } else if (showSecretCells && isJumpCell(lab.grid[y][x])) {
                 content = "J";
                 cellClass += " path jump";
-              } else if (showSecretCells && (isDiamondCell(lab.grid[y][x]) || isCoinCell(lab.grid[y][x]))) {
+              } else if (showSecretCells && isDiamondCell(lab.grid[y][x])) {
                 const owner = getCollectibleOwner(lab.grid[y][x]);
-                content = isDiamondCell(lab.grid[y][x]) ? "◆" : "¢";
+                content = "💎";
                 cellClass += " path collectible";
                 if (owner !== null) cellClass += " collectible-p" + owner;
                 if (owner === currentPlayer) cellClass += " collectible-mine";
@@ -298,7 +350,7 @@ export default function LabyrinthGame() {
                 cellBg.color = "#ff4444";
               }
               if (cellClass.includes("multiplier")) {
-                cellBg.background = "#2e2a1e";
+                cellBg.background = "transparent";
                 cellBg.color = "#ffcc00";
                 cellBg.fontWeight = "bold";
                 cellBg.fontSize = "0.85rem";
@@ -322,13 +374,43 @@ export default function LabyrinthGame() {
                 cellBg.fontSize = "1rem";
               }
 
+              const isTeleportFrom =
+                teleportAnimation?.from[0] === x && teleportAnimation?.from[1] === y;
+              const fallColor =
+                teleportAnimation && lab.players[teleportAnimation.playerIndex]
+                  ? PLAYER_COLORS_ACTIVE[teleportAnimation.playerIndex] ?? "#888"
+                  : "#888";
+
               return (
                 <div
                   key={`${x}-${y}`}
                   className={cellClass}
-                  style={{ ...cellStyle, ...cellBg }}
+                  style={{ ...cellStyle, ...cellBg, position: "relative" }}
                 >
                   {content}
+                  {isTeleportFrom && (
+                    <div
+                      className="teleport-fall"
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 18,
+                          height: 18,
+                          borderRadius: "50%",
+                          background: fallColor,
+                          animation: "teleportFall 0.4s ease-in forwards",
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })
@@ -358,8 +440,8 @@ export default function LabyrinthGame() {
           )}
         </div>
         <div className="info" style={{ ...infoStyle, marginTop: 4 }}>
-          S=Start &nbsp; X=Goal &nbsp; ×2/×3/×4=Bonus &nbsp; M=Teleport &nbsp; J=Jump
-          {showSecretCells && " &nbsp; ◆=Diamond &nbsp; ¢=Coin (your color)"}
+          S=Start &nbsp; X=Goal &nbsp; ×2/×3/×4=Bonus &nbsp; ○=Teleport hole &nbsp; J=Jump
+          {showSecretCells && " &nbsp; 💎=Diamond (your color)"}
         </div>
         <div className="player-legend" style={playerLegendStyle}>
           {lab.players.map((_, i) => {
@@ -369,7 +451,6 @@ export default function LabyrinthGame() {
                 : PLAYER_COLORS[i] ?? "#888";
             const p = lab.players[i];
             const diamonds = p?.diamonds ?? 0;
-            const coins = p?.coins ?? 0;
             return (
               <span
                 key={i}
@@ -386,39 +467,14 @@ export default function LabyrinthGame() {
                   }}
                 />
                 <span style={{ fontSize: "0.75rem" }}>
-                  ◆{diamonds} ¢{coins}
+                  💎{diamonds}
                 </span>
               </span>
             );
           })}
         </div>
 
-        <div
-          onClick={() => !rollDisabled && rollDice()}
-          style={{ cursor: rollDisabled ? "default" : "pointer" }}
-        >
-          <Dice3D
-            ref={diceRef}
-            onRollComplete={handleRollComplete}
-            disabled={rollDisabled}
-          />
-        </div>
-
         <div className="row" style={rowStyle}>
-          <button
-            onClick={rollDice}
-            disabled={rollDisabled}
-            style={buttonStyle}
-          >
-            Roll dice
-          </button>
-          <span
-            className="dice"
-            style={{ fontSize: "1.5rem", margin: "0 0.5rem" }}
-            title="Dice result = moves you can make"
-          >
-            {diceResult ?? "—"}
-          </span>
           <button
             onClick={endTurn}
             className="secondary"
@@ -429,6 +485,33 @@ export default function LabyrinthGame() {
           </button>
         </div>
 
+        <div style={{ marginTop: "0.5rem" }}>
+          {cp && (cp.jumps ?? 0) > 0 && (
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 10px",
+                background: "#1e2e3e",
+                border: "2px solid #66aaff",
+                borderRadius: 6,
+                color: "#66aaff",
+                fontWeight: "bold",
+                fontSize: "0.9rem",
+                marginBottom: 6,
+                boxShadow: "0 0 10px rgba(102,170,255,0.3)",
+              }}
+              title="Arrows can jump over walls"
+            >
+              <span>J</span>
+              <span>×{cp.jumps}</span>
+              <span style={{ fontSize: "0.75rem", fontWeight: "normal", opacity: 0.9 }}>
+                Jump active
+              </span>
+            </div>
+          )}
+        </div>
         <div
           className="move-buttons"
           style={{
@@ -437,44 +520,72 @@ export default function LabyrinthGame() {
             gridTemplateColumns: "repeat(3, 2.5rem)",
             gridTemplateRows: "repeat(3, 2.5rem)",
             gap: 2,
+            ...(cp && (cp.jumps ?? 0) > 0
+              ? {
+                  padding: 4,
+                  borderRadius: 8,
+                  border: "2px solid #66aaff",
+                  boxShadow: "0 0 12px rgba(102,170,255,0.4)",
+                }
+              : {}),
           }}
         >
           <button
             onClick={() => doMove(0, -1)}
             disabled={moveDisabled}
-            style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 1 }}
-            title="Up"
+            style={{
+              ...moveButtonStyle,
+              gridColumn: 2,
+              gridRow: 1,
+              ...(cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
+            }}
+            title={cp && (cp.jumps ?? 0) > 0 ? "Up (or jump over wall)" : "Up"}
           >
-            ↑
+            {cp && (cp.jumps ?? 0) > 0 ? "J↑" : "↑"}
           </button>
           <button
             onClick={() => doMove(-1, 0)}
             disabled={moveDisabled}
-            style={{ ...moveButtonStyle, gridColumn: 1, gridRow: 2 }}
-            title="Left"
+            style={{
+              ...moveButtonStyle,
+              gridColumn: 1,
+              gridRow: 2,
+              ...(cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
+            }}
+            title={cp && (cp.jumps ?? 0) > 0 ? "Left (or jump over wall)" : "Left"}
           >
-            ←
+            {cp && (cp.jumps ?? 0) > 0 ? "J←" : "←"}
           </button>
           <button
             onClick={() => doMove(1, 0)}
             disabled={moveDisabled}
-            style={{ ...moveButtonStyle, gridColumn: 3, gridRow: 2 }}
-            title="Right"
+            style={{
+              ...moveButtonStyle,
+              gridColumn: 3,
+              gridRow: 2,
+              ...(cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
+            }}
+            title={cp && (cp.jumps ?? 0) > 0 ? "Right (or jump over wall)" : "Right"}
           >
-            →
+            {cp && (cp.jumps ?? 0) > 0 ? "J→" : "→"}
           </button>
           <button
             onClick={() => doMove(0, 1)}
             disabled={moveDisabled}
-            style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 3 }}
-            title="Down"
+            style={{
+              ...moveButtonStyle,
+              gridColumn: 2,
+              gridRow: 3,
+              ...(cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
+            }}
+            title={cp && (cp.jumps ?? 0) > 0 ? "Down (or jump over wall)" : "Down"}
           >
-            ↓
+            {cp && (cp.jumps ?? 0) > 0 ? "J↓" : "↓"}
           </button>
         </div>
 
         <div className="controls" style={controlsStyle}>
-          WASD or Arrow keys &nbsp;|&nbsp; R = New maze
+          WASD or Arrow keys &nbsp;|&nbsp; R = New maze &nbsp;|&nbsp; Dice (top right) auto-rolls
         </div>
 
         <div className="row" style={rowStyle}>
@@ -533,11 +644,13 @@ export default function LabyrinthGame() {
 
 const mainStyle: React.CSSProperties = {
   display: "flex",
-  flexWrap: "wrap",
-  gap: "2rem",
+  flexWrap: "nowrap",
+  gap: "1.5rem",
   alignItems: "flex-start",
   justifyContent: "flex-start",
   padding: "1.5rem",
+  overflowX: "auto",
+  minHeight: "100vh",
 };
 
 const mazeWrapStyle: React.CSSProperties = {
@@ -546,6 +659,7 @@ const mazeWrapStyle: React.CSSProperties = {
   borderRadius: 8,
   border: "1px solid #333",
   boxShadow: "0 0 20px rgba(0,255,136,0.1)",
+  flexShrink: 0,
 };
 
 const h1Style: React.CSSProperties = {
@@ -582,7 +696,6 @@ const markerStyle: React.CSSProperties = {
 const controlsPanelStyle: React.CSSProperties = {
   width: 360,
   flexShrink: 0,
-  marginLeft: "auto",
   background: "#1a1a24",
   padding: "1.5rem",
   borderRadius: 8,
@@ -649,6 +762,14 @@ const moveButtonStyle: React.CSSProperties = {
   border: "none",
   borderRadius: 4,
   cursor: "pointer",
+};
+
+const jumpButtonStyle: React.CSSProperties = {
+  background: "#66aaff",
+  color: "#0a0a0f",
+  border: "2px solid #4488ff",
+  boxShadow: "0 0 8px rgba(102,170,255,0.5)",
+  fontSize: "0.9rem",
 };
 
 const controlsStyle: React.CSSProperties = {
