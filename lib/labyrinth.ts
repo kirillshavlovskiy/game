@@ -182,7 +182,7 @@ export class Labyrinth {
     const multCount = Math.max(6, Math.min(15, Math.floor(pathCells.length * 0.12)));
     const magicCount = Math.max(2, Math.min(4, Math.floor(pathCells.length * 0.02)));
     const jumpCount = Math.max(1, Math.min(3, Math.floor(pathCells.length * 0.015)));
-    const diamondCount = Math.max(this.numPlayers, Math.min(this.numPlayers * 2, Math.floor(pathCells.length * 0.04)));
+    const diamondCount = Math.max(this.numPlayers * 2, Math.min(this.numPlayers * 4, Math.floor(pathCells.length * 0.08)));
 
     const total = multCount + magicCount + jumpCount + diamondCount;
     if (total > pathCells.length) return;
@@ -337,6 +337,22 @@ export class Labyrinth {
   isGoalReached(playerIndex = 0): boolean {
     const p = this.players[playerIndex];
     return p && p.x === this.goalX && p.y === this.goalY;
+  }
+
+  getJumpTargets(playerIndex = 0): Array<{ x: number; y: number; dx: number; dy: number }> {
+    const p = this.players[playerIndex];
+    if (!p || (p.jumps ?? 0) <= 0) return [];
+    const targets: Array<{ x: number; y: number; dx: number; dy: number }> = [];
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+      const nx = p.x + dx, ny = p.y + dy;
+      if (this.grid[ny]?.[nx] === WALL) {
+        const jx = nx + dx, jy = ny + dy;
+        if (jx >= 0 && jx < this.width && jy >= 0 && jy < this.height && this.canMove(jx, jy)) {
+          targets.push({ x: jx, y: jy, dx, dy });
+        }
+      }
+    }
+    return targets;
   }
 }
 

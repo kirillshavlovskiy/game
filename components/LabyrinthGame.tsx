@@ -17,6 +17,44 @@ import {
 
 const CELL_SIZE = 32;
 
+function useDraggable(getInitial: () => { x: number; y: number }) {
+  const [pos, setPos] = useState(() =>
+    typeof window !== "undefined" ? getInitial() : { x: 0, y: 0 }
+  );
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef({ startX: 0, startY: 0, startPosX: 0, startPosY: 0 });
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setDragging(true);
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startPosX: pos.x,
+      startPosY: pos.y,
+    };
+  }, [pos.x, pos.y]);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: MouseEvent) => {
+      setPos({
+        x: dragRef.current.startPosX + e.clientX - dragRef.current.startX,
+        y: dragRef.current.startPosY + e.clientY - dragRef.current.startY,
+      });
+    };
+    const onUp = () => setDragging(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [dragging]);
+
+  return { pos, onMouseDown, dragging };
+}
+
 export default function LabyrinthGame() {
   const [lab, setLab] = useState<Labyrinth | null>(null);
   const [currentPlayer, setCurrentPlayer] = useState(0);
@@ -34,7 +72,17 @@ export default function LabyrinthGame() {
     to: [number, number];
     playerIndex: number;
   } | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const diceRef = useRef<Dice3DRef>(null);
+
+  const diceDrag = useDraggable(() => ({
+    x: window.innerWidth - 220,
+    y: 20,
+  }));
+  const controlsDrag = useDraggable(() => ({
+    x: Math.max(20, window.innerWidth / 2 - 180),
+    y: window.innerHeight - 320,
+  }));
 
   useEffect(() => {
     if (!teleportAnimation) return;
@@ -238,38 +286,81 @@ export default function LabyrinthGame() {
   const moveDisabled = movesLeft <= 0 || winner !== null;
   const rollDisabled = movesLeft > 0 || winner !== null || rolling;
   const showSecretCells = movesLeft > 0;
+  const jumpTargets = cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
 
   return (
-    <div className="main" style={mainStyle}>
-      <div
-        style={{
-          position: "fixed",
-          top: "1rem",
-          right: "1rem",
-          zIndex: 100,
-          background: "#1a1a24",
-          padding: "0.5rem",
-          borderRadius: 8,
-          border: "1px solid #333",
-          boxShadow: "0 0 20px rgba(0,255,136,0.1)",
-        }}
-      >
-        <div
-          onClick={() => !rollDisabled && rollDice()}
-          style={{ cursor: rollDisabled ? "default" : "pointer" }}
+    <div style={gamePaneStyle}>
+      <header style={headerStyle}>
+        <h1 style={headerTitleStyle}>LABYRINTH</h1>
+        <button
+          onClick={() => setSettingsOpen(true)}
+          style={{ ...buttonStyle, ...headerButtonStyle }}
         >
-          <Dice3D
-            ref={diceRef}
-            onRollComplete={handleRollComplete}
-            disabled={rollDisabled}
-          />
+          Setup
+        </button>
+      </header>
+
+      {settingsOpen && (
+        <div style={modalOverlayStyle} onClick={() => setSettingsOpen(false)}>
+          <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+            <h2 style={modalTitleStyle}>Game Setup</h2>
+            <div style={modalRowStyle}>
+              <label>Difficulty:</label>
+              <select
+                value={difficulty}
+                onChange={(e) => setDifficulty(Number(e.target.value))}
+                style={selectStyle}
+              >
+                <option value={7}>Easy (7×7)</option>
+                <option value={11}>Medium (11×11)</option>
+                <option value={15}>Hard (15×15)</option>
+                <option value={21}>Expert (21×21)</option>
+                <option value={25}>Large (25×25)</option>
+              </select>
+            </div>
+            <div style={modalRowStyle}>
+              <label>Players:</label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={numPlayers}
+                onChange={(e) => setNumPlayers(Number(e.target.value) || 1)}
+                style={inputStyle}
+              />
+            </div>
+            <div style={modalRowStyle}>
+              <button
+                onClick={() => {
+                  newGame();
+                  setSettingsOpen(false);
+                }}
+                style={buttonStyle}
+              >
+                Random Maze
+              </button>
+            </div>
+            <button
+              onClick={() => setSettingsOpen(false)}
+              style={{ ...buttonStyle, ...secondaryButtonStyle, marginTop: 8 }}
+            >
+              Close
+            </button>
+          </div>
         </div>
-        <div style={{ textAlign: "center", marginTop: 4, fontSize: "1.25rem", color: "#00ff88" }}>
-          {diceResult ?? "—"}
-        </div>
-      </div>
-      <div className="maze-wrap" style={mazeWrapStyle}>
-        <h1 style={h1Style}>LABYRINTH</h1>
+      )}
+
+      <div style={mazeAreaStyle}>
+        <div
+          className="maze-wrap"
+          style={{
+            ...mazeWrapStyle,
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
+          }}
+        >
         <div
           className="maze"
           style={{
@@ -372,6 +463,10 @@ export default function LabyrinthGame() {
                 cellBg.color = c;
                 cellBg.fontWeight = "bold";
                 cellBg.fontSize = "1rem";
+                if (owner !== null) {
+                  cellBg.background = `${c}22`;
+                  cellBg.boxShadow = `inset 0 0 8px ${c}44`;
+                }
               }
 
               const isTeleportFrom =
@@ -380,6 +475,7 @@ export default function LabyrinthGame() {
                 teleportAnimation && lab.players[teleportAnimation.playerIndex]
                   ? PLAYER_COLORS_ACTIVE[teleportAnimation.playerIndex] ?? "#888"
                   : "#888";
+              const jumpTarget = jumpTargets.find((t) => t.x === x && t.y === y);
 
               return (
                 <div
@@ -388,6 +484,18 @@ export default function LabyrinthGame() {
                   style={{ ...cellStyle, ...cellBg, position: "relative" }}
                 >
                   {content}
+                  {jumpTarget && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        doMove(jumpTarget.dx, jumpTarget.dy);
+                      }}
+                      style={jumpActionButtonStyle}
+                      title={`Jump to (${jumpTarget.x},${jumpTarget.y})`}
+                    >
+                      J
+                    </button>
+                  )}
                   {isTeleportFrom && (
                     <div
                       className="teleport-fall"
@@ -416,9 +524,51 @@ export default function LabyrinthGame() {
             })
           )}
         </div>
+        </div>
       </div>
 
-      <div className="controls-panel" style={controlsPanelStyle}>
+      <div
+        style={{
+          position: "fixed",
+          left: diceDrag.pos.x,
+          top: diceDrag.pos.y,
+          zIndex: 100,
+          background: "#1a1a24",
+          padding: "0.5rem",
+          borderRadius: 8,
+          border: "1px solid #333",
+          boxShadow: "0 0 20px rgba(0,255,136,0.1)",
+          cursor: diceDrag.dragging ? "grabbing" : "grab",
+        }}
+        onMouseDown={diceDrag.onMouseDown}
+      >
+        <div
+          onClick={() => !rollDisabled && rollDice()}
+          style={{ cursor: rollDisabled ? "default" : "pointer" }}
+        >
+          <Dice3D
+            ref={diceRef}
+            onRollComplete={handleRollComplete}
+            disabled={rollDisabled}
+          />
+        </div>
+        <div style={{ textAlign: "center", marginTop: 4, fontSize: "1.25rem", color: "#00ff88" }}>
+          {diceResult ?? "—"}
+        </div>
+      </div>
+
+      <div
+        className="controls-panel"
+        style={{
+          ...controlsPanelStyle,
+          position: "fixed",
+          left: controlsDrag.pos.x,
+          top: controlsDrag.pos.y,
+          zIndex: 99,
+          cursor: controlsDrag.dragging ? "grabbing" : "grab",
+        }}
+        onMouseDown={controlsDrag.onMouseDown}
+      >
         <div className="info" style={infoStyle}>
           <span>
             {winner === null
@@ -585,49 +735,7 @@ export default function LabyrinthGame() {
         </div>
 
         <div className="controls" style={controlsStyle}>
-          WASD or Arrow keys &nbsp;|&nbsp; R = New maze &nbsp;|&nbsp; Dice (top right) auto-rolls
-        </div>
-
-        <div className="row" style={rowStyle}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            Difficulty:{" "}
-            <select
-              id="difficulty"
-              value={difficulty}
-              onChange={(e) => setDifficulty(Number(e.target.value))}
-              style={selectStyle}
-            >
-              <option value={7}>Easy (7×7)</option>
-              <option value={11}>Medium (11×11)</option>
-              <option value={15}>Hard (15×15)</option>
-              <option value={21}>Expert (21×21)</option>
-              <option value={25}>Large (25×25)</option>
-            </select>
-          </label>
-        </div>
-
-        <div className="row" style={rowStyle}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            Players:{" "}
-            <input
-              type="number"
-              id="numPaths"
-              min={1}
-              max={10}
-              value={numPlayers}
-              onChange={(e) => setNumPlayers(Number(e.target.value) || 1)}
-              style={inputStyle}
-            />
-          </label>
-        </div>
-
-        <div className="row" style={rowStyle}>
-          <button
-            onClick={newGame}
-            style={{ ...buttonStyle, ...secondaryButtonStyle }}
-          >
-            Random Maze
-          </button>
+          WASD or Arrow keys &nbsp;|&nbsp; R = New maze &nbsp;|&nbsp; Dice auto-rolls
         </div>
 
         {winner !== null && (
@@ -641,6 +749,93 @@ export default function LabyrinthGame() {
     </div>
   );
 }
+
+const gamePaneStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+  background: "#0f0f14",
+};
+
+const headerStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: "0.75rem 1rem",
+  background: "#1a1a24",
+  borderBottom: "1px solid #333",
+  flexShrink: 0,
+};
+
+const headerTitleStyle: React.CSSProperties = {
+  fontSize: "1.5rem",
+  margin: 0,
+  color: "#00ff88",
+};
+
+const headerButtonStyle: React.CSSProperties = {
+  padding: "0.4rem 0.8rem",
+  fontSize: "0.85rem",
+};
+
+const modalOverlayStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.7)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1000,
+};
+
+const modalStyle: React.CSSProperties = {
+  background: "#1a1a24",
+  padding: "1.5rem",
+  borderRadius: 8,
+  border: "1px solid #333",
+  minWidth: 280,
+};
+
+const modalTitleStyle: React.CSSProperties = {
+  margin: "0 0 1rem 0",
+  color: "#00ff88",
+  fontSize: "1.2rem",
+};
+
+const modalRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "0.5rem",
+  marginBottom: "0.75rem",
+};
+
+const mazeAreaStyle: React.CSSProperties = {
+  flex: 1,
+  position: "relative",
+  overflow: "auto",
+};
+
+const jumpActionButtonStyle: React.CSSProperties = {
+  position: "absolute",
+  right: 2,
+  bottom: 2,
+  width: 18,
+  height: 18,
+  padding: 0,
+  fontSize: "0.65rem",
+  fontWeight: "bold",
+  background: "#66aaff",
+  color: "#0a0a0f",
+  border: "none",
+  borderRadius: 4,
+  cursor: "pointer",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  boxShadow: "0 0 6px rgba(102,170,255,0.6)",
+};
 
 const mainStyle: React.CSSProperties = {
   display: "flex",
