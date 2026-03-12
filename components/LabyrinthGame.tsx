@@ -9,6 +9,11 @@ import {
   PLAYER_COLORS_ACTIVE,
   isMultiplierCell,
   getMultiplierValue,
+  isMagicCell,
+  isJumpCell,
+  isDiamondCell,
+  isCoinCell,
+  getCollectibleOwner,
 } from "@/lib/labyrinth";
 
 const CELL_SIZE = 32;
@@ -118,20 +123,42 @@ export default function LabyrinthGame() {
       setBonusAdded(null);
       const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers);
       next.grid = lab.grid.map((r) => [...r]);
-      next.players = lab.players.map((p) => ({ ...p }));
+      next.players = lab.players.map((p) => ({
+        ...p,
+        jumps: p.jumps ?? 0,
+        diamonds: p.diamonds ?? 0,
+        coins: p.coins ?? 0,
+      }));
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
       if (next.movePlayer(dx, dy, currentPlayer)) {
         const newMovesLeft = movesLeft - 1;
         setMovesLeft(newMovesLeft);
         setTotalMoves((t) => t + 1);
+        const p = next.players[currentPlayer];
+        if (p) {
+          const cell = next.grid[p.y]?.[p.x];
+          if (cell && isJumpCell(cell)) p.jumps = (p.jumps ?? 0) + 1;
+          if (cell && isMagicCell(cell)) next.teleportToRandomMagicCell(currentPlayer);
+          const owner = cell ? getCollectibleOwner(cell) : null;
+          if (owner === currentPlayer) {
+            if (cell && isDiamondCell(cell)) {
+              p.diamonds = (p.diamonds ?? 0) + 1;
+              next.grid[p.y][p.x] = " ";
+            }
+            if (cell && isCoinCell(cell)) {
+              p.coins = (p.coins ?? 0) + 1;
+              next.grid[p.y][p.x] = " ";
+            }
+          }
+        }
         if (next.isGoalReached(currentPlayer)) {
           setWinner(currentPlayer);
         }
         setLab(next);
         if (movesLeft === 1 && winner === null) {
-          const p = next.players[currentPlayer];
-          const cell = p && next.grid[p.y]?.[p.x];
+          const cp = next.players[currentPlayer];
+          const cell = cp && next.grid[cp.y]?.[cp.x];
           if (cell && isMultiplierCell(cell) && diceResult !== null) {
             const mult = getMultiplierValue(cell);
             const bonus = diceResult * mult;
@@ -193,6 +220,7 @@ export default function LabyrinthGame() {
 
   const moveDisabled = movesLeft <= 0 || winner !== null;
   const rollDisabled = movesLeft > 0 || winner !== null || rolling;
+  const showSecretCells = movesLeft > 0;
 
   return (
     <div className="main" style={mainStyle}>
@@ -236,6 +264,18 @@ export default function LabyrinthGame() {
               } else if (isMultiplierCell(lab.grid[y][x])) {
                 content = `×${lab.grid[y][x]}`;
                 cellClass += " path multiplier mult-x" + lab.grid[y][x];
+              } else if (showSecretCells && isMagicCell(lab.grid[y][x])) {
+                content = "M";
+                cellClass += " path magic";
+              } else if (showSecretCells && isJumpCell(lab.grid[y][x])) {
+                content = "J";
+                cellClass += " path jump";
+              } else if (showSecretCells && (isDiamondCell(lab.grid[y][x]) || isCoinCell(lab.grid[y][x]))) {
+                const owner = getCollectibleOwner(lab.grid[y][x]);
+                content = isDiamondCell(lab.grid[y][x]) ? "◆" : "¢";
+                cellClass += " path collectible";
+                if (owner !== null) cellClass += " collectible-p" + owner;
+                if (owner === currentPlayer) cellClass += " collectible-mine";
               } else {
                 cellClass += lab.grid[y][x] === "#" ? " wall" : " path";
                 if (lab.grid[y][x] === "#") content = null;
@@ -262,6 +302,24 @@ export default function LabyrinthGame() {
                 cellBg.color = "#ffcc00";
                 cellBg.fontWeight = "bold";
                 cellBg.fontSize = "0.85rem";
+              }
+              if (cellClass.includes("magic")) {
+                cellBg.background = "#1e1e2e";
+                cellBg.color = "#aa66ff";
+                cellBg.fontWeight = "bold";
+              }
+              if (cellClass.includes("jump")) {
+                cellBg.background = "#1e2e2e";
+                cellBg.color = "#66aaff";
+                cellBg.fontWeight = "bold";
+              }
+              if (cellClass.includes("collectible")) {
+                const ownerMatch = cellClass.match(/collectible-p(\d+)/);
+                const owner = ownerMatch ? parseInt(ownerMatch[1], 10) : null;
+                const c = owner !== null && owner < PLAYER_COLORS.length ? PLAYER_COLORS[owner] : "#888";
+                cellBg.color = c;
+                cellBg.fontWeight = "bold";
+                cellBg.fontSize = "1rem";
               }
 
               return (
@@ -293,9 +351,15 @@ export default function LabyrinthGame() {
             )}
           </span>
           &nbsp;|&nbsp; Moves: <span>{totalMoves}</span>
+          {cp && (cp.jumps ?? 0) > 0 && (
+            <>
+              &nbsp;|&nbsp; Jumps: <span style={{ color: "#66aaff" }}>{cp.jumps}</span>
+            </>
+          )}
         </div>
         <div className="info" style={{ ...infoStyle, marginTop: 4 }}>
-          S=Start &nbsp; X=Goal &nbsp; ×2/×3/×4=Bonus
+          S=Start &nbsp; X=Goal &nbsp; ×2/×3/×4=Bonus &nbsp; M=Teleport &nbsp; J=Jump
+          {showSecretCells && " &nbsp; ◆=Diamond &nbsp; ¢=Coin (your color)"}
         </div>
         <div className="player-legend" style={playerLegendStyle}>
           {lab.players.map((_, i) => {
@@ -303,11 +367,14 @@ export default function LabyrinthGame() {
               i === currentPlayer
                 ? PLAYER_COLORS_ACTIVE[i] ?? "#888"
                 : PLAYER_COLORS[i] ?? "#888";
+            const p = lab.players[i];
+            const diamonds = p?.diamonds ?? 0;
+            const coins = p?.coins ?? 0;
             return (
               <span
                 key={i}
                 className={i === currentPlayer ? "legend-item active" : "legend-item"}
-                style={{ color: c, display: "flex", alignItems: "center", gap: 4 }}
+                style={{ color: c, display: "flex", alignItems: "center", gap: 6 }}
               >
                 <span
                   className="dot"
@@ -318,6 +385,9 @@ export default function LabyrinthGame() {
                     background: c,
                   }}
                 />
+                <span style={{ fontSize: "0.75rem" }}>
+                  ◆{diamonds} ¢{coins}
+                </span>
               </span>
             );
           })}

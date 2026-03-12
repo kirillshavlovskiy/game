@@ -64,10 +64,11 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
 
     useEffect(() => {
       if (!containerRef.current) return;
+      let mounted = true;
 
       const initDice = async () => {
         const el = containerRef.current;
-        if (!el) return;
+        if (!el || !mounted) return;
         el.id = "dice-scene-" + Math.random().toString(36).slice(2);
         const id = el.id;
 
@@ -78,13 +79,22 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
             return;
           }
           const check = () => {
+            if (!mounted || !containerRef.current) return;
             if (el.clientWidth > 0 && el.clientHeight > 0) resolve();
             else requestAnimationFrame(check);
           };
           requestAnimationFrame(check);
         });
 
+        if (!mounted) return;
+
         const { default: DiceBox } = await import("@3d-dice/dice-box-threejs");
+        if (!mounted) return;
+
+        // Ensure element is still in DOM (React Strict Mode may have unmounted)
+        const target = document.getElementById(id);
+        if (!target || !mounted) return;
+
         const box = new DiceBox("#" + id, {
           assetPath: "https://cdn.jsdelivr.net/gh/MajorVictory/3DDiceRoller@master/textures/envmap/",
           theme_surface: "taverntable",
@@ -96,11 +106,12 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
           strength: 1.2,
         });
         await box.initialize();
-        diceBoxRef.current = box;
+        if (mounted) diceBoxRef.current = box;
       };
 
       initDice();
       return () => {
+        mounted = false;
         diceBoxRef.current = null;
       };
     }, []);
