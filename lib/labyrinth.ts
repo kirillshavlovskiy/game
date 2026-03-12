@@ -116,11 +116,30 @@ export class Labyrinth {
     }
   }
 
+  private _countPathNeighbors(x: number, y: number): number {
+    let count = 0;
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height && this.grid[ny][nx] === PATH)
+        count++;
+    }
+    return count;
+  }
+
   private _addExtraPaths(): void {
-    const walls: [number, number][] = [];
+    // Prefer walls with 2+ path neighbors - these create loops (alternative routes)
+    let walls: [number, number][] = [];
     for (let y = 1; y < this.height - 1; y++)
       for (let x = 1; x < this.width - 1; x++)
-        if (this.grid[y][x] === WALL) walls.push([x, y]);
+        if (this.grid[y][x] === WALL && this._countPathNeighbors(x, y) >= 2)
+          walls.push([x, y]);
+    if (walls.length < this.extraPaths) {
+      const fallback: [number, number][] = [];
+      for (let y = 1; y < this.height - 1; y++)
+        for (let x = 1; x < this.width - 1; x++)
+          if (this.grid[y][x] === WALL) fallback.push([x, y]);
+      walls = walls.length > 0 ? walls : fallback;
+    }
     const n = Math.min(this.extraPaths, walls.length);
     for (let i = 0; i < n; i++) {
       const idx = Math.floor(Math.random() * walls.length);
