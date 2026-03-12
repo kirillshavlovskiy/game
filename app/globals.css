@@ -1,0 +1,27 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Courier New", monospace;
+  background: #0a0a0f;
+  color: #c0c0c0;
+}
+
+button:hover:not(:disabled) {
+  background: #00cc6a !important;
+}
+
+button.secondary:hover:not(:disabled) {
+  background: #555 !important;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
