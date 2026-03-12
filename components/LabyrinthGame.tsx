@@ -481,7 +481,7 @@ const markerStyle: React.CSSProperties = {
 };
 
 const controlsPanelStyle: React.CSSProperties = {
-  width: 280,
+  width: 360,
   flexShrink: 0,
   marginLeft: "auto",
   background: "#1a1a24",
