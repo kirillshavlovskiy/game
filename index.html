@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Labyrinth - Maze Game</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Courier New', monospace;
+      background: #0a0a0f;
+      color: #c0c0c0;
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+      color: #00ff88;
+    }
+    .game-container {
+      background: #1a1a24;
+      padding: 1.5rem;
+      border-radius: 8px;
+      border: 1px solid #333;
+      box-shadow: 0 0 20px rgba(0,255,136,0.1);
+    }
+    .maze {
+      display: inline-grid;
+      gap: 0;
+      font-size: 1.25rem;
+      line-height: 1.2;
+      letter-spacing: 0.1em;
+    }
+    .cell {
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .cell.wall { color: #444; background: #2a2a35; }
+    .cell.path { color: #333; background: #1e1e28; }
+    .cell.start { color: #00ff88; background: #1e2e24; }
+    .cell.goal { color: #ff4444; background: #2e1e1e; }
+    .cell.player { color: #00ff88; background: #1e2e24; font-weight: bold; }
+    .info {
+      margin-top: 1rem;
+      font-size: 0.85rem;
+      color: #888;
+    }
+    .controls {
+      margin-top: 0.5rem;
+      font-size: 0.8rem;
+    }
+    .won {
+      margin-top: 1rem;
+      color: #00ff88;
+      font-weight: bold;
+    }
+    button {
+      margin-top: 1rem;
+      padding: 0.5rem 1rem;
+      font-family: inherit;
+      font-size: 0.9rem;
+      background: #00ff88;
+      color: #0a0a0f;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover { background: #00cc6a; }
+  </style>
+</head>
+<body>
+  <h1>LABYRINTH</h1>
+  <div class="game-container">
+    <div id="maze" class="maze"></div>
+    <div class="info">Moves: <span id="moves">0</span> &nbsp;|&nbsp; S=Start &nbsp; @=You &nbsp; X=Goal</div>
+    <div class="controls">WASD or Arrow keys to move &nbsp;|&nbsp; R = New maze</div>
+    <div id="won" class="won" style="display:none">*** YOU WON! ***</div>
+    <button id="newMaze">New Maze</button>
+  </div>
+
+  <script>
+    const WIDTH = 10, HEIGHT = 10;
+    const WALL = '#', PATH = ' ', PLAYER = '@', GOAL = 'X', START = 'S';
+
+    function shuffle(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    class Labyrinth {
+      constructor(width, height, extraPaths = 8) {
+        this.width = width;
+        this.height = height;
+        this.extraPaths = extraPaths;
+        this.grid = [];
+        this.playerX = 0;
+        this.playerY = 0;
+        this.goalX = width - 1;
+        this.goalY = height - 1;
+      }
+
+      _initGrid() {
+        this.grid = Array(this.height).fill(null).map(() =>
+          Array(this.width).fill(WALL));
+      }
+
+      _carvePath(x, y) {
+        this.grid[y][x] = PATH;
+        const dirs = shuffle([[0,-1],[1,0],[0,1],[-1,0]]);
+        for (const [dx, dy] of dirs) {
+          const nx = x + dx, ny = y + dy;
+          if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height && this.grid[ny][nx] === WALL) {
+            this._carvePath(nx, ny);
+          }
+        }
+      }
+
+      _ensureGoalReachable() {
+        const gx = this.goalX, gy = this.goalY;
+        if (this.grid[gy][gx] === PATH) return;
+        const q = [[gx, gy]];
+        const seen = new Set([`${gx},${gy}`]);
+        const parent = {};
+        let found = null;
+        while (q.length) {
+          const [x, y] = q.shift();
+          for (const [dx, dy] of [[0,-1],[1,0],[0,1],[-1,0]]) {
+            const nx = x + dx, ny = y + dy;
+            if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
+              if (this.grid[ny][nx] === PATH) {
+                found = [x, y];
+                break;
+              }
+              const key = `${nx},${ny}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                parent[key] = [x, y];
+                q.push([nx, ny]);
+              }
+            }
+          }
+          if (found) break;
+        }
+        if (found) {
+          let cur = found;
+          while (true) {
+            this.grid[cur[1]][cur[0]] = PATH;
+            if (cur[0] === gx && cur[1] === gy) break;
+            cur = parent[`${cur[0]},${cur[1]}`];
+          }
+        }
+      }
+
+      _addExtraPaths() {
+        const walls = [];
+        for (let y = 1; y < this.height - 1; y++)
+          for (let x = 1; x < this.width - 1; x++)
+            if (this.grid[y][x] === WALL) walls.push([x, y]);
+        const n = Math.min(this.extraPaths, walls.length);
+        for (let i = 0; i < n; i++) {
+          const idx = Math.floor(Math.random() * walls.length);
+          const [x, y] = walls.splice(idx, 1)[0];
+          this.grid[y][x] = PATH;
+        }
+      }
+
+      generate() {
+        this._initGrid();
+        this._carvePath(0, 0);
+        this._ensureGoalReachable();
+        this._addExtraPaths();
+        this.grid[0][0] = PATH;
+        this.grid[this.height - 1][this.width - 1] = PATH;
+      }
+
+      canMove(x, y) {
+        return x >= 0 && x < this.width && y >= 0 && y < this.height && this.grid[y][x] !== WALL;
+      }
+
+      movePlayer(dx, dy) {
+        const nx = this.playerX + dx, ny = this.playerY + dy;
+        if (this.canMove(nx, ny)) {
+          this.playerX = nx;
+          this.playerY = ny;
+          return true;
+        }
+        return false;
+      }
+
+      isGoalReached() {
+        return this.playerX === this.goalX && this.playerY === this.goalY;
+      }
+    }
+
+    let lab, moves;
+
+    function render() {
+      const el = document.getElementById('maze');
+      el.innerHTML = '';
+      el.style.gridTemplateColumns = `repeat(${lab.width}, 28px)`;
+      for (let y = 0; y < lab.height; y++) {
+        for (let x = 0; x < lab.width; x++) {
+          const div = document.createElement('div');
+          div.className = 'cell';
+          let content = lab.grid[y][x];
+          if (x === lab.playerX && y === lab.playerY) {
+            content = PLAYER;
+            div.className += ' player';
+          } else if (x === lab.goalX && y === lab.goalY) {
+            content = GOAL;
+            div.className += ' goal';
+          } else if (x === 0 && y === 0 && (lab.playerX !== 0 || lab.playerY !== 0)) {
+            content = START;
+            div.className += ' start';
+          } else {
+            div.className += content === WALL ? ' wall' : ' path';
+          }
+          div.textContent = content;
+          el.appendChild(div);
+        }
+      }
+      document.getElementById('moves').textContent = moves;
+      document.getElementById('won').style.display = lab.isGoalReached() ? 'block' : 'none';
+    }
+
+    function newGame() {
+      lab = new Labyrinth(WIDTH, HEIGHT, 8);
+      lab.generate();
+      moves = 0;
+      render();
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (lab.isGoalReached()) return;
+      const map = { ArrowUp: [0,-1], ArrowDown: [0,1], ArrowLeft: [-1,0], ArrowRight: [1,0],
+        w: [0,-1], W: [0,-1], s: [0,1], S: [0,1], a: [-1,0], A: [-1,0], d: [1,0], D: [1,0] };
+      if (e.key === 'r' || e.key === 'R') { newGame(); e.preventDefault(); return; }
+      const d = map[e.key];
+      if (d && lab.movePlayer(d[0], d[1])) { moves++; render(); e.preventDefault(); }
+    });
+
+    document.getElementById('newMaze').addEventListener('click', newGame);
+
+    newGame();
+  </script>
+</body>
+</html>
