@@ -53,18 +53,20 @@
     .cell.start { color: #00ff88; background: #1e2e24; }
     .cell.goal { color: #ff4444; background: #2e1e1e; }
     .cell.player { color: #00ff88; background: #1e2e24; font-weight: bold; }
-    .cell.p1 { color: #00ff88; background: #1e2e24; font-weight: bold; }
-    .cell.p2 { color: #4488ff; background: #1e2e48; font-weight: bold; }
-    .cell.p3 { color: #ff8844; background: #482e1e; font-weight: bold; }
-    .cell.p4 { color: #ff44ff; background: #481e48; font-weight: bold; }
-    .cell.p5 { color: #44ff88; background: #1e4830; font-weight: bold; }
-    .cell.p6 { color: #88aaff; background: #2e3e58; font-weight: bold; }
-    .cell.p7 { color: #ffaa44; background: #58402e; font-weight: bold; }
-    .cell.p8 { color: #aa44ff; background: #382e58; font-weight: bold; }
-    .cell.p9 { color: #44ffcc; background: #1e4840; font-weight: bold; }
+    .cell .marker {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      margin: auto;
+    }
+    .cell .marker.active {
+      box-shadow: 0 0 8px currentColor, 0 0 12px currentColor;
+      transform: scale(1.15);
+    }
     .player-legend { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; font-size: 0.8rem; }
     .player-legend span { display: flex; align-items: center; gap: 0.25rem; }
-    .player-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .player-legend .dot { width: 14px; height: 14px; border-radius: 50%; }
+    .player-legend .legend-item.active .dot { box-shadow: 0 0 6px currentColor; }
     .controls-panel {
       width: 280px;
       flex-shrink: 0;
@@ -108,6 +110,74 @@
     button.secondary { background: #444; color: #c0c0c0; }
     button.secondary:hover { background: #555; }
     .error { color: #ff6666; font-size: 0.85rem; margin-top: 0.5rem; }
+
+    .dice-tray {
+      margin-top: 1rem;
+      padding: 1.25rem;
+      background: #0d0d12;
+      border-radius: 12px;
+      border: 1px solid #333;
+      min-height: 110px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: none;
+      position: relative;
+    }
+    .dice-tray .hint { position: absolute; bottom: 0.5rem; left: 0; right: 0; text-align: center; font-size: 0.7rem; color: #555; }
+    .dice-physical {
+      width: 52px;
+      height: 52px;
+      background: linear-gradient(145deg, #f0f0f0, #fff);
+      border-radius: 10px;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.9);
+      cursor: grab;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      touch-action: none;
+    }
+    .dice-physical:active { cursor: grabbing; }
+    .dice-physical.rolling { cursor: default; pointer-events: none; }
+    .dice-physical .face {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      width: 36px;
+      height: 36px;
+      gap: 4px;
+    }
+    .dice-physical .face .pip {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #222;
+      margin: auto;
+    }
+    .dice-physical .face.f1 .pip { grid-column: 2; grid-row: 2; }
+    .dice-physical .face.f2 .p1 { grid-column: 1; grid-row: 1; } .dice-physical .face.f2 .p2 { grid-column: 3; grid-row: 3; }
+    .dice-physical .face.f3 .p1 { grid-column: 1; grid-row: 1; } .dice-physical .face.f3 .p2 { grid-column: 2; grid-row: 2; } .dice-physical .face.f3 .p3 { grid-column: 3; grid-row: 3; }
+    .dice-physical .face.f4 .p1 { grid-column: 1; grid-row: 1; } .dice-physical .face.f4 .p2 { grid-column: 3; grid-row: 1; } .dice-physical .face.f4 .p3 { grid-column: 1; grid-row: 3; } .dice-physical .face.f4 .p4 { grid-column: 3; grid-row: 3; }
+    .dice-physical .face.f5 .p1 { grid-column: 1; grid-row: 1; } .dice-physical .face.f5 .p2 { grid-column: 3; grid-row: 1; } .dice-physical .face.f5 .p3 { grid-column: 2; grid-row: 2; } .dice-physical .face.f5 .p4 { grid-column: 1; grid-row: 3; } .dice-physical .face.f5 .p5 { grid-column: 3; grid-row: 3; }
+    .dice-physical .face.f6 .p1 { grid-column: 1; grid-row: 1; } .dice-physical .face.f6 .p2 { grid-column: 3; grid-row: 1; } .dice-physical .face.f6 .p3 { grid-column: 1; grid-row: 2; } .dice-physical .face.f6 .p4 { grid-column: 3; grid-row: 2; } .dice-physical .face.f6 .p5 { grid-column: 1; grid-row: 3; } .dice-physical .face.f6 .p6 { grid-column: 3; grid-row: 3; }
+    .dice-physical .face { display: none; }
+    .dice-physical .face.show { display: grid; }
+    @keyframes diceTumble {
+      0% { transform: translateY(0) rotate(0deg) scale(1); }
+      20% { transform: translateY(-20px) rotate(90deg) scale(1.1); }
+      40% { transform: translateY(-5px) rotate(180deg) scale(1.05); }
+      60% { transform: translateY(-15px) rotate(270deg) scale(1.08); }
+      80% { transform: translateY(-3px) rotate(360deg) scale(1.02); }
+      100% { transform: translateY(0) rotate(450deg) scale(1); }
+    }
+    @keyframes diceDrop {
+      0% { transform: translateY(var(--drop-from, -30px)) scale(1.1); opacity: 0.9; }
+      60% { transform: translateY(4px) scale(1.02); }
+      80% { transform: translateY(-2px) scale(1); }
+      100% { transform: translateY(0) scale(1); opacity: 1; }
+    }
   </style>
 </head>
 <body>
@@ -124,6 +194,18 @@
       </div>
       <div class="info" style="margin-top:0.25rem">S=Start &nbsp; X=Goal</div>
       <div id="playerLegend" class="player-legend"></div>
+      <div class="dice-tray" id="diceTray">
+        <span class="hint">Drag dice up & release to roll</span>
+        <div class="dice-physical" id="dicePhysical" title="Drag up and release to roll">
+          <div class="face f1"><span class="pip"></span></div>
+          <div class="face f2"><span class="pip p1"></span><span class="pip p2"></span></div>
+          <div class="face f3"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span></div>
+          <div class="face f4"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span><span class="pip p4"></span></div>
+          <div class="face f5"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span><span class="pip p4"></span><span class="pip p5"></span></div>
+          <div class="face f6"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span><span class="pip p4"></span><span class="pip p5"></span><span class="pip p6"></span></div>
+        </div>
+        <span class="hint">Drag dice up and release to roll</span>
+      </div>
       <div class="row">
         <button id="rollDice">Roll dice</button>
         <span id="diceResult" class="dice" title="Dice result = moves you can make"></span>
@@ -173,8 +255,8 @@
       return arr;
     }
 
-    const PLAYER_SYMBOLS = ['@', '2', '3', '4', '5', '6', '7', '8', '9'];
     const PLAYER_COLORS = ['#00ff88', '#4488ff', '#ff8844', '#ff44ff', '#44ff88', '#88aaff', '#ffaa44', '#aa44ff', '#44ffcc'];
+    const PLAYER_COLORS_ACTIVE = ['#66ffaa', '#77aaff', '#ffaa66', '#ff77ff', '#66ffaa', '#aaccff', '#ffcc66', '#cc77ff', '#66ffdd'];
 
     class Labyrinth {
       constructor(width, height, extraPaths = 4, numPlayers = 1) {
@@ -331,8 +413,13 @@
           let content = lab.grid[y][x];
           const pi = playerCells[`${x},${y}`];
           if (pi !== undefined) {
-            content = PLAYER_SYMBOLS[pi] || '@';
-            div.className += ' p' + (pi + 1);
+            div.className += ' path';
+            const marker = document.createElement('div');
+            marker.className = 'marker' + (pi === currentPlayer ? ' active' : '');
+            marker.style.background = pi === currentPlayer ? (PLAYER_COLORS_ACTIVE[pi] || '#888') : (PLAYER_COLORS[pi] || '#888');
+            marker.style.color = marker.style.background;
+            div.appendChild(marker);
+            content = null;
           } else if (x === lab.goalX && y === lab.goalY) {
             content = GOAL;
             div.className += ' goal';
@@ -342,7 +429,7 @@
           } else {
             div.className += content === WALL ? ' wall' : ' path';
           }
-          div.textContent = content;
+          if (content !== null) div.textContent = content;
           el.appendChild(div);
         }
       }
@@ -353,19 +440,29 @@
         : `Player ${winner + 1} wins!`;
       document.getElementById('diceResult').textContent = diceResult || '—';
       document.getElementById('rollDice').disabled = movesLeft > 0 || winner !== null;
+      showDiceFace(diceResult || 1);
       const moveDisabled = movesLeft <= 0 || winner !== null;
       ['btnUp','btnDown','btnLeft','btnRight'].forEach(id => {
         document.getElementById(id).disabled = moveDisabled;
       });
       const legend = document.getElementById('playerLegend');
       legend.innerHTML = lab.players.map((_, i) => {
-        const c = PLAYER_COLORS[i] || '#888';
-        const active = i === currentPlayer ? ' (turn)' : '';
-        return `<span><span class="dot" style="background:${c}"></span> P${i+1}${active}</span>`;
+        const c = i === currentPlayer ? (PLAYER_COLORS_ACTIVE[i] || '#888') : (PLAYER_COLORS[i] || '#888');
+        const active = i === currentPlayer ? ' active' : '';
+        return `<span class="legend-item${active}" style="color:${c}"><span class="dot" style="background:${c}"></span></span>`;
       }).join('');
       const wonEl = document.getElementById('won');
       wonEl.style.display = winner !== null ? 'block' : 'none';
       if (winner !== null) document.getElementById('winnerNum').textContent = winner + 1;
+      showDiceFace(diceResult || 1);
+    }
+
+    function showDiceFace(n) {
+      const el = document.getElementById('dicePhysical');
+      if (!el) return;
+      el.querySelectorAll('.face').forEach((f, i) => {
+        f.classList.toggle('show', i + 1 === (n || 1));
+      });
     }
 
     function setError(msg) {
@@ -428,11 +525,83 @@
       }
     }
 
-    function rollDice() {
+    function showDiceFace(n) {
+      const dice = document.getElementById('dicePhysical');
+      if (!dice) return;
+      dice.querySelectorAll('.face').forEach((f, i) => {
+        f.classList.toggle('show', i + 1 === n);
+      });
+    }
+
+    function rollDice(result) {
       if (winner !== null) return;
-      diceResult = Math.floor(Math.random() * 6) + 1;
+      diceResult = typeof result === 'number' ? result : Math.floor(Math.random() * 6) + 1;
       movesLeft = diceResult;
+      showDiceFace(diceResult);
       render();
+    }
+
+    function setupDiceThrow() {
+      const dice = document.getElementById('dicePhysical');
+      const tray = document.getElementById('diceTray');
+      if (!dice || !tray) return;
+      let dragging = false, startX, startY, startT;
+
+      function applyRoll(finalValue) {
+        dice.classList.remove('rolling');
+        dice.style.animation = '';
+        dice.style.transform = '';
+        dice.style.setProperty('--drop-from', '');
+        diceResult = finalValue;
+        movesLeft = finalValue;
+        showDiceFace(finalValue);
+        render();
+      }
+
+      function doThrow(velY, velX) {
+        if (winner !== null || movesLeft > 0) return;
+        dice.classList.add('rolling');
+        const power = Math.min(1, Math.sqrt(velX * velX + velY * velY) / 80);
+        const tumbleDur = 400 + Math.round(power * 600);
+        dice.style.animation = `diceTumble ${tumbleDur}ms ease-out, diceDrop ${Math.min(400, tumbleDur)}ms ease-out ${tumbleDur - 200}ms both`;
+        dice.style.setProperty('--drop-from', `${-Math.abs(velY) - 20}px`);
+        const finalValue = Math.floor(Math.random() * 6) + 1;
+        setTimeout(() => {
+          showDiceFace(finalValue);
+          setTimeout(() => applyRoll(finalValue), 200);
+        }, tumbleDur);
+      }
+
+      function start(e) {
+        if (winner !== null || movesLeft > 0) return;
+        e.preventDefault();
+        dragging = true;
+        const t = e.touches ? e.touches[0] : e;
+        startX = t.clientX;
+        startY = t.clientY;
+        startT = Date.now();
+      }
+      function move(e) {
+        if (!dragging) return;
+        e.preventDefault();
+      }
+      function end(e) {
+        if (!dragging) return;
+        e.preventDefault();
+        dragging = false;
+        const x = e.clientX ?? (e.changedTouches && e.changedTouches[0].clientX);
+        const y = e.clientY ?? (e.changedTouches && e.changedTouches[0].clientY);
+        const dt = Date.now() - startT;
+        const velX = (x - startX) / Math.max(0.05, dt / 100);
+        const velY = (y - startY) / Math.max(0.05, dt / 100);
+        if (Math.abs(velY) > 5 || Math.abs(velX) > 5) doThrow(velY, velX);
+      }
+      dice.addEventListener('mousedown', start);
+      dice.addEventListener('touchstart', start, { passive: false });
+      document.addEventListener('mousemove', move);
+      document.addEventListener('touchmove', move, { passive: false });
+      document.addEventListener('mouseup', end);
+      document.addEventListener('touchend', end, { passive: false });
     }
 
     function endTurn() {
@@ -472,8 +641,9 @@
 
     document.getElementById('newMaze').addEventListener('click', newGame);
     document.getElementById('aiMaze').addEventListener('click', generateWithAI);
-    document.getElementById('rollDice').addEventListener('click', rollDice);
+    document.getElementById('rollDice').addEventListener('click', () => rollDice());
     document.getElementById('endTurn').addEventListener('click', endTurn);
+    setupDiceThrow();
 
     newGame();
   </script>
