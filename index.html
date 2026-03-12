@@ -10,15 +10,22 @@
       margin: 0;
       min-height: 100vh;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
       font-family: 'Courier New', monospace;
       background: #0a0a0f;
       color: #c0c0c0;
     }
-    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: #00ff88; }
-    .game-container {
+    .main {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2rem;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 1rem 0; color: #00ff88; }
+    .maze-wrap {
       background: #1a1a24;
       padding: 1.5rem;
       border-radius: 8px;
@@ -26,17 +33,17 @@
       box-shadow: 0 0 20px rgba(0,255,136,0.1);
     }
     .maze {
-      display: inline-grid;
+      display: grid;
       gap: 0;
-      font-size: 1.1rem;
-      line-height: 1.2;
-      letter-spacing: 0.05em;
+      font-size: 1.25rem;
+      line-height: 1;
+      letter-spacing: 0.02em;
     }
     .cell {
-      min-width: 14px;
-      min-height: 14px;
-      width: var(--cell-size, 24px);
-      height: var(--cell-size, 24px);
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      min-height: 32px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -58,6 +65,20 @@
     .player-legend { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; font-size: 0.8rem; }
     .player-legend span { display: flex; align-items: center; gap: 0.25rem; }
     .player-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .controls-panel {
+      width: 280px;
+      flex-shrink: 0;
+      background: #1a1a24;
+      padding: 1.5rem;
+      border-radius: 8px;
+      border: 1px solid #333;
+      box-shadow: 0 0 20px rgba(0,255,136,0.1);
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .controls-panel .row { margin-top: 0.5rem; }
+    .controls-panel .info:first-of-type { margin-top: 0; }
     .move-buttons { display: grid; grid-template-columns: repeat(3, 2.5rem); grid-template-rows: repeat(3, 2.5rem); gap: 2px; margin-top: 0.5rem; }
     .move-buttons button { width: 2.5rem; height: 2.5rem; padding: 0; font-size: 1.2rem; }
     .move-buttons .up { grid-column: 2; grid-row: 1; }
@@ -90,40 +111,49 @@
   </style>
 </head>
 <body>
-  <h1>LABYRINTH</h1>
-  <div class="game-container">
-    <div id="maze" class="maze"></div>
-    <div class="info">
-      <span id="turnInfo">Player 1</span> &nbsp;|&nbsp;
-      Moves left: <span id="movesLeft">0</span> &nbsp;|&nbsp;
-      Moves: <span id="moves">0</span> &nbsp;|&nbsp; S=Start &nbsp; X=Goal
+  <div class="main">
+    <div class="maze-wrap">
+      <h1>LABYRINTH</h1>
+      <div id="maze" class="maze"></div>
     </div>
-    <div id="playerLegend" class="player-legend"></div>
-    <div class="row">
-      <button id="rollDice">Roll dice</button>
-      <span id="diceResult" class="dice" title="Dice result = moves you can make"></span>
-      <button id="endTurn" class="secondary">End turn</button>
+    <div class="controls-panel">
+      <div class="info">
+        <span id="turnInfo">Player 1</span> &nbsp;|&nbsp;
+        Moves left: <span id="movesLeft">0</span> &nbsp;|&nbsp;
+        Moves: <span id="moves">0</span>
+      </div>
+      <div class="info" style="margin-top:0.25rem">S=Start &nbsp; X=Goal</div>
+      <div id="playerLegend" class="player-legend"></div>
+      <div class="row">
+        <button id="rollDice">Roll dice</button>
+        <span id="diceResult" class="dice" title="Dice result = moves you can make"></span>
+        <button id="endTurn" class="secondary">End turn</button>
+      </div>
+      <div class="move-buttons">
+        <button id="btnUp" class="up" title="Up">↑</button>
+        <button id="btnLeft" class="left" title="Left">←</button>
+        <button id="btnRight" class="right" title="Right">→</button>
+        <button id="btnDown" class="down" title="Down">↓</button>
+      </div>
+      <div class="controls">WASD or Arrow keys &nbsp;|&nbsp; R = New maze</div>
+      <div class="row">
+        <label>Difficulty: <select id="difficulty">
+          <option value="7">Easy (7×7)</option>
+          <option value="11" selected>Medium (11×11)</option>
+          <option value="15">Hard (15×15)</option>
+          <option value="21">Expert (21×21)</option>
+        </select></label>
+      </div>
+      <div class="row">
+        <label>Players: <input type="number" id="numPaths" min="1" max="10" value="3"></label>
+      </div>
+      <div class="row">
+        <button id="aiMaze">Generate with AI</button>
+        <button id="newMaze" class="secondary">Random Maze</button>
+      </div>
+      <div id="won" class="won" style="display:none">*** Player <span id="winnerNum">1</span> WINS! ***</div>
+      <div id="error" class="error"></div>
     </div>
-    <div class="move-buttons">
-      <button id="btnUp" class="up" title="Up">↑</button>
-      <button id="btnLeft" class="left" title="Left">←</button>
-      <button id="btnRight" class="right" title="Right">→</button>
-      <button id="btnDown" class="down" title="Down">↓</button>
-    </div>
-    <div class="controls">WASD or Arrow keys to move &nbsp;|&nbsp; R = New maze</div>
-    <div class="row">
-      <label>Difficulty: <select id="difficulty">
-        <option value="7">Easy (7×7)</option>
-        <option value="11" selected>Medium (11×11)</option>
-        <option value="15">Hard (15×15)</option>
-        <option value="21">Expert (21×21)</option>
-      </select></label>
-      <label>Paths (players): <input type="number" id="numPaths" min="1" max="10" value="3"></label>
-      <button id="aiMaze">Generate with AI</button>
-      <button id="newMaze" class="secondary">Random Maze</button>
-    </div>
-    <div id="won" class="won" style="display:none">*** Player <span id="winnerNum">1</span> WINS! ***</div>
-    <div id="error" class="error"></div>
   </div>
 
   <script>
@@ -284,20 +314,12 @@
 
     let lab, moves, currentPlayer, movesLeft, totalMoves, diceResult, winner;
 
-    function cellSize() {
-      const s = lab.width;
-      if (s <= 7) return 28;
-      if (s <= 11) return 24;
-      if (s <= 15) return 18;
-      return 14;
-    }
+    const CELL_SIZE = 32;
 
     function render() {
       const el = document.getElementById('maze');
       el.innerHTML = '';
-      const cs = cellSize();
-      el.style.setProperty('--cell-size', cs + 'px');
-      el.style.gridTemplateColumns = `repeat(${lab.width}, ${cs}px)`;
+      el.style.gridTemplateColumns = `repeat(${lab.width}, ${CELL_SIZE}px)`;
       const playerCells = {};
       lab.players.forEach((p, i) => { playerCells[`${p.x},${p.y}`] = i; });
       const cp = lab.players[currentPlayer];
