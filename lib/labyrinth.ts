@@ -279,6 +279,21 @@ export class Labyrinth {
     );
   }
 
+  /** Returns true if the player can move in direction (dx, dy) - either normal move or jump. */
+  canMoveInDirection(dx: number, dy: number, playerIndex = 0): boolean {
+    const p = this.players[playerIndex];
+    if (!p) return false;
+    const nx = p.x + dx;
+    const ny = p.y + dy;
+    if (this.canMove(nx, ny)) return true;
+    if ((p.jumps ?? 0) > 0 && this.grid[ny]?.[nx] === WALL) {
+      const jx = nx + dx;
+      const jy = ny + dy;
+      return jx >= 0 && jx < this.width && jy >= 0 && jy < this.height && this.canMove(jx, jy);
+    }
+    return false;
+  }
+
   movePlayer(dx: number, dy: number, playerIndex = 0): boolean {
     const p = this.players[playerIndex];
     if (!p) return false;

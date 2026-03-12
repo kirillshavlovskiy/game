@@ -169,14 +169,6 @@ export default function LabyrinthGame() {
     await diceRef.current?.roll();
   }, [lab, movesLeft, winner]);
 
-  const endTurn = useCallback(() => {
-    if (winner !== null || !lab) return;
-    setCurrentPlayer((p) => (p + 1) % lab.numPlayers);
-    setMovesLeft(0);
-    setDiceResult(null);
-    setBonusAdded(null);
-  }, [lab, winner]);
-
   const doMove = useCallback(
     (dx: number, dy: number) => {
       if (winner !== null || !lab || movesLeft <= 0) return;
@@ -287,6 +279,10 @@ export default function LabyrinthGame() {
   const rollDisabled = movesLeft > 0 || winner !== null || rolling;
   const showSecretCells = movesLeft > 0;
   const jumpTargets = cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
+  const canUp = !moveDisabled && lab.canMoveInDirection(0, -1, currentPlayer);
+  const canLeft = !moveDisabled && lab.canMoveInDirection(-1, 0, currentPlayer);
+  const canRight = !moveDisabled && lab.canMoveInDirection(1, 0, currentPlayer);
+  const canDown = !moveDisabled && lab.canMoveInDirection(0, 1, currentPlayer);
 
   return (
     <div style={gamePaneStyle}>
@@ -624,17 +620,6 @@ export default function LabyrinthGame() {
           })}
         </div>
 
-        <div className="row" style={rowStyle}>
-          <button
-            onClick={endTurn}
-            className="secondary"
-            disabled={winner !== null}
-            style={{ ...buttonStyle, ...secondaryButtonStyle }}
-          >
-            End turn
-          </button>
-        </div>
-
         <div style={{ marginTop: "0.5rem" }}>
           {cp && (cp.jumps ?? 0) > 0 && (
             <div
@@ -682,12 +667,12 @@ export default function LabyrinthGame() {
         >
           <button
             onClick={() => doMove(0, -1)}
-            disabled={moveDisabled}
+            disabled={!canUp}
             style={{
               ...moveButtonStyle,
               gridColumn: 2,
               gridRow: 1,
-              ...(cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
+              ...(canUp && cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
             }}
             title={cp && (cp.jumps ?? 0) > 0 ? "Up (or jump over wall)" : "Up"}
           >
@@ -695,12 +680,12 @@ export default function LabyrinthGame() {
           </button>
           <button
             onClick={() => doMove(-1, 0)}
-            disabled={moveDisabled}
+            disabled={!canLeft}
             style={{
               ...moveButtonStyle,
               gridColumn: 1,
               gridRow: 2,
-              ...(cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
+              ...(canLeft && cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
             }}
             title={cp && (cp.jumps ?? 0) > 0 ? "Left (or jump over wall)" : "Left"}
           >
@@ -708,12 +693,12 @@ export default function LabyrinthGame() {
           </button>
           <button
             onClick={() => doMove(1, 0)}
-            disabled={moveDisabled}
+            disabled={!canRight}
             style={{
               ...moveButtonStyle,
               gridColumn: 3,
               gridRow: 2,
-              ...(cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
+              ...(canRight && cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
             }}
             title={cp && (cp.jumps ?? 0) > 0 ? "Right (or jump over wall)" : "Right"}
           >
@@ -721,12 +706,12 @@ export default function LabyrinthGame() {
           </button>
           <button
             onClick={() => doMove(0, 1)}
-            disabled={moveDisabled}
+            disabled={!canDown}
             style={{
               ...moveButtonStyle,
               gridColumn: 2,
               gridRow: 3,
-              ...(cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
+              ...(canDown && cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
             }}
             title={cp && (cp.jumps ?? 0) > 0 ? "Down (or jump over wall)" : "Down"}
           >
@@ -767,6 +752,7 @@ const headerStyle: React.CSSProperties = {
   background: "#1a1a24",
   borderBottom: "1px solid #333",
   flexShrink: 0,
+  zIndex: 10,
 };
 
 const headerTitleStyle: React.CSSProperties = {
@@ -813,8 +799,10 @@ const modalRowStyle: React.CSSProperties = {
 
 const mazeAreaStyle: React.CSSProperties = {
   flex: 1,
+  minHeight: 0,
   position: "relative",
   overflow: "auto",
+  paddingTop: 4,
 };
 
 const jumpActionButtonStyle: React.CSSProperties = {
