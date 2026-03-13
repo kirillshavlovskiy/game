@@ -119,6 +119,7 @@ export default function LabyrinthGame() {
   const movesLeftRef = useRef(0);
   const winnerRef = useRef(winner);
   const currentPlayerRef = useRef(currentPlayer);
+  const teleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     movesLeftRef.current = movesLeft;
@@ -188,6 +189,10 @@ export default function LabyrinthGame() {
     const extraPaths = Math.max(4, n * 2);
     const l = new Labyrinth(size, size, extraPaths, n);
     l.generate();
+    if (teleportTimerRef.current) {
+      clearTimeout(teleportTimerRef.current);
+      teleportTimerRef.current = null;
+    }
     setLab(l);
     setCurrentPlayer(0);
     movesLeftRef.current = 0;
@@ -280,6 +285,10 @@ export default function LabyrinthGame() {
     (dx: number, dy: number, jumpOnly = false) => {
       if (winner !== null || !lab) return;
       if (movesLeftRef.current <= 0) return;
+      if (teleportTimerRef.current) {
+        clearTimeout(teleportTimerRef.current);
+        teleportTimerRef.current = null;
+      }
       movesLeftRef.current--;
       setBonusAdded(null);
       setJumpAdded(null);
@@ -319,12 +328,31 @@ export default function LabyrinthGame() {
             p.jumps = (p.jumps ?? 0) + mult;
             setJumpAdded(mult);
           }
-          if (cell && isMagicCell(cell) && newMovesLeft === 0) {
-            const from: [number, number] = [p.x, p.y];
-            const dest = next.getTeleportDestination(currentPlayer);
-            if (dest && next.teleportToRandomMagicCell(currentPlayer)) {
-              setTeleportAnimation({ from, to: dest, playerIndex: currentPlayer });
-            }
+          if (cell && isMagicCell(cell)) {
+            const magicX = p.x;
+            const magicY = p.y;
+            const playerToTeleport = currentPlayer;
+            teleportTimerRef.current = setTimeout(() => {
+              teleportTimerRef.current = null;
+              setLab((prev) => {
+                if (!prev || winnerRef.current !== null) return prev;
+                const cp = prev.players[playerToTeleport];
+                if (!cp || cp.x !== magicX || cp.y !== magicY) return prev;
+                const cellNow = prev.grid[cp.y]?.[cp.x];
+                if (!cellNow || !isMagicCell(cellNow)) return prev;
+                const nextLab = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers);
+                nextLab.grid = prev.grid.map((r) => [...r]);
+                nextLab.players = prev.players.map((pl) => ({ ...pl, jumps: pl.jumps ?? 0, diamonds: pl.diamonds ?? 0 }));
+                nextLab.goalX = prev.goalX;
+                nextLab.goalY = prev.goalY;
+                nextLab.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+                nextLab.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+                const dest = nextLab.getTeleportDestination(playerToTeleport);
+                if (!dest || !nextLab.teleportToRandomMagicCell(playerToTeleport)) return prev;
+                setTeleportAnimation({ from: [magicX, magicY], to: dest, playerIndex: playerToTeleport });
+                return nextLab;
+              });
+            }, 1000);
           }
           const owner = cell ? getCollectibleOwner(cell) : null;
           if (owner === currentPlayer && cell && isDiamondCell(cell)) {

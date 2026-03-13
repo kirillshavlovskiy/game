@@ -459,7 +459,14 @@ export class Labyrinth {
         if (this.grid[y][x] === MAGIC && (x !== p.x || y !== p.y))
           magicCells.push([x, y]);
     if (magicCells.length === 0) return null;
-    return magicCells[Math.floor(Math.random() * magicCells.length)];
+    const dist = (ax: number, ay: number) => Math.abs(ax - p.x) + Math.abs(ay - p.y);
+    const nearest = magicCells.reduce<[number, number][]>((acc, [x, y]) => {
+      const d = dist(x, y);
+      if (acc.length === 0 || d < dist(acc[0][0], acc[0][1])) return [[x, y]];
+      if (d === dist(acc[0][0], acc[0][1])) return [...acc, [x, y]];
+      return acc;
+    }, []);
+    return nearest[Math.floor(Math.random() * nearest.length)];
   }
 
   teleportToRandomMagicCell(playerIndex = 0): boolean {
