@@ -238,7 +238,7 @@ export class Labyrinth {
       for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
         const nx = x + dx, ny = y + dy;
         if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height &&
-            this.grid[ny][nx] === PATH && !seen.has(`${nx},${ny}`)) {
+            isWalkable(this.grid[ny][nx]) && !seen.has(`${nx},${ny}`)) {
           seen.add(`${nx},${ny}`);
           q.push([nx, ny]);
         }
@@ -252,7 +252,7 @@ export class Labyrinth {
     const intersections: [number, number][] = [];
     for (let y = 1; y < this.height - 1; y++) {
       for (let x = 1; x < this.width - 1; x++) {
-        if (this.grid[y][x] !== PATH) continue;
+        if (!isWalkable(this.grid[y][x])) continue;
         const n = this._countPathNeighbors(x, y);
         if (n >= 3 && (x !== 0 || y !== 0) && (x !== this.goalX || y !== this.goalY) &&
             !excludeCells.some(([ex, ey]) => ex === x && ey === y)) {
@@ -279,7 +279,7 @@ export class Labyrinth {
     for (const m of this.monsters) {
       if (m.patrolArea.length < 2) continue;
       const walkable = m.patrolArea.filter(([px, py]) =>
-        (px !== m.x || py !== m.y) && this.grid[py]?.[px] === PATH
+        (px !== m.x || py !== m.y) && isWalkable(this.grid[py]?.[px] ?? WALL)
       );
       if (walkable.length === 0) continue;
       const next = walkable[Math.floor(Math.random() * walkable.length)];

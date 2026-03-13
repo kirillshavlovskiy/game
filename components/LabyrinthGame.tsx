@@ -131,6 +131,7 @@ export default function LabyrinthGame() {
     });
   }, [numPlayers]);
 
+
   const DICE_PANEL_WIDTH = 180;
   const DICE_PANEL_HEIGHT = 240;
   const diceDrag = useDraggable(() => ({
@@ -563,18 +564,21 @@ export default function LabyrinthGame() {
               <label>Player names:</label>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ color: PLAYER_COLORS[i] ?? "#888", fontWeight: "bold", minWidth: 20 }}>●</span>
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
+                    <span style={{ color: PLAYER_COLORS[i] ?? "#888", fontWeight: "bold", minWidth: 20, flexShrink: 0 }}>●</span>
                     <input
                       type="text"
-                      value={playerNames[i] ?? `Player ${i + 1}`}
+                      value={(playerNames[i] ?? `Player ${i + 1}`).toString()}
                       onChange={(e) => {
-                        const next = [...playerNames];
-                        next[i] = e.target.value || `Player ${i + 1}`;
-                        setPlayerNames(next);
+                        const val = e.target.value;
+                        setPlayerNames((prev) => {
+                          const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => `Player ${prev.length + j + 1}`)];
+                          next[i] = val || `Player ${i + 1}`;
+                          return next;
+                        });
                       }}
                       placeholder={`Player ${i + 1}`}
-                      style={{ ...inputStyle, width: "100%", minWidth: 120 }}
+                      style={{ ...inputStyle, width: "100%", minWidth: 120, flex: 1 }}
                     />
                   </div>
                 ))}
@@ -629,7 +633,11 @@ export default function LabyrinthGame() {
               if (monster) {
                 cellClass += " path monster";
                 const icon = monster.type === "V" ? "🧛" : monster.type === "Z" ? "🧟" : "🕷";
-                content = <span className="monster-icon" style={{ fontSize: "1.2rem" }} title={getMonsterName(monster.type)}>{icon}</span>;
+                content = (
+                  <span className="monster-icon" style={{ fontSize: "1.2rem", lineHeight: 1 }} title={getMonsterName(monster.type)}>
+                    {icon}
+                  </span>
+                );
               }
               if (pi !== undefined && !lab.eliminatedPlayers.has(pi)) {
                 cellClass += " path";
@@ -1007,6 +1015,8 @@ const modalStyle: React.CSSProperties = {
   borderRadius: 8,
   border: "1px solid #333",
   minWidth: 280,
+  maxHeight: "90vh",
+  overflowY: "auto",
 };
 
 const modalTitleStyle: React.CSSProperties = {
