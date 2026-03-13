@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import {
   Labyrinth,
+  PATH,
   SIZE_OPTIONS,
   DIFFICULTY_OPTIONS,
   PLAYER_COLORS,
@@ -13,6 +14,7 @@ import {
   isMagicCell,
   isJumpCell,
   isDiamondCell,
+  isShieldCell,
   getCollectibleOwner,
   getMonsterName,
   type MonsterType,
@@ -90,6 +92,8 @@ export default function LabyrinthGame() {
   const [currentPlayer, setCurrentPlayer] = useState(0);
   const [movesLeft, setMovesLeft] = useState(0);
   const [totalMoves, setTotalMoves] = useState(0);
+  const [playerTurns, setPlayerTurns] = useState<number[]>(() => [0, 0, 0]);
+  const [playerMoves, setPlayerMoves] = useState<number[]>(() => [0, 0, 0]);
   const [diceResult, setDiceResult] = useState<number | null>(null);
   const [winner, setWinner] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -99,6 +103,9 @@ export default function LabyrinthGame() {
   const [rolling, setRolling] = useState(false);
   const [bonusAdded, setBonusAdded] = useState<number | null>(null);
   const [jumpAdded, setJumpAdded] = useState<number | null>(null);
+  const [shieldAbsorbed, setShieldAbsorbed] = useState<boolean | null>(null);
+  const [shieldGained, setShieldGained] = useState<boolean | null>(null);
+  const [cellsRevealed, setCellsRevealed] = useState<number | null>(null);
   const [eliminatedByMonster, setEliminatedByMonster] = useState<{
     playerIndex: number;
     monsterType: MonsterType;
@@ -107,6 +114,11 @@ export default function LabyrinthGame() {
     from: [number, number];
     to: [number, number];
     playerIndex: number;
+  } | null>(null);
+  const [teleportPicker, setTeleportPicker] = useState<{
+    playerIndex: number;
+    from: [number, number];
+    options: [number, number][];
   } | null>(null);
   const [jumpAnimation, setJumpAnimation] = useState<{
     playerIndex: number;
@@ -143,6 +155,9 @@ export default function LabyrinthGame() {
       }
       return prev.slice(0, n);
     });
+    const n = Math.min(Math.max(1, numPlayers), 10);
+    setPlayerTurns((prev) => (prev.length === n ? prev : [...prev.slice(0, n), ...Array(Math.max(0, n - prev.length)).fill(0)]));
+    setPlayerMoves((prev) => (prev.length === n ? prev : [...prev.slice(0, n), ...Array(Math.max(0, n - prev.length)).fill(0)]));
   }, [numPlayers]);
 
 
@@ -181,6 +196,24 @@ export default function LabyrinthGame() {
     return () => clearTimeout(t);
   }, [jumpAdded]);
 
+  useEffect(() => {
+    if (shieldAbsorbed === null) return;
+    const t = setTimeout(() => setShieldAbsorbed(null), 1500);
+    return () => clearTimeout(t);
+  }, [shieldAbsorbed]);
+
+  useEffect(() => {
+    if (shieldGained === null) return;
+    const t = setTimeout(() => setShieldGained(null), 1500);
+    return () => clearTimeout(t);
+  }, [shieldGained]);
+
+  useEffect(() => {
+    if (cellsRevealed === null) return;
+    const t = setTimeout(() => setCellsRevealed(null), 2000);
+    return () => clearTimeout(t);
+  }, [cellsRevealed]);
+
   const getDimensions = useCallback(() => {
     return mazeSize;
   }, [mazeSize]);
@@ -200,14 +233,20 @@ export default function LabyrinthGame() {
     movesLeftRef.current = 0;
     setMovesLeft(0);
     setTotalMoves(0);
+    setPlayerTurns(Array(n).fill(0));
+    setPlayerMoves(Array(n).fill(0));
     setDiceResult(null);
     setWinner(null);
     setError("");
     setBonusAdded(null);
     setJumpAdded(null);
+    setShieldAbsorbed(null);
+    setShieldGained(null);
+    setCellsRevealed(null);
     setEliminatedByMonster(null);
     setTeleportAnimation(null);
     setJumpAnimation(null);
+    setTeleportPicker(null);
   }, [getDimensions, numPlayers, difficulty]);
 
   const generateWithAI = useCallback(async () => {
@@ -239,10 +278,16 @@ export default function LabyrinthGame() {
         movesLeftRef.current = 0;
         setMovesLeft(0);
         setTotalMoves(0);
+        setPlayerTurns(Array(n).fill(0));
+        setPlayerMoves(Array(n).fill(0));
         setDiceResult(null);
         setWinner(null);
         setError("");
         setBonusAdded(null);
+        setJumpAdded(null);
+        setShieldAbsorbed(null);
+        setShieldGained(null);
+        setCellsRevealed(null);
         setTeleportAnimation(null);
       } else {
         setError("Invalid maze from AI, using random maze.");
@@ -262,6 +307,11 @@ export default function LabyrinthGame() {
     setMovesLeft(value);
     setRolling(false);
     setBonusAdded(null);
+    setPlayerTurns((prev) => {
+      const next = [...prev];
+      if (currentPlayerRef.current < next.length) next[currentPlayerRef.current] = (next[currentPlayerRef.current] ?? 0) + 1;
+      return next;
+    });
   }, []);
 
   const rollDice = useCallback(async () => {
@@ -291,6 +341,7 @@ export default function LabyrinthGame() {
         clearTimeout(teleportTimerRef.current);
         teleportTimerRef.current = null;
       }
+      setTeleportPicker(null);
       movesLeftRef.current--;
       setBonusAdded(null);
       setJumpAdded(null);
@@ -300,7 +351,9 @@ export default function LabyrinthGame() {
         ...p,
         jumps: p.jumps ?? 0,
         diamonds: p.diamonds ?? 0,
+        shield: p.shield ?? 0,
       }));
+      next.hiddenCells = new Map(lab.hiddenCells);
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
       next.monsters = lab.monsters.map((m) => ({
@@ -317,6 +370,11 @@ export default function LabyrinthGame() {
         const newMovesLeft = Math.max(0, movesLeftRef.current);
         setMovesLeft(newMovesLeft);
         setTotalMoves((t) => t + 1);
+        setPlayerMoves((prev) => {
+          const next = [...prev];
+          if (currentPlayer < next.length) next[currentPlayer] = (next[currentPlayer] ?? 0) + 1;
+          return next;
+        });
         const p = next.players[currentPlayer];
         const prevX = lab.players[currentPlayer]?.x ?? 0;
         const prevY = lab.players[currentPlayer]?.y ?? 0;
@@ -330,6 +388,11 @@ export default function LabyrinthGame() {
             p.jumps = (p.jumps ?? 0) + mult;
             setJumpAdded(mult);
           }
+          if (cell && isShieldCell(cell)) {
+            p.shield = (p.shield ?? 0) + 1;
+            setShieldGained(true);
+            next.grid[p.y][p.x] = PATH;
+          }
           if (cell && isMagicCell(cell)) {
             const magicX = p.x;
             const magicY = p.y;
@@ -342,42 +405,44 @@ export default function LabyrinthGame() {
                 if (!cp || cp.x !== magicX || cp.y !== magicY) return prev;
                 const cellNow = prev.grid[cp.y]?.[cp.x];
                 if (!cellNow || !isMagicCell(cellNow)) return prev;
-                const nextLab = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
-                nextLab.grid = prev.grid.map((r) => [...r]);
-                nextLab.players = prev.players.map((pl) => ({ ...pl, jumps: pl.jumps ?? 0, diamonds: pl.diamonds ?? 0 }));
-                nextLab.goalX = prev.goalX;
-                nextLab.goalY = prev.goalY;
-                nextLab.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
-                nextLab.eliminatedPlayers = new Set(prev.eliminatedPlayers);
-                const dest = nextLab.getTeleportDestination(playerToTeleport);
-                if (!dest || !nextLab.teleportToRandomMagicCell(playerToTeleport)) return prev;
-                setTeleportAnimation({ from: [magicX, magicY], to: dest, playerIndex: playerToTeleport });
-                return nextLab;
+                const options = prev.getTeleportOptions(playerToTeleport, 6);
+                if (options.length > 0) {
+                  setTeleportPicker({ playerIndex: playerToTeleport, from: [magicX, magicY], options });
+                }
+                return prev;
               });
             }, 1000);
           }
           const owner = cell ? getCollectibleOwner(cell) : null;
           if (owner === currentPlayer && cell && isDiamondCell(cell)) {
             p.diamonds = (p.diamonds ?? 0) + 1;
-            next.grid[p.y][p.x] = " ";
+            next.grid[p.y][p.x] = PATH;
+            const totalDiamonds = next.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
+            const revealed = next.revealHiddenCells(totalDiamonds);
+            if (revealed > 0) setCellsRevealed(revealed);
           }
         }
         next.moveMonsters({ prevX, prevY, playerIndex: currentPlayer });
         const collision = next.checkMonsterCollision();
         if (collision) {
-          next.eliminatedPlayers.add(collision.playerIndex);
-          setEliminatedByMonster({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
-          if (next.eliminatedPlayers.size >= next.numPlayers) {
-            setWinner(-1);
-          } else if (collision.playerIndex === currentPlayer) {
-            movesLeftRef.current = 0;
-            setMovesLeft(0);
-            setDiceResult(null);
-            let nextP = (currentPlayer + 1) % lab.numPlayers;
-            while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
-              nextP = (nextP + 1) % lab.numPlayers;
+          const usedShield = next.tryConsumeShield(collision.playerIndex);
+          if (usedShield) {
+            setShieldAbsorbed(true);
+          } else {
+            next.eliminatedPlayers.add(collision.playerIndex);
+            setEliminatedByMonster({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
+            if (next.eliminatedPlayers.size >= next.numPlayers) {
+              setWinner(-1);
+            } else if (collision.playerIndex === currentPlayer) {
+              movesLeftRef.current = 0;
+              setMovesLeft(0);
+              setDiceResult(null);
+              let nextP = (currentPlayer + 1) % lab.numPlayers;
+              while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
+                nextP = (nextP + 1) % lab.numPlayers;
+              }
+              setCurrentPlayer(nextP);
             }
-            setCurrentPlayer(nextP);
           }
         }
         if (next.isGoalReached(currentPlayer)) {
@@ -430,6 +495,7 @@ export default function LabyrinthGame() {
           ...p,
           jumps: p.jumps ?? 0,
           diamonds: p.diamonds ?? 0,
+          shield: p.shield ?? 0,
         }));
         next.goalX = prev.goalX;
         next.goalY = prev.goalY;
@@ -438,6 +504,7 @@ export default function LabyrinthGame() {
           patrolArea: [...m.patrolArea],
         }));
         next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+        next.hiddenCells = new Map(prev.hiddenCells);
         next.moveMonsters();
         return next;
       });
@@ -515,9 +582,36 @@ export default function LabyrinthGame() {
   const canJumpRight = !moveDisabled && lab?.canJumpInDirection(1, 0, currentPlayer);
   const canJumpDown = !moveDisabled && lab?.canJumpInDirection(0, 1, currentPlayer);
 
+  const handleTeleportSelect = useCallback(
+    (destX: number, destY: number) => {
+      if (!teleportPicker || !lab) return;
+      const { playerIndex, from } = teleportPicker;
+      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
+      next.grid = lab.grid.map((r) => [...r]);
+      next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0 }));
+      next.hiddenCells = new Map(lab.hiddenCells);
+      next.goalX = lab.goalX;
+      next.goalY = lab.goalY;
+      next.monsters = lab.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+      next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
+      if (next.teleportToCell(playerIndex, destX, destY)) {
+        setTeleportAnimation({ from, to: [destX, destY], playerIndex });
+        setLab(next);
+        setTeleportPicker(null);
+      }
+    },
+    [teleportPicker, lab]
+  );
+
   const handleCellTap = useCallback(
     (cellX: number, cellY: number) => {
-      if (moveDisabled || !cp || !lab) return;
+      if (!lab) return;
+      if (teleportPicker) {
+        const isOption = teleportPicker.options.some(([ox, oy]) => ox === cellX && oy === cellY);
+        if (isOption) handleTeleportSelect(cellX, cellY);
+        return;
+      }
+      if (moveDisabled || !cp) return;
       const jumpTarget = jumpTargets.find((t) => t.x === cellX && t.y === cellY);
       if (jumpTarget) {
         doMove(jumpTarget.dx, jumpTarget.dy, true);
@@ -541,7 +635,7 @@ export default function LabyrinthGame() {
         doMove(stepX, 0, false);
       }
     },
-    [moveDisabled, cp, jumpTargets, lab, currentPlayer, doMove]
+    [moveDisabled, cp, jumpTargets, lab, currentPlayer, doMove, teleportPicker, handleTeleportSelect]
   );
 
   if (!lab) {
@@ -594,6 +688,49 @@ export default function LabyrinthGame() {
         </button>
       </header>
 
+      <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
+        <aside style={statsPanelStyle}>
+          <div style={{ fontSize: "0.9rem", fontWeight: "bold", color: "#00ff88", marginBottom: 4 }}>Players</div>
+          {lab.players.map((p, i) => (
+            <div
+              key={i}
+              style={{
+                padding: "0.5rem 0.75rem",
+                background: i === currentPlayer ? "#1e2e24" : "#12121a",
+                borderRadius: 6,
+                border: `1px solid ${i === currentPlayer ? "#00ff8844" : "#333"}`,
+              }}
+            >
+              <div style={{ color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#888"), fontWeight: "bold", marginBottom: 4 }}>
+                {playerNames[i] ?? `Player ${i + 1}`}
+                {lab.eliminatedPlayers.has(i) && " (out)"}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
+                Turns: {playerTurns[i] ?? 0}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
+                Moves: {playerMoves[i] ?? 0}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
+                Diamonds: {p?.diamonds ?? 0}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
+                Shield: {p?.shield ?? 0}
+              </div>
+            </div>
+          ))}
+        </aside>
+
+        <div style={mainContentStyle}>
+      {teleportPicker && (
+        <div style={{ ...eliminatedOverlayStyle, pointerEvents: "none" }}>
+          <div style={{ ...eliminatedBannerStyle, borderColor: "#aa66ff", background: "rgba(0,0,0,0.9)", pointerEvents: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ color: "#aa66ff" }}>Pick teleport destination (click ○ on map)</span>
+            <button onClick={() => setTeleportPicker(null)} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       {eliminatedByMonster && (
         <div style={eliminatedOverlayStyle}>
           <div style={eliminatedBannerStyle}>
@@ -605,7 +742,7 @@ export default function LabyrinthGame() {
         </div>
       )}
 
-      {(bonusAdded !== null || jumpAdded !== null) && (
+      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || cellsRevealed !== null) && (
         <div style={effectToastStyle} className="effect-toast">
           {bonusAdded !== null && diceResult !== null && (
             <span style={{ color: "#ffcc00" }}>×{bonusAdded / diceResult} moves!</span>
@@ -614,6 +751,15 @@ export default function LabyrinthGame() {
             <span style={{ color: "#66aaff", marginLeft: bonusAdded ? 12 : 0 }}>
               {jumpAdded > 1 ? `×${jumpAdded} jumps!` : `+1 jump!`}
             </span>
+          )}
+          {shieldAbsorbed !== null && (
+            <span style={{ color: "#44ff88", marginLeft: 12 }}>🛡 Shield absorbed attack!</span>
+          )}
+          {shieldGained !== null && (
+            <span style={{ color: "#44ff88", marginLeft: 12 }}>🛡 +1 Shield!</span>
+          )}
+          {cellsRevealed !== null && (
+            <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ {cellsRevealed} hidden cells revealed!</span>
           )}
         </div>
       )}
@@ -724,6 +870,7 @@ export default function LabyrinthGame() {
             Array.from({ length: lab.width }).map((_, x) => {
               const monster = lab.monsters.find((m) => m.x === x && m.y === y);
               const pi = playerCells[`${x},${y}`];
+              const isTeleportOption = teleportPicker?.options.some(([ox, oy]) => ox === x && oy === y);
               let content: React.ReactNode = null;
               let cellClass = "cell";
 
@@ -755,10 +902,23 @@ export default function LabyrinthGame() {
                     }}
                   />
                 );
+                const dirIndicators = pi === currentPlayer && cp && !moveDisabled ? (
+                  <>
+                    {canMoveUp && <span style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", fontSize: "0.6rem", color: "#00ff88", fontWeight: "bold" }}>↑{movesLeft}</span>}
+                    {canMoveDown && <span style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", fontSize: "0.6rem", color: "#00ff88", fontWeight: "bold" }}>↓{movesLeft}</span>}
+                    {canMoveLeft && <span style={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", fontSize: "0.6rem", color: "#00ff88", fontWeight: "bold" }}>←{movesLeft}</span>}
+                    {canMoveRight && <span style={{ position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)", fontSize: "0.6rem", color: "#00ff88", fontWeight: "bold" }}>→{movesLeft}</span>}
+                    {canJumpUp && <span style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", fontSize: "0.6rem", color: "#66aaff", fontWeight: "bold" }}>J↑{cp.jumps ?? 0}</span>}
+                    {canJumpDown && <span style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", fontSize: "0.6rem", color: "#66aaff", fontWeight: "bold" }}>J↓{cp.jumps ?? 0}</span>}
+                    {canJumpLeft && <span style={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", fontSize: "0.6rem", color: "#66aaff", fontWeight: "bold" }}>J←{cp.jumps ?? 0}</span>}
+                    {canJumpRight && <span style={{ position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)", fontSize: "0.6rem", color: "#66aaff", fontWeight: "bold" }}>J→{cp.jumps ?? 0}</span>}
+                  </>
+                ) : null;
                 content = (
                   <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {monsterIcon && <span style={{ position: "absolute", left: 2, top: 2, fontSize: "1rem", lineHeight: 1 }}>{monsterIcon}</span>}
                     {playerMarker}
+                    {dirIndicators}
                   </div>
                 );
               } else if (monsterIcon) {
@@ -772,7 +932,7 @@ export default function LabyrinthGame() {
               } else if (isMultiplierCell(lab.grid[y][x])) {
                 content = `×${lab.grid[y][x]}`;
                 cellClass += " path multiplier mult-x" + lab.grid[y][x];
-              } else if (showSecretCells && isMagicCell(lab.grid[y][x])) {
+              } else if ((showSecretCells || isTeleportOption) && isMagicCell(lab.grid[y][x])) {
                 content = (
                   <span className="hole-cell" style={{ fontSize: "1.1rem" }} title="Teleport hole">
                     ○
@@ -782,6 +942,9 @@ export default function LabyrinthGame() {
               } else if (showSecretCells && isJumpCell(lab.grid[y][x])) {
                 content = "J";
                 cellClass += " path jump";
+              } else if (showSecretCells && isShieldCell(lab.grid[y][x])) {
+                content = "🛡";
+                cellClass += " path shield";
               } else if (showSecretCells && isDiamondCell(lab.grid[y][x])) {
                 const owner = getCollectibleOwner(lab.grid[y][x]);
                 content = "💎";
@@ -819,10 +982,19 @@ export default function LabyrinthGame() {
                 cellBg.background = "#1e1e2e";
                 cellBg.color = "#aa66ff";
                 cellBg.fontWeight = "bold";
+                if (isTeleportOption) {
+                  cellBg.boxShadow = "inset 0 0 12px #aa66ff66, 0 0 8px #aa66ff";
+                  cellBg.border = "2px solid #aa66ff";
+                }
               }
               if (cellClass.includes("jump")) {
                 cellBg.background = "#1e2e2e";
                 cellBg.color = "#66aaff";
+                cellBg.fontWeight = "bold";
+              }
+              if (cellClass.includes("shield")) {
+                cellBg.background = "#1e2e1e";
+                cellBg.color = "#44ff88";
                 cellBg.fontWeight = "bold";
               }
               if (cellClass.includes("collectible")) {
@@ -850,7 +1022,7 @@ export default function LabyrinthGame() {
                   : "#888";
               const jumpTarget = jumpTargets.find((t) => t.x === x && t.y === y);
 
-              const isTappable = !moveDisabled && (cellClass.includes("path") || !!jumpTarget);
+              const isTappable = (teleportPicker && isTeleportOption) || (!moveDisabled && (cellClass.includes("path") || !!jumpTarget));
 
               return (
                 <div
@@ -1004,6 +1176,8 @@ export default function LabyrinthGame() {
 
         {error && <div className="error" style={errorStyle}>{error}</div>}
       </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1017,6 +1191,28 @@ const gamePaneStyle: React.CSSProperties = {
   flexDirection: "column",
   overflow: "hidden",
   background: "#0f0f14",
+};
+
+const STATS_PANEL_WIDTH = 180;
+
+const statsPanelStyle: React.CSSProperties = {
+  width: STATS_PANEL_WIDTH,
+  flexShrink: 0,
+  background: "#1a1a24",
+  borderRight: "1px solid #333",
+  padding: "1rem",
+  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.75rem",
+};
+
+const mainContentStyle: React.CSSProperties = {
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  minWidth: 0,
+  overflow: "hidden",
 };
 
 const headerStyle: React.CSSProperties = {

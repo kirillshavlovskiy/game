@@ -8,6 +8,7 @@ export const MULT_X3 = "3";
 export const MULT_X4 = "4";
 export const MAGIC = "M";
 export const JUMP = "J";
+export const SHIELD = "H";
 
 export type MonsterType = "V" | "Z" | "S" | "G"; // Vampire, Zombie, Spider, Ghost
 
@@ -42,6 +43,10 @@ export function isJumpCell(cell: string): boolean {
   return cell === JUMP;
 }
 
+export function isShieldCell(cell: string): boolean {
+  return cell === SHIELD;
+}
+
 export function isDiamondCell(cell: string): boolean {
   return /^D\d+$/.test(cell);
 }
@@ -71,11 +76,13 @@ export class Labyrinth {
   numPlayers: number;
   monsterDensity: number;
   grid: string[][];
-  players: Array<{ x: number; y: number; jumps: number; diamonds: number }>;
+  players: Array<{ x: number; y: number; jumps: number; diamonds: number; shield: number }>;
   goalX: number;
   goalY: number;
   monsters: Monster[] = [];
   eliminatedPlayers: Set<number> = new Set();
+  /** Hidden cells revealed when players collect diamonds. Key: "x,y", Value: cell type (M, J, 2, 3, 4, H) */
+  hiddenCells: Map<string, string> = new Map();
 
   constructor(
     width: number,
@@ -90,7 +97,7 @@ export class Labyrinth {
     this.numPlayers = numPlayers;
     this.monsterDensity = Math.min(4, Math.max(1, monsterDensity));
     this.grid = [];
-    this.players = Array.from({ length: numPlayers }, () => ({ x: 0, y: 0, jumps: 0, diamonds: 0 }));
+    this.players = Array.from({ length: numPlayers }, () => ({ x: 0, y: 0, jumps: 0, diamonds: 0, shield: 0 }));
     this.goalX = width - 1;
     this.goalY = height - 1;
   }
@@ -227,7 +234,36 @@ export class Labyrinth {
       const [x, y] = diamondCells[i];
       this.grid[y][x] = `D${(i % this.numPlayers) + 1}`;
     }
+    // Add hidden cells (revealed when diamonds collected): magic, jump, multipliers, shield
+    const hiddenCount = Math.max(4, Math.min(12, Math.floor(pathCells.length * 0.06)));
+    const rest4 = rest3.filter((c) => !diamondCells.some((d) => d[0] === c[0] && d[1] === c[1]));
+    const hiddenCellCoords = this._pickSpread(rest4, hiddenCount);
+    const hiddenTypes: string[] = [MAGIC, MAGIC, JUMP, JUMP, MULT_X2, MULT_X3, SHIELD, SHIELD];
+    for (let i = 0; i < hiddenCellCoords.length; i++) {
+      const [x, y] = hiddenCellCoords[i];
+      this.hiddenCells.set(`${x},${y}`, hiddenTypes[i % hiddenTypes.length]);
+      // Grid stays PATH until revealed
+    }
     this._addMonsters(rest3);
+  }
+
+  /** Reveal hidden cells based on total diamonds collected by all players. Returns number revealed. */
+  revealHiddenCells(totalDiamonds: number): number {
+    const toReveal = Math.min(this.hiddenCells.size, Math.max(0, totalDiamonds * 2));
+    if (toReveal <= 0) return 0;
+    const entries = Array.from(this.hiddenCells.entries());
+    const shuffled = shuffle(entries);
+    let revealed = 0;
+    for (let i = 0; i < Math.min(toReveal, shuffled.length); i++) {
+      const [key, type] = shuffled[i];
+      const [x, y] = key.split(",").map(Number);
+      if (this.grid[y]?.[x] === PATH) {
+        this.grid[y][x] = type;
+        this.hiddenCells.delete(key);
+        revealed++;
+      }
+    }
+    return revealed;
   }
 
   private _getPatrolArea(startX: number, startY: number, maxCells: number): [number, number][] {
@@ -328,6 +364,14 @@ export class Labyrinth {
     return null;
   }
 
+  /** If player has shield, consume one and return true. Otherwise false. */
+  tryConsumeShield(playerIndex: number): boolean {
+    const p = this.players[playerIndex];
+    if (!p || (p.shield ?? 0) <= 0) return false;
+    p.shield = (p.shield ?? 0) - 1;
+    return true;
+  }
+
   private _addExtraPaths(): void {
     // Prefer walls with 2+ path neighbors - these create loops (alternative routes)
     let walls: [number, number][] = [];
@@ -388,10 +432,26 @@ export class Labyrinth {
       y: 0,
       jumps: 0,
       diamonds: 0,
+      shield: 0,
     }));
     this.monsters = [];
     this.eliminatedPlayers = new Set();
+    this.hiddenCells = new Map();
     this._addMonsters([]);
+    // Add hidden cells from path cells for AI-loaded mazes
+    const pathCells: [number, number][] = [];
+    for (let y = 1; y < this.height - 1; y++)
+      for (let x = 1; x < this.width - 1; x++)
+        if (this.grid[y][x] === PATH && (x !== this.goalX || y !== this.goalY) &&
+            !["M", "J", "2", "3", "4", "H"].includes(this.grid[y][x]))
+          pathCells.push([x, y]);
+    const hiddenTypes = [MAGIC, MAGIC, JUMP, JUMP, "2", "3", SHIELD, SHIELD];
+    const n = Math.min(6, Math.floor(pathCells.length / 2));
+    for (let i = 0; i < n; i++) {
+      const idx = Math.floor(Math.random() * pathCells.length);
+      const [x, y] = pathCells.splice(idx, 1)[0];
+      this.hiddenCells.set(`${x},${y}`, hiddenTypes[i % hiddenTypes.length]);
+    }
     return true;
   }
 
@@ -456,32 +516,27 @@ export class Labyrinth {
     return false;
   }
 
-  getTeleportDestination(playerIndex = 0): [number, number] | null {
+  getTeleportOptions(playerIndex = 0, maxOptions = 6): [number, number][] {
     const p = this.players[playerIndex];
-    if (!p) return null;
+    if (!p) return [];
     const magicCells: [number, number][] = [];
     for (let y = 0; y < this.height; y++)
       for (let x = 0; x < this.width; x++)
         if (this.grid[y][x] === MAGIC && (x !== p.x || y !== p.y))
           magicCells.push([x, y]);
-    if (magicCells.length === 0) return null;
+    if (magicCells.length === 0) return [];
     const dist = (ax: number, ay: number) => Math.abs(ax - p.x) + Math.abs(ay - p.y);
-    const nearest = magicCells.reduce<[number, number][]>((acc, [x, y]) => {
-      const d = dist(x, y);
-      if (acc.length === 0 || d < dist(acc[0][0], acc[0][1])) return [[x, y]];
-      if (d === dist(acc[0][0], acc[0][1])) return [...acc, [x, y]];
-      return acc;
-    }, []);
-    return nearest[Math.floor(Math.random() * nearest.length)];
+    const sorted = [...magicCells].sort((a, b) => dist(a[0], a[1]) - dist(b[0], b[1]));
+    return sorted.slice(0, maxOptions);
   }
 
-  teleportToRandomMagicCell(playerIndex = 0): boolean {
-    const dest = this.getTeleportDestination(playerIndex);
-    if (!dest) return false;
+  teleportToCell(playerIndex: number, destX: number, destY: number): boolean {
     const p = this.players[playerIndex];
     if (!p) return false;
-    p.x = dest[0];
-    p.y = dest[1];
+    if (this.grid[destY]?.[destX] !== MAGIC) return false;
+    if (destX === p.x && destY === p.y) return false;
+    p.x = destX;
+    p.y = destY;
     return true;
   }
 
