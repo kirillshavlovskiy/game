@@ -69,6 +69,7 @@ export class Labyrinth {
   height: number;
   extraPaths: number;
   numPlayers: number;
+  monsterDensity: number;
   grid: string[][];
   players: Array<{ x: number; y: number; jumps: number; diamonds: number }>;
   goalX: number;
@@ -80,12 +81,14 @@ export class Labyrinth {
     width: number,
     height: number,
     extraPaths = 4,
-    numPlayers = 1
+    numPlayers = 1,
+    monsterDensity = 2
   ) {
     this.width = width;
     this.height = height;
     this.extraPaths = extraPaths;
     this.numPlayers = numPlayers;
+    this.monsterDensity = Math.min(4, Math.max(1, monsterDensity));
     this.grid = [];
     this.players = Array.from({ length: numPlayers }, () => ({ x: 0, y: 0, jumps: 0, diamonds: 0 }));
     this.goalX = width - 1;
@@ -261,9 +264,12 @@ export class Labyrinth {
       }
     }
     shuffle(intersections);
+    const blocks10x10 = (this.width / 10) * (this.height / 10);
+    const targetMonsters = Math.max(1, Math.floor(blocks10x10 * this.monsterDensity));
     const MIN_MONSTER_DIST = 4;
     const chosen: [number, number][] = [];
     for (const [x, y] of intersections) {
+      if (this.monsters.length >= targetMonsters) break;
       const farEnough = chosen.every(([cx, cy]) => Math.abs(x - cx) + Math.abs(y - cy) >= MIN_MONSTER_DIST);
       if (farEnough) {
         const patrolArea = this._getPatrolArea(x, y, 28);
@@ -509,13 +515,8 @@ export class Labyrinth {
   }
 }
 
-export const DIFFICULTY: Record<number, number> = {
-  7: 7,
-  11: 11,
-  15: 15,
-  21: 21,
-  25: 25,
-};
+export const SIZE_OPTIONS = [10, 25, 30, 40] as const;
+export const DIFFICULTY_OPTIONS = [1, 2, 3, 4] as const;
 
 export const PLAYER_COLORS = [
   "#00ff88",

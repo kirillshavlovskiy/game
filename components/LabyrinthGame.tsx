@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import {
   Labyrinth,
-  DIFFICULTY,
+  SIZE_OPTIONS,
+  DIFFICULTY_OPTIONS,
   PLAYER_COLORS,
   PLAYER_COLORS_ACTIVE,
   isMultiplierCell,
@@ -92,7 +93,8 @@ export default function LabyrinthGame() {
   const [diceResult, setDiceResult] = useState<number | null>(null);
   const [winner, setWinner] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const [difficulty, setDifficulty] = useState(21);
+  const [mazeSize, setMazeSize] = useState(25);
+  const [difficulty, setDifficulty] = useState(2);
   const [numPlayers, setNumPlayers] = useState(3);
   const [rolling, setRolling] = useState(false);
   const [bonusAdded, setBonusAdded] = useState<number | null>(null);
@@ -180,14 +182,14 @@ export default function LabyrinthGame() {
   }, [jumpAdded]);
 
   const getDimensions = useCallback(() => {
-    return DIFFICULTY[difficulty] ?? 25;
-  }, [difficulty]);
+    return mazeSize;
+  }, [mazeSize]);
 
   const newGame = useCallback(() => {
     const n = Math.min(Math.max(1, numPlayers), 9);
     const size = getDimensions();
     const extraPaths = Math.max(4, n * 2);
-    const l = new Labyrinth(size, size, extraPaths, n);
+    const l = new Labyrinth(size, size, extraPaths, n, difficulty);
     l.generate();
     if (teleportTimerRef.current) {
       clearTimeout(teleportTimerRef.current);
@@ -206,7 +208,7 @@ export default function LabyrinthGame() {
     setEliminatedByMonster(null);
     setTeleportAnimation(null);
     setJumpAnimation(null);
-  }, [getDimensions, numPlayers]);
+  }, [getDimensions, numPlayers, difficulty]);
 
   const generateWithAI = useCallback(async () => {
     const n = Math.min(Math.max(1, numPlayers), 9);
@@ -230,7 +232,7 @@ export default function LabyrinthGame() {
       const size = getDimensions();
       const w = data.width ?? size;
       const h = data.height ?? size;
-      const l = new Labyrinth(w, h, 0, n);
+      const l = new Labyrinth(w, h, 0, n, difficulty);
       if (l.loadGrid(data.grid)) {
         setLab(l);
         setCurrentPlayer(0);
@@ -252,7 +254,7 @@ export default function LabyrinthGame() {
       );
       newGame();
     }
-  }, [getDimensions, numPlayers, newGame]);
+  }, [getDimensions, numPlayers, newGame, difficulty]);
 
   const handleRollComplete = useCallback((value: number) => {
     setDiceResult(value);
@@ -292,7 +294,7 @@ export default function LabyrinthGame() {
       movesLeftRef.current--;
       setBonusAdded(null);
       setJumpAdded(null);
-      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers);
+      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
       next.grid = lab.grid.map((r) => [...r]);
       next.players = lab.players.map((p) => ({
         ...p,
@@ -340,7 +342,7 @@ export default function LabyrinthGame() {
                 if (!cp || cp.x !== magicX || cp.y !== magicY) return prev;
                 const cellNow = prev.grid[cp.y]?.[cp.x];
                 if (!cellNow || !isMagicCell(cellNow)) return prev;
-                const nextLab = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers);
+                const nextLab = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
                 nextLab.grid = prev.grid.map((r) => [...r]);
                 nextLab.players = prev.players.map((pl) => ({ ...pl, jumps: pl.jumps ?? 0, diamonds: pl.diamonds ?? 0 }));
                 nextLab.goalX = prev.goalX;
@@ -422,7 +424,7 @@ export default function LabyrinthGame() {
     const id = setInterval(() => {
       setLab((prev) => {
         if (!prev || winnerRef.current !== null) return prev;
-        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers);
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((r) => [...r]);
         next.players = prev.players.map((p) => ({
           ...p,
@@ -621,17 +623,27 @@ export default function LabyrinthGame() {
           <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
             <h2 style={modalTitleStyle}>Game Setup</h2>
             <div style={modalRowStyle}>
-              <label>Difficulty:</label>
+              <label>Size:</label>
+              <select
+                value={mazeSize}
+                onChange={(e) => setMazeSize(Number(e.target.value))}
+                style={selectStyle}
+              >
+                {SIZE_OPTIONS.map((s) => (
+                  <option key={s} value={s}>{s}×{s}</option>
+                ))}
+              </select>
+            </div>
+            <div style={modalRowStyle}>
+              <label>Difficulty (monsters per 10×10):</label>
               <select
                 value={difficulty}
                 onChange={(e) => setDifficulty(Number(e.target.value))}
                 style={selectStyle}
               >
-                <option value={7}>Easy (7×7)</option>
-                <option value={11}>Medium (11×11)</option>
-                <option value={15}>Hard (15×15)</option>
-                <option value={21}>Expert (21×21)</option>
-                <option value={25}>Large (25×25)</option>
+                {DIFFICULTY_OPTIONS.map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
               </select>
             </div>
             <div style={modalRowStyle}>
