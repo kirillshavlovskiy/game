@@ -336,19 +336,23 @@ export class Labyrinth {
   /** Optional swapHint: when a player just moved from (prevX, prevY) to the monster's cell, force monster to move to prev so they pass. */
   moveMonsters(swapHint?: { prevX: number; prevY: number; playerIndex: number }): void {
     for (const m of this.monsters) {
-      if (m.patrolArea.length < 2) continue;
-      const adjacent = m.patrolArea.filter(([px, py]) => {
-        const dist = Math.abs(px - m.x) + Math.abs(py - m.y);
-        return dist === 1 && isWalkable(this.grid[py]?.[px] ?? WALL);
-      });
+      // Consider all adjacent walkable cells - monsters can roam the entire labyrinth
+      const adjacent: [number, number][] = [];
+      for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+        const nx = m.x + dx;
+        const ny = m.y + dy;
+        if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height && isWalkable(this.grid[ny][nx])) {
+          adjacent.push([nx, ny]);
+        }
+      }
       if (adjacent.length === 0) continue;
       let next: [number, number];
       if (swapHint && this.players[swapHint.playerIndex]) {
         const p = this.players[swapHint.playerIndex];
         if (p && p.x === m.x && p.y === m.y) {
-          const prevInPatrol = adjacent.some(([px, py]) => px === swapHint!.prevX && py === swapHint!.prevY);
-          if (prevInPatrol) {
-            next = [swapHint.prevX, swapHint.prevY];
+          const prevCell = adjacent.find(([px, py]) => px === swapHint!.prevX && py === swapHint!.prevY);
+          if (prevCell) {
+            next = prevCell;
           } else {
             next = adjacent[Math.floor(Math.random() * adjacent.length)];
           }
@@ -534,16 +538,16 @@ export class Labyrinth {
     return false;
   }
 
-  getTeleportOptions(playerIndex = 0, maxOptions = 6): [number, number][] {
+  getTeleportOptions(playerIndex = 0, maxOptions = 4, maxDistance = 8): [number, number][] {
     const p = this.players[playerIndex];
     if (!p) return [];
+    const dist = (ax: number, ay: number) => Math.abs(ax - p.x) + Math.abs(ay - p.y);
     const magicCells: [number, number][] = [];
     for (let y = 0; y < this.height; y++)
       for (let x = 0; x < this.width; x++)
-        if (this.grid[y][x] === MAGIC && (x !== p.x || y !== p.y))
+        if (this.grid[y][x] === MAGIC && (x !== p.x || y !== p.y) && dist(x, y) <= maxDistance)
           magicCells.push([x, y]);
     if (magicCells.length === 0) return [];
-    const dist = (ax: number, ay: number) => Math.abs(ax - p.x) + Math.abs(ay - p.y);
     const sorted = [...magicCells].sort((a, b) => dist(a[0], a[1]) - dist(b[0], b[1]));
     return sorted.slice(0, maxOptions);
   }

@@ -127,28 +127,6 @@ export default function LabyrinthGame() {
     playerIndex: number;
   } | null>(null);
   const catapultDragRef = useRef<{ startX: number; startY: number; cellX: number; cellY: number } | null>(null);
-
-  useEffect(() => {
-    if (!catapultMode || !teleportPicker) return;
-    const onPointerUp = (e: PointerEvent) => {
-      const d = catapultDragRef.current;
-      catapultDragRef.current = null;
-      if (!d) return;
-      const releaseX = e.clientX;
-      const releaseY = e.clientY;
-      const dx = d.startX - releaseX;
-      const dy = d.startY - releaseY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < 15) return; // too short a drag
-      const launchDx = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
-      const launchDy = Math.abs(dy) > Math.abs(dx) ? Math.sign(dy) : 0;
-      if (launchDx !== 0 || launchDy !== 0) {
-        handleCatapultLaunch(launchDx, launchDy);
-      }
-    };
-    window.addEventListener("pointerup", onPointerUp);
-    return () => window.removeEventListener("pointerup", onPointerUp);
-  }, [catapultMode, teleportPicker, handleCatapultLaunch]);
   const [jumpAnimation, setJumpAnimation] = useState<{
     playerIndex: number;
     x: number;
@@ -447,7 +425,7 @@ export default function LabyrinthGame() {
                 if (!cp || cp.x !== magicX || cp.y !== magicY) return prev;
                 const cellNow = prev.grid[cp.y]?.[cp.x];
                 if (!cellNow || !isMagicCell(cellNow)) return prev;
-                const options = prev.getTeleportOptions(playerToTeleport, 6);
+                const options = prev.getTeleportOptions(playerToTeleport, 4, 8);
                 if (options.length > 0) {
                   setTeleportPicker({ playerIndex: playerToTeleport, from: [magicX, magicY], options });
                 }
@@ -663,6 +641,28 @@ export default function LabyrinthGame() {
     },
     [lab, teleportPicker, catapultMode]
   );
+
+  useEffect(() => {
+    if (!catapultMode || !teleportPicker) return;
+    const onPointerUp = (e: PointerEvent) => {
+      const d = catapultDragRef.current;
+      catapultDragRef.current = null;
+      if (!d) return;
+      const releaseX = e.clientX;
+      const releaseY = e.clientY;
+      const dx = d.startX - releaseX;
+      const dy = d.startY - releaseY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 15) return; // too short a drag
+      const launchDx = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
+      const launchDy = Math.abs(dy) > Math.abs(dx) ? Math.sign(dy) : 0;
+      if (launchDx !== 0 || launchDy !== 0) {
+        handleCatapultLaunch(launchDx, launchDy);
+      }
+    };
+    window.addEventListener("pointerup", onPointerUp);
+    return () => window.removeEventListener("pointerup", onPointerUp);
+  }, [catapultMode, teleportPicker, handleCatapultLaunch]);
 
   const handleTeleportSelect = useCallback(
     (destX: number, destY: number) => {
