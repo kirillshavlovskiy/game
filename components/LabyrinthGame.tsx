@@ -17,7 +17,7 @@ import {
   type MonsterType,
 } from "@/lib/labyrinth";
 
-const CELL_SIZE = 32;
+const CELL_SIZE = 44;
 
 function useDraggable(getInitial: () => { x: number; y: number }) {
   const [pos, setPos] = useState(() =>
@@ -704,15 +704,12 @@ export default function LabyrinthGame() {
               let content: React.ReactNode = null;
               let cellClass = "cell";
 
-              if (monster) {
-                cellClass += " path monster";
-                const icon = monster.type === "V" ? "🧛" : monster.type === "Z" ? "🧟" : monster.type === "G" ? "👻" : "🕷";
-                content = (
-                  <span className="monster-icon" style={{ fontSize: "1.2rem", lineHeight: 1 }} title={getMonsterName(monster.type)}>
-                    {icon}
-                  </span>
-                );
-              }
+              const monsterIcon = monster ? (
+                <span key="m" className="monster-icon" style={{ fontSize: "1.4rem", lineHeight: 1 }} title={getMonsterName(monster.type)}>
+                  {monster.type === "V" ? "🧛" : monster.type === "Z" ? "🧟" : monster.type === "G" ? "👻" : "🕷"}
+                </span>
+              ) : null;
+              if (monster) cellClass += " path monster";
               if (pi !== undefined && !lab.eliminatedPlayers.has(pi)) {
                 cellClass += " path";
                 const c =
@@ -725,7 +722,7 @@ export default function LabyrinthGame() {
                   teleportAnimation?.playerIndex === pi;
                 const isJumpLanding =
                   jumpAnimation?.x === x && jumpAnimation?.y === y && jumpAnimation?.playerIndex === pi;
-                content = (
+                const playerMarker = (
                   <div
                     className={`marker ${pi === currentPlayer ? "active" : ""} ${isTeleportRise ? "teleport-rise" : ""} ${isJumpLanding ? "jump-landing" : ""}`}
                     style={{
@@ -735,6 +732,14 @@ export default function LabyrinthGame() {
                     }}
                   />
                 );
+                content = (
+                  <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {monsterIcon && <span style={{ position: "absolute", left: 2, top: 2, fontSize: "1rem", lineHeight: 1 }}>{monsterIcon}</span>}
+                    {playerMarker}
+                  </div>
+                );
+              } else if (monsterIcon) {
+                content = monsterIcon;
               } else if (x === lab.goalX && y === lab.goalY) {
                 content = "X";
                 cellClass += " goal";
@@ -864,8 +869,8 @@ export default function LabyrinthGame() {
                     >
                       <div
                         style={{
-                          width: 18,
-                          height: 18,
+                          width: 24,
+                          height: 24,
                           borderRadius: "50%",
                           background: fallColor,
                           animation: "teleportFall 0.4s ease-in forwards",
@@ -1123,12 +1128,12 @@ const mazeAreaStyle: React.CSSProperties = {
 
 const jumpActionButtonStyle: React.CSSProperties = {
   position: "absolute",
-  right: 2,
-  bottom: 2,
-  width: 18,
-  height: 18,
+  right: 4,
+  bottom: 4,
+  width: 22,
+  height: 22,
   padding: 0,
-  fontSize: "0.65rem",
+  fontSize: "0.75rem",
   fontWeight: "bold",
   background: "#66aaff",
   color: "#0a0a0f",
@@ -1170,7 +1175,7 @@ const h1Style: React.CSSProperties = {
 const mazeStyle: React.CSSProperties = {
   display: "grid",
   gap: 0,
-  fontSize: "1.25rem",
+  fontSize: "1.4rem",
   lineHeight: 1,
   letterSpacing: "0.02em",
 };
@@ -1186,8 +1191,8 @@ const cellStyle: React.CSSProperties = {
 };
 
 const markerStyle: React.CSSProperties = {
-  width: 18,
-  height: 18,
+  width: 24,
+  height: 24,
   borderRadius: "50%",
   margin: "auto",
 };
