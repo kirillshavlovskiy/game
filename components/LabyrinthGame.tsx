@@ -409,23 +409,6 @@ export default function LabyrinthGame() {
         }));
         next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
         next.moveMonsters();
-        const collision = next.checkMonsterCollision();
-        if (collision) {
-          next.eliminatedPlayers.add(collision.playerIndex);
-          setEliminatedByMonster({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
-          if (next.eliminatedPlayers.size >= next.numPlayers) {
-            setWinner(-1);
-          } else if (collision.playerIndex === currentPlayerRef.current) {
-            movesLeftRef.current = 0;
-            setMovesLeft(0);
-            setDiceResult(null);
-            let nextP = (currentPlayerRef.current + 1) % prev.numPlayers;
-            while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayerRef.current) {
-              nextP = (nextP + 1) % prev.numPlayers;
-            }
-            setCurrentPlayer(nextP);
-          }
-        }
         return next;
       });
     }, MONSTER_MOVE_INTERVAL_MS);
@@ -997,14 +980,17 @@ const gamePaneStyle: React.CSSProperties = {
 };
 
 const headerStyle: React.CSSProperties = {
+  height: HEADER_HEIGHT,
   minHeight: HEADER_HEIGHT,
+  flexShrink: 0,
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
   padding: "0.5rem 1rem",
   background: "#1a1a24",
   borderBottom: "1px solid #333",
-  flexShrink: 0,
+  position: "relative",
+  zIndex: 10,
 };
 
 const headerTitleStyle: React.CSSProperties = {

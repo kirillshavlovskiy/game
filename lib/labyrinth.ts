@@ -250,31 +250,31 @@ export class Labyrinth {
   private _addMonsters(excludeCells: [number, number][]): void {
     const types: MonsterType[] = ["V", "Z", "S", "G"];
     const intersections: [number, number][] = [];
-    const pathCells: [number, number][] = [];
     for (let y = 1; y < this.height - 1; y++) {
       for (let x = 1; x < this.width - 1; x++) {
         if (!isWalkable(this.grid[y][x])) continue;
         const n = this._countPathNeighbors(x, y);
-        if ((x !== 0 || y !== 0) && (x !== this.goalX || y !== this.goalY) &&
+        if (n >= 3 && (x !== 0 || y !== 0) && (x !== this.goalX || y !== this.goalY) &&
             !excludeCells.some(([ex, ey]) => ex === x && ey === y)) {
-          pathCells.push([x, y]);
-          if (n >= 3) intersections.push([x, y]);
+          intersections.push([x, y]);
         }
       }
     }
-    shuffle(pathCells);
-    const monsterCount = Math.min(12, Math.max(5, Math.floor(pathCells.length * 0.08)));
-    const spawnPool = intersections.length >= monsterCount ? intersections : pathCells;
-    const spawnPoints = this._pickSpread(spawnPool, monsterCount);
-    for (let i = 0; i < spawnPoints.length; i++) {
-      const [x, y] = spawnPoints[i];
-      const patrolArea = this._getPatrolArea(x, y, 28);
-      if (patrolArea.length >= 2) {
-        this.monsters.push({
-          x, y,
-          type: types[i % 4],
-          patrolArea,
-        });
+    shuffle(intersections);
+    const MIN_MONSTER_DIST = 4;
+    const chosen: [number, number][] = [];
+    for (const [x, y] of intersections) {
+      const farEnough = chosen.every(([cx, cy]) => Math.abs(x - cx) + Math.abs(y - cy) >= MIN_MONSTER_DIST);
+      if (farEnough) {
+        const patrolArea = this._getPatrolArea(x, y, 28);
+        if (patrolArea.length >= 2) {
+          chosen.push([x, y]);
+          this.monsters.push({
+            x, y,
+            type: types[(this.monsters.length) % 4],
+            patrolArea,
+          });
+        }
       }
     }
   }
