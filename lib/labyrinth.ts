@@ -7,6 +7,7 @@ export const MULT_X2 = "2";
 export const MULT_X3 = "3";
 export const MULT_X4 = "4";
 export const MAGIC = "M";
+export const CATAPULT = "C";
 export const JUMP = "J";
 export const SHIELD = "H";
 
@@ -37,6 +38,10 @@ export function getMultiplierValue(cell: string): number {
 
 export function isMagicCell(cell: string): boolean {
   return cell === MAGIC;
+}
+
+export function isCatapultCell(cell: string): boolean {
+  return cell === CATAPULT;
 }
 
 export function isJumpCell(cell: string): boolean {
@@ -201,6 +206,20 @@ export class Labyrinth {
     return out;
   }
 
+  /** Pick cells spread evenly, excluding main diagonal (x===y). For magic cells. */
+  private _pickSpreadExcludingDiagonal(cells: [number, number][], count: number): [number, number][] {
+    const offDiagonal = cells.filter(([x, y]) => x !== y);
+    if (offDiagonal.length < count) return this._pickSpread(offDiagonal, count);
+    // Sort by position for deterministic even spread (row-major with secondary sort)
+    const sorted = [...offDiagonal].sort((a, b) => {
+      const [ax, ay] = a;
+      const [bx, by] = b;
+      if (ay !== by) return ay - by;
+      return ax - bx;
+    });
+    return this._pickSpread(sorted, count);
+  }
+
   private _addSpecialCells(): void {
     const pathCells: [number, number][] = [];
     for (let y = 1; y < this.height - 1; y++)
@@ -211,19 +230,22 @@ export class Labyrinth {
 
     const mults: ("2" | "3" | "4")[] = ["2", "3", "4"];
     const multCount = Math.max(6, Math.min(15, Math.floor(pathCells.length * 0.12)));
-    const magicCount = Math.max(4, Math.min(10, Math.floor(pathCells.length * 0.05)));
+    const magicCount = Math.max(6, Math.min(25, Math.floor(pathCells.length * 0.07)));
+    const catapultCount = Math.max(3, Math.min(8, Math.floor(pathCells.length * 0.04)));
     const jumpCount = Math.max(3, Math.min(8, Math.floor(pathCells.length * 0.04)));
     const diamondCount = Math.max(this.numPlayers * 2, Math.min(this.numPlayers * 4, Math.floor(pathCells.length * 0.08)));
 
-    const total = multCount + magicCount + jumpCount + diamondCount;
+    const total = multCount + magicCount + catapultCount + jumpCount + diamondCount;
     if (total > pathCells.length) return;
 
     const multCells = this._pickSpread(pathCells, multCount);
     const rest = pathCells.filter((c) => !multCells.some((m) => m[0] === c[0] && m[1] === c[1]));
-    const magicCells = this._pickSpread(rest, magicCount);
+    const magicCells = this._pickSpreadExcludingDiagonal(rest, magicCount);
     const rest2 = rest.filter((c) => !magicCells.some((m) => m[0] === c[0] && m[1] === c[1]));
-    const jumpCells = this._pickSpread(rest2, jumpCount);
-    const rest3 = rest2.filter((c) => !jumpCells.some((j) => j[0] === c[0] && j[1] === c[1]));
+    const catapultCells = this._pickSpread(rest2, catapultCount);
+    const rest2b = rest2.filter((c) => !catapultCells.some((c2) => c2[0] === c[0] && c2[1] === c[1]));
+    const jumpCells = this._pickSpread(rest2b, jumpCount);
+    const rest3 = rest2b.filter((c) => !jumpCells.some((j) => j[0] === c[0] && j[1] === c[1]));
     const diamondCells = this._pickSpread(rest3, diamondCount);
 
     for (let i = 0; i < multCells.length; i++) {
@@ -231,6 +253,7 @@ export class Labyrinth {
       this.grid[y][x] = mults[i % 3];
     }
     for (const [x, y] of magicCells) this.grid[y][x] = MAGIC;
+    for (const [x, y] of catapultCells) this.grid[y][x] = CATAPULT;
     for (const [x, y] of jumpCells) this.grid[y][x] = JUMP;
     for (let i = 0; i < diamondCells.length; i++) {
       const [x, y] = diamondCells[i];
@@ -240,7 +263,7 @@ export class Labyrinth {
     const hiddenCount = Math.max(4, Math.min(12, Math.floor(pathCells.length * 0.06)));
     const rest4 = rest3.filter((c) => !diamondCells.some((d) => d[0] === c[0] && d[1] === c[1]));
     const hiddenCellCoords = this._pickSpread(rest4, hiddenCount);
-    const hiddenTypes: string[] = [MAGIC, MAGIC, JUMP, JUMP, MULT_X2, MULT_X3, SHIELD, SHIELD];
+    const hiddenTypes: string[] = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, MULT_X2, MULT_X3, SHIELD, SHIELD];
     for (let i = 0; i < hiddenCellCoords.length; i++) {
       const [x, y] = hiddenCellCoords[i];
       this.hiddenCells.set(`${x},${y}`, hiddenTypes[i % hiddenTypes.length]);
@@ -462,7 +485,7 @@ export class Labyrinth {
         if (this.grid[y][x] === PATH && (x !== this.goalX || y !== this.goalY) &&
             !["M", "J", "2", "3", "4", "H"].includes(this.grid[y][x]))
           pathCells.push([x, y]);
-    const hiddenTypes = [MAGIC, MAGIC, JUMP, JUMP, "2", "3", SHIELD, SHIELD];
+    const hiddenTypes = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, "2", "3", SHIELD, SHIELD];
     const n = Math.min(6, Math.floor(pathCells.length / 2));
     for (let i = 0; i < n; i++) {
       const idx = Math.floor(Math.random() * pathCells.length);
@@ -538,14 +561,16 @@ export class Labyrinth {
     return false;
   }
 
-  getTeleportOptions(playerIndex = 0, maxOptions = 4, maxDistance = 8): [number, number][] {
+  getTeleportOptions(playerIndex = 0, maxOptions = 6, maxDistance?: number): [number, number][] {
     const p = this.players[playerIndex];
     if (!p) return [];
     const dist = (ax: number, ay: number) => Math.abs(ax - p.x) + Math.abs(ay - p.y);
+    const mapSize = Math.min(this.width, this.height);
+    const effectiveMaxDist = maxDistance ?? Math.max(10, Math.floor(mapSize * 0.5));
     const magicCells: [number, number][] = [];
     for (let y = 0; y < this.height; y++)
       for (let x = 0; x < this.width; x++)
-        if (this.grid[y][x] === MAGIC && (x !== p.x || y !== p.y) && dist(x, y) <= maxDistance)
+        if (this.grid[y][x] === MAGIC && (x !== p.x || y !== p.y) && dist(x, y) <= effectiveMaxDist)
           magicCells.push([x, y]);
     if (magicCells.length === 0) return [];
     const sorted = [...magicCells].sort((a, b) => dist(a[0], a[1]) - dist(b[0], b[1]));

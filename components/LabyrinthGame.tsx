@@ -12,6 +12,7 @@ import {
   isMultiplierCell,
   getMultiplierValue,
   isMagicCell,
+  isCatapultCell,
   isJumpCell,
   isDiamondCell,
   isShieldCell,
@@ -121,6 +122,7 @@ export default function LabyrinthGame() {
     options: [number, number][];
   } | null>(null);
   const [catapultMode, setCatapultMode] = useState(false);
+  const [catapultPicker, setCatapultPicker] = useState<{ playerIndex: number; from: [number, number] } | null>(null);
   const [catapultAnimation, setCatapultAnimation] = useState<{
     from: [number, number];
     to: [number, number];
@@ -262,6 +264,7 @@ export default function LabyrinthGame() {
     setTeleportAnimation(null);
     setJumpAnimation(null);
     setTeleportPicker(null);
+    setCatapultPicker(null);
     setCatapultMode(false);
     setCatapultAnimation(null);
   }, [getDimensions, numPlayers, difficulty]);
@@ -307,6 +310,7 @@ export default function LabyrinthGame() {
         setCellsRevealed(null);
         setTeleportAnimation(null);
         setCatapultMode(false);
+        setCatapultPicker(null);
         setCatapultAnimation(null);
       } else {
         setError("Invalid maze from AI, using random maze.");
@@ -361,6 +365,7 @@ export default function LabyrinthGame() {
         teleportTimerRef.current = null;
       }
       setTeleportPicker(null);
+      setCatapultPicker(null);
       setCatapultMode(false);
       movesLeftRef.current--;
       setBonusAdded(null);
@@ -426,13 +431,17 @@ export default function LabyrinthGame() {
                 if (!cp || cp.x !== magicX || cp.y !== magicY) return prev;
                 const cellNow = prev.grid[cp.y]?.[cp.x];
                 if (!cellNow || !isMagicCell(cellNow)) return prev;
-                const options = prev.getTeleportOptions(playerToTeleport, 4, 8);
+                const options = prev.getTeleportOptions(playerToTeleport, 6);
                 if (options.length > 0) {
                   setTeleportPicker({ playerIndex: playerToTeleport, from: [magicX, magicY], options });
                 }
                 return prev;
               });
             }, 1000);
+          }
+          if (cell && isCatapultCell(cell)) {
+            setCatapultPicker({ playerIndex: currentPlayer, from: [p.x, p.y] });
+            setCatapultMode(true);
           }
           const owner = cell ? getCollectibleOwner(cell) : null;
           if (owner === currentPlayer && cell && isDiamondCell(cell)) {
@@ -604,8 +613,8 @@ export default function LabyrinthGame() {
 
   const handleCatapultLaunch = useCallback(
     (dx: number, dy: number) => {
-      if (!lab || !teleportPicker || !catapultMode) return;
-      const { playerIndex, from } = teleportPicker;
+      if (!lab || !catapultPicker || !catapultMode) return;
+      const { playerIndex, from } = catapultPicker;
       const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
       next.grid = lab.grid.map((r) => [...r]);
       next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0 }));
@@ -619,6 +628,7 @@ export default function LabyrinthGame() {
       if (result) {
         setCatapultAnimation({ from, to: [result.destX, result.destY], playerIndex });
         setTeleportPicker(null);
+        setCatapultPicker(null);
         setCatapultMode(false);
         setTotalMoves((t) => t + 1);
         setPlayerMoves((prev) => {
@@ -640,11 +650,11 @@ export default function LabyrinthGame() {
         setLab(next);
       }
     },
-    [lab, teleportPicker, catapultMode]
+    [lab, catapultPicker, catapultMode]
   );
 
   useEffect(() => {
-    if (!catapultMode || !teleportPicker) return;
+    if (!catapultMode || !catapultPicker) return;
     const onPointerUp = (e: PointerEvent) => {
       const d = catapultDragRef.current;
       catapultDragRef.current = null;
@@ -663,7 +673,7 @@ export default function LabyrinthGame() {
     };
     window.addEventListener("pointerup", onPointerUp);
     return () => window.removeEventListener("pointerup", onPointerUp);
-  }, [catapultMode, teleportPicker, handleCatapultLaunch]);
+  }, [catapultMode, catapultPicker, handleCatapultLaunch]);
 
   const handleTeleportSelect = useCallback(
     (destX: number, destY: number) => {
@@ -900,19 +910,18 @@ export default function LabyrinthGame() {
         </aside>
 
         <div style={mainContentStyle}>
-      {(teleportPicker || catapultMode) && (
+      {(teleportPicker || catapultPicker) && (
         <div style={{ ...eliminatedOverlayStyle, pointerEvents: "none" }}>
-          <div style={{ ...eliminatedBannerStyle, borderColor: "#aa66ff", background: "rgba(0,0,0,0.9)", pointerEvents: "auto", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            {catapultMode ? (
+          <div style={{ ...eliminatedBannerStyle, borderColor: catapultPicker ? "#ffcc00" : "#aa66ff", background: "rgba(0,0,0,0.9)", pointerEvents: "auto", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            {catapultPicker ? (
               <>
-                <span style={{ color: "#ffcc00" }}>Drag marker back, then release to launch</span>
-                <button onClick={() => { setCatapultMode(false); setTeleportPicker(null); }} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
+                <span style={{ color: "#ffcc00" }}>Catapult: drag marker back, then release to launch</span>
+                <button onClick={() => { setCatapultMode(false); setCatapultPicker(null); }} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
               </>
             ) : (
               <>
-                <span style={{ color: "#aa66ff" }}>Pick teleport destination (click ○) or</span>
-                <button onClick={() => setCatapultMode(true)} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem", background: "#ffcc00", color: "#0a0a0f" }}>Catapult</button>
-                <button onClick={() => { setTeleportPicker(null); setCatapultMode(false); }} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
+                <span style={{ color: "#aa66ff" }}>Pick teleport destination (click ○ on map)</span>
+                <button onClick={() => setTeleportPicker(null)} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
               </>
             )}
           </div>
@@ -1094,39 +1103,39 @@ export default function LabyrinthGame() {
                 );
                 const dirHintStyle: React.CSSProperties = {
                   position: "absolute",
-                  fontSize: "0.85rem",
+                  fontSize: "1.05rem",
                   fontWeight: "bold",
                   textShadow: "0 0 4px rgba(0,0,0,1), 0 1px 3px rgba(0,0,0,1)",
-                  padding: "2px 4px",
+                  padding: "3px 5px",
                   borderRadius: 4,
                   background: "rgba(0,0,0,0.85)",
-                  border: "1px solid rgba(255,255,255,0.15)",
+                  border: "1px solid rgba(255,255,255,0.2)",
                   zIndex: 2,
                 };
                 const dirIndicators = pi === currentPlayer && cp && !moveDisabled ? (
                   <>
                     {(canMoveUp || canJumpUp) && (
-                      <span style={{ ...dirHintStyle, top: -4, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                      <span style={{ ...dirHintStyle, top: -4, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
                         {canMoveUp && <span style={{ color: "#00ff88" }}>↑{movesLeft}</span>}
-                        {canJumpUp && <span style={{ color: "#66aaff", fontSize: "0.75rem" }}>J↑{cp.jumps ?? 0}</span>}
+                        {canJumpUp && <span style={{ color: "#66aaff", fontSize: "0.95rem" }}>J↑{cp.jumps ?? 0}</span>}
                       </span>
                     )}
                     {(canMoveDown || canJumpDown) && (
-                      <span style={{ ...dirHintStyle, bottom: -4, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                      <span style={{ ...dirHintStyle, bottom: -4, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
                         {canMoveDown && <span style={{ color: "#00ff88" }}>↓{movesLeft}</span>}
-                        {canJumpDown && <span style={{ color: "#66aaff", fontSize: "0.75rem" }}>J↓{cp.jumps ?? 0}</span>}
+                        {canJumpDown && <span style={{ color: "#66aaff", fontSize: "0.95rem" }}>J↓{cp.jumps ?? 0}</span>}
                       </span>
                     )}
                     {(canMoveLeft || canJumpLeft) && (
-                      <span style={{ ...dirHintStyle, left: -4, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 4 }}>
+                      <span style={{ ...dirHintStyle, left: -4, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 6 }}>
                         {canMoveLeft && <span style={{ color: "#00ff88" }}>←{movesLeft}</span>}
-                        {canJumpLeft && <span style={{ color: "#66aaff", fontSize: "0.75rem" }}>J←{cp.jumps ?? 0}</span>}
+                        {canJumpLeft && <span style={{ color: "#66aaff", fontSize: "0.95rem" }}>J←{cp.jumps ?? 0}</span>}
                       </span>
                     )}
                     {(canMoveRight || canJumpRight) && (
-                      <span style={{ ...dirHintStyle, right: -4, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 4 }}>
+                      <span style={{ ...dirHintStyle, right: -4, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 6 }}>
                         {canMoveRight && <span style={{ color: "#00ff88" }}>→{movesLeft}</span>}
-                        {canJumpRight && <span style={{ color: "#66aaff", fontSize: "0.75rem" }}>J→{cp.jumps ?? 0}</span>}
+                        {canJumpRight && <span style={{ color: "#66aaff", fontSize: "0.95rem" }}>J→{cp.jumps ?? 0}</span>}
                       </span>
                     )}
                   </>
@@ -1156,6 +1165,13 @@ export default function LabyrinthGame() {
                   </span>
                 );
                 cellClass += " path magic hole";
+              } else if (showSecretCells && isCatapultCell(lab.grid[y][x])) {
+                content = (
+                  <span style={{ fontSize: "1.1rem" }} title="Catapult">
+                    ⊢
+                  </span>
+                );
+                cellClass += " path catapult";
               } else if (showSecretCells && isJumpCell(lab.grid[y][x])) {
                 content = "J";
                 cellClass += " path jump";
@@ -1204,6 +1220,11 @@ export default function LabyrinthGame() {
                   cellBg.border = "2px solid #aa66ff";
                 }
               }
+              if (cellClass.includes("catapult")) {
+                cellBg.background = "#2e2e1e";
+                cellBg.color = "#ffcc00";
+                cellBg.fontWeight = "bold";
+              }
               if (cellClass.includes("jump")) {
                 cellBg.background = "#1e2e2e";
                 cellBg.color = "#66aaff";
@@ -1242,7 +1263,7 @@ export default function LabyrinthGame() {
               const jumpTarget = jumpTargets.find((t) => t.x === x && t.y === y);
 
               const isTappable = (teleportPicker && isTeleportOption && !catapultMode) || (!moveDisabled && !catapultMode && (cellClass.includes("path") || !!jumpTarget));
-              const isCatapultCell = catapultMode && teleportPicker && teleportPicker.from[0] === x && teleportPicker.from[1] === y && pi === currentPlayer;
+              const isCatapultCell = catapultMode && catapultPicker && catapultPicker.from[0] === x && catapultPicker.from[1] === y && pi === currentPlayer;
 
               const effectiveCellSize = CELL_SIZE * mazeZoom;
               return (
