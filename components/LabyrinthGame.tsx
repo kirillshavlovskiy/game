@@ -125,6 +125,7 @@ export default function LabyrinthGame() {
     x: number;
     y: number;
   } | null>(null);
+  const [gameStarted, setGameStarted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playerNames, setPlayerNames] = useState<string[]>(() =>
     Array.from({ length: 3 }, (_, i) => `Player ${i + 1}`)
@@ -478,9 +479,7 @@ export default function LabyrinthGame() {
     [lab, currentPlayer, movesLeft, winner, diceResult]
   );
 
-  useEffect(() => {
-    newGame();
-  }, []);
+  // Game starts only when user clicks Start in the start modal
 
   const MONSTER_MOVE_INTERVAL_MS = 2200;
 
@@ -637,6 +636,100 @@ export default function LabyrinthGame() {
     },
     [moveDisabled, cp, jumpTargets, lab, currentPlayer, doMove, teleportPicker, handleTeleportSelect]
   );
+
+  if (!gameStarted) {
+    return (
+      <div style={startModalOverlayStyle}>
+        <div style={startModalStyle}>
+          <h1 style={startModalTitleStyle}>LABYRINTH</h1>
+          <p style={startModalSubtitleStyle}>Configure your game and start when ready</p>
+          <div style={startModalFormStyle}>
+            <div style={modalRowStyle}>
+              <label style={startModalLabelStyle}>Maze size</label>
+              <select
+                value={mazeSize}
+                onChange={(e) => setMazeSize(Number(e.target.value))}
+                style={startModalSelectStyle}
+              >
+                {SIZE_OPTIONS.map((s) => (
+                  <option key={s} value={s}>{s}×{s}</option>
+                ))}
+              </select>
+            </div>
+            <div style={modalRowStyle}>
+              <label style={startModalLabelStyle}>Difficulty</label>
+              <select
+                value={difficulty}
+                onChange={(e) => setDifficulty(Number(e.target.value))}
+                style={startModalSelectStyle}
+              >
+                {DIFFICULTY_OPTIONS.map((d) => (
+                  <option key={d} value={d}>
+                    {d === 1 ? "Easy" : d === 2 ? "Normal" : d === 3 ? "Hard" : "Extreme"}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={modalRowStyle}>
+              <label style={startModalLabelStyle}>Number of players</label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={numPlayers}
+                onChange={(e) => setNumPlayers(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
+                style={startModalInputStyle}
+              />
+            </div>
+            <div style={{ ...modalRowStyle, flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
+              <label style={startModalLabelStyle}>Player names</label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                {Array.from({ length: numPlayers }).map((_, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
+                    <span style={{ color: PLAYER_COLORS[i] ?? "#888", fontWeight: "bold", fontSize: "1rem" }}>●</span>
+                    <input
+                      type="text"
+                      value={(playerNames[i] ?? `Player ${i + 1}`).toString()}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setPlayerNames((prev) => {
+                          const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => `Player ${prev.length + j + 1}`)];
+                          next[i] = val || `Player ${i + 1}`;
+                          return next;
+                        });
+                      }}
+                      placeholder={`Player ${i + 1}`}
+                      style={{ ...startModalInputStyle, flex: 1, minWidth: 0 }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div style={startModalButtonsStyle}>
+            <button
+              onClick={() => {
+                newGame();
+                setGameStarted(true);
+              }}
+              style={startButtonStyle}
+            >
+              Start Game
+            </button>
+            <button
+              onClick={async () => {
+                await generateWithAI();
+                setGameStarted(true);
+              }}
+              style={startSecondaryButtonStyle}
+            >
+              Generate with AI
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!lab) {
     return (
@@ -1305,6 +1398,101 @@ const effectToastStyle: React.CSSProperties = {
   gap: 12,
   boxShadow: "0 0 20px rgba(0,255,136,0.4)",
   animation: "effectPop 0.5s ease-out",
+};
+
+const startModalOverlayStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "linear-gradient(135deg, #0a0a12 0%, #151520 50%, #0f0f18 100%)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1000,
+};
+
+const startModalStyle: React.CSSProperties = {
+  background: "#1a1a24",
+  padding: "2rem",
+  borderRadius: 12,
+  border: "1px solid #333",
+  boxShadow: "0 0 40px rgba(0,255,136,0.15)",
+  minWidth: 320,
+  maxWidth: 420,
+};
+
+const startModalTitleStyle: React.CSSProperties = {
+  margin: "0 0 0.25rem 0",
+  color: "#00ff88",
+  fontSize: "1.8rem",
+  fontWeight: "bold",
+  textAlign: "center",
+  letterSpacing: 4,
+};
+
+const startModalSubtitleStyle: React.CSSProperties = {
+  margin: "0 0 1.5rem 0",
+  color: "#888",
+  fontSize: "0.9rem",
+  textAlign: "center",
+};
+
+const startModalFormStyle: React.CSSProperties = {
+  marginBottom: "1.5rem",
+};
+
+const startModalLabelStyle: React.CSSProperties = {
+  color: "#aaa",
+  fontSize: "0.85rem",
+  minWidth: 120,
+};
+
+const startModalSelectStyle: React.CSSProperties = {
+  padding: "0.4rem 0.6rem",
+  fontFamily: "inherit",
+  background: "#2a2a35",
+  border: "1px solid #444",
+  color: "#c0c0c0",
+  borderRadius: 6,
+  flex: 1,
+};
+
+const startModalInputStyle: React.CSSProperties = {
+  padding: "0.4rem 0.6rem",
+  fontFamily: "inherit",
+  background: "#2a2a35",
+  border: "1px solid #444",
+  color: "#c0c0c0",
+  borderRadius: 6,
+  width: "4rem",
+};
+
+const startModalButtonsStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
+const startButtonStyle: React.CSSProperties = {
+  padding: "0.75rem 1.5rem",
+  fontSize: "1rem",
+  fontWeight: "bold",
+  background: "#00ff88",
+  color: "#0a0a0f",
+  border: "none",
+  borderRadius: 8,
+  cursor: "pointer",
+  transition: "all 0.2s",
+  boxShadow: "0 0 12px rgba(0,255,136,0.4)",
+};
+
+const startSecondaryButtonStyle: React.CSSProperties = {
+  padding: "0.5rem 1rem",
+  fontSize: "0.9rem",
+  background: "transparent",
+  color: "#66aaff",
+  border: "1px solid #66aaff",
+  borderRadius: 6,
+  cursor: "pointer",
 };
 
 const modalOverlayStyle: React.CSSProperties = {
