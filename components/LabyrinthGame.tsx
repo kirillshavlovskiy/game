@@ -63,7 +63,7 @@ export default function LabyrinthGame() {
   const [diceResult, setDiceResult] = useState<number | null>(null);
   const [winner, setWinner] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const [difficulty, setDifficulty] = useState(25);
+  const [difficulty, setDifficulty] = useState(7);
   const [numPlayers, setNumPlayers] = useState(3);
   const [rolling, setRolling] = useState(false);
   const [bonusAdded, setBonusAdded] = useState<number | null>(null);
@@ -266,7 +266,13 @@ export default function LabyrinthGame() {
     return () => window.removeEventListener("keydown", onKey);
   }, [newGame, doMove]);
 
-  if (!lab) return null;
+  if (!lab) {
+    return (
+      <div style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f0f14", color: "#00ff88", fontFamily: "Courier New, monospace", fontSize: "1.2rem" }}>
+        Generating maze…
+      </div>
+    );
+  }
 
   const playerCells: Record<string, number> = {};
   lab.players.forEach((p, i) => {
@@ -283,6 +289,35 @@ export default function LabyrinthGame() {
   const canLeft = !moveDisabled && lab.canMoveInDirection(-1, 0, currentPlayer);
   const canRight = !moveDisabled && lab.canMoveInDirection(1, 0, currentPlayer);
   const canDown = !moveDisabled && lab.canMoveInDirection(0, 1, currentPlayer);
+
+  const handleCellTap = useCallback(
+    (cellX: number, cellY: number) => {
+      if (moveDisabled || !cp) return;
+      const jumpTarget = jumpTargets.find((t) => t.x === cellX && t.y === cellY);
+      if (jumpTarget) {
+        doMove(jumpTarget.dx, jumpTarget.dy);
+        return;
+      }
+      const dx = cellX - cp.x;
+      const dy = cellY - cp.y;
+      if (Math.abs(dx) + Math.abs(dy) === 1) {
+        if (lab.canMoveInDirection(dx, dy, currentPlayer)) {
+          doMove(dx, dy);
+        }
+        return;
+      }
+      const stepX = Math.sign(dx);
+      const stepY = Math.sign(dy);
+      if (Math.abs(dx) >= Math.abs(dy) && stepX !== 0 && lab.canMoveInDirection(stepX, 0, currentPlayer)) {
+        doMove(stepX, 0);
+      } else if (stepY !== 0 && lab.canMoveInDirection(0, stepY, currentPlayer)) {
+        doMove(0, stepY);
+      } else if (stepX !== 0 && lab.canMoveInDirection(stepX, 0, currentPlayer)) {
+        doMove(stepX, 0);
+      }
+    },
+    [moveDisabled, cp, jumpTargets, lab, currentPlayer, doMove]
+  );
 
   return (
     <div style={gamePaneStyle}>
@@ -357,6 +392,11 @@ export default function LabyrinthGame() {
             transform: "translate(-50%, -50%)",
           }}
         >
+        <div style={movesBadgeStyle}>
+          {diceResult !== null
+            ? `${(bonusAdded ?? diceResult) - movesLeft}/${bonusAdded ?? diceResult}`
+            : "—/—"}
+        </div>
         <div
           className="maze"
           style={{
@@ -473,11 +513,20 @@ export default function LabyrinthGame() {
                   : "#888";
               const jumpTarget = jumpTargets.find((t) => t.x === x && t.y === y);
 
+              const isTappable = !moveDisabled && (cellClass.includes("path") || !!jumpTarget);
+
               return (
                 <div
                   key={`${x}-${y}`}
                   className={cellClass}
-                  style={{ ...cellStyle, ...cellBg, position: "relative" }}
+                  style={{
+                    ...cellStyle,
+                    ...cellBg,
+                    position: "relative",
+                    cursor: isTappable ? "pointer" : undefined,
+                    touchAction: isTappable ? "manipulation" : undefined,
+                  }}
+                  onClick={() => isTappable && handleCellTap(x, y)}
                 >
                   {content}
                   {jumpTarget && (
@@ -811,6 +860,21 @@ const mazeAreaStyle: React.CSSProperties = {
   position: "relative",
   overflow: "auto",
   paddingTop: 12,
+};
+
+const movesBadgeStyle: React.CSSProperties = {
+  position: "absolute",
+  top: 8,
+  left: "50%",
+  transform: "translateX(-50%)",
+  fontSize: "1rem",
+  fontWeight: "bold",
+  color: "#00ff88",
+  background: "#1a1a24",
+  padding: "4px 12px",
+  borderRadius: 6,
+  border: "1px solid #333",
+  zIndex: 5,
 };
 
 const jumpActionButtonStyle: React.CSSProperties = {

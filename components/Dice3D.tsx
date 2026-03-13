@@ -45,7 +45,11 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
       () => ({
         roll: async () => {
           const box = diceBoxRef.current;
-          if (!box || disabled) return 1;
+          if (!box || disabled) {
+            const fallback = Math.floor(Math.random() * 6) + 1;
+            onRollComplete(fallback);
+            return fallback;
+          }
 
           try {
             const result = await box.roll("1d6");
