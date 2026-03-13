@@ -92,7 +92,7 @@ export default function LabyrinthGame() {
   const [diceResult, setDiceResult] = useState<number | null>(null);
   const [winner, setWinner] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const [difficulty, setDifficulty] = useState(7);
+  const [difficulty, setDifficulty] = useState(21);
   const [numPlayers, setNumPlayers] = useState(3);
   const [rolling, setRolling] = useState(false);
   const [bonusAdded, setBonusAdded] = useState<number | null>(null);
@@ -131,13 +131,15 @@ export default function LabyrinthGame() {
     });
   }, [numPlayers]);
 
+  const DICE_PANEL_WIDTH = 180;
+  const DICE_PANEL_HEIGHT = 240;
   const diceDrag = useDraggable(() => ({
-    x: window.innerWidth - 220,
+    x: window.innerWidth - DICE_PANEL_WIDTH - 20,
     y: 20,
   }));
   const controlsDrag = useDraggable(() => ({
-    x: window.innerWidth - 120,
-    y: Math.max(HEADER_HEIGHT + 20, window.innerHeight / 2 - 100),
+    x: diceDrag.pos.x,
+    y: diceDrag.pos.y + DICE_PANEL_HEIGHT,
   }));
 
   useEffect(() => {
@@ -256,7 +258,7 @@ export default function LabyrinthGame() {
   }, [lab, winner, currentPlayer]);
 
   const doMove = useCallback(
-    (dx: number, dy: number) => {
+    (dx: number, dy: number, jumpOnly = false) => {
       if (winner !== null || !lab) return;
       if (movesLeftRef.current <= 0) return;
       movesLeftRef.current--;
@@ -276,7 +278,7 @@ export default function LabyrinthGame() {
         patrolArea: [...m.patrolArea],
       }));
       next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
-      if (next.movePlayer(dx, dy, currentPlayer)) {
+      if (next.movePlayer(dx, dy, currentPlayer, jumpOnly)) {
         const newMovesLeft = Math.max(0, movesLeftRef.current);
         setMovesLeft(newMovesLeft);
         setTotalMoves((t) => t + 1);
@@ -288,7 +290,7 @@ export default function LabyrinthGame() {
             p.jumps = (p.jumps ?? 0) + mult;
             setJumpAdded(mult);
           }
-          if (cell && isMagicCell(cell)) {
+          if (cell && isMagicCell(cell) && newMovesLeft === 0) {
             const from: [number, number] = [p.x, p.y];
             const dest = next.getTeleportDestination(currentPlayer);
             if (dest && next.teleportToRandomMagicCell(currentPlayer)) {
@@ -393,7 +395,8 @@ export default function LabyrinthGame() {
       };
       const d = map[e.key];
       if (d) {
-        doMove(d[0], d[1]);
+        const jumpOnly = e.shiftKey;
+        doMove(d[0], d[1], jumpOnly);
         e.preventDefault();
       }
     };
@@ -415,35 +418,39 @@ export default function LabyrinthGame() {
   const rollDisabled = movesLeft > 0 || gameOver || rolling;
   const showSecretCells = movesLeft > 0;
   const jumpTargets = lab && cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
-  const canUp = !moveDisabled && lab?.canMoveInDirection(0, -1, currentPlayer);
-  const canLeft = !moveDisabled && lab?.canMoveInDirection(-1, 0, currentPlayer);
-  const canRight = !moveDisabled && lab?.canMoveInDirection(1, 0, currentPlayer);
-  const canDown = !moveDisabled && lab?.canMoveInDirection(0, 1, currentPlayer);
+  const canMoveUp = !moveDisabled && lab?.canMoveOnly(0, -1, currentPlayer);
+  const canMoveLeft = !moveDisabled && lab?.canMoveOnly(-1, 0, currentPlayer);
+  const canMoveRight = !moveDisabled && lab?.canMoveOnly(1, 0, currentPlayer);
+  const canMoveDown = !moveDisabled && lab?.canMoveOnly(0, 1, currentPlayer);
+  const canJumpUp = !moveDisabled && lab?.canJumpInDirection(0, -1, currentPlayer);
+  const canJumpLeft = !moveDisabled && lab?.canJumpInDirection(-1, 0, currentPlayer);
+  const canJumpRight = !moveDisabled && lab?.canJumpInDirection(1, 0, currentPlayer);
+  const canJumpDown = !moveDisabled && lab?.canJumpInDirection(0, 1, currentPlayer);
 
   const handleCellTap = useCallback(
     (cellX: number, cellY: number) => {
       if (moveDisabled || !cp || !lab) return;
       const jumpTarget = jumpTargets.find((t) => t.x === cellX && t.y === cellY);
       if (jumpTarget) {
-        doMove(jumpTarget.dx, jumpTarget.dy);
+        doMove(jumpTarget.dx, jumpTarget.dy, true);
         return;
       }
       const dx = cellX - cp.x;
       const dy = cellY - cp.y;
       if (Math.abs(dx) + Math.abs(dy) === 1) {
-        if (lab.canMoveInDirection(dx, dy, currentPlayer)) {
-          doMove(dx, dy);
+        if (lab.canMoveOnly(dx, dy, currentPlayer)) {
+          doMove(dx, dy, false);
         }
         return;
       }
       const stepX = Math.sign(dx);
       const stepY = Math.sign(dy);
-      if (Math.abs(dx) >= Math.abs(dy) && stepX !== 0 && lab.canMoveInDirection(stepX, 0, currentPlayer)) {
-        doMove(stepX, 0);
-      } else if (stepY !== 0 && lab.canMoveInDirection(0, stepY, currentPlayer)) {
-        doMove(0, stepY);
-      } else if (stepX !== 0 && lab.canMoveInDirection(stepX, 0, currentPlayer)) {
-        doMove(stepX, 0);
+      if (Math.abs(dx) >= Math.abs(dy) && stepX !== 0 && lab.canMoveOnly(stepX, 0, currentPlayer)) {
+        doMove(stepX, 0, false);
+      } else if (stepY !== 0 && lab.canMoveOnly(0, stepY, currentPlayer)) {
+        doMove(0, stepY, false);
+      } else if (stepX !== 0 && lab.canMoveOnly(stepX, 0, currentPlayer)) {
+        doMove(stepX, 0, false);
       }
     },
     [moveDisabled, cp, jumpTargets, lab, currentPlayer, doMove]
@@ -795,6 +802,7 @@ export default function LabyrinthGame() {
           position: "fixed",
           left: diceDrag.pos.x,
           top: diceDrag.pos.y,
+          width: DICE_PANEL_WIDTH,
           zIndex: 100,
           background: "#1a1a24",
           padding: "0.5rem",
@@ -829,6 +837,7 @@ export default function LabyrinthGame() {
         className="controls-panel"
         style={{
           ...controlsPanelStyle,
+          width: DICE_PANEL_WIDTH,
           position: "fixed",
           left: controlsDrag.pos.x,
           top: controlsDrag.pos.y,
@@ -851,76 +860,23 @@ export default function LabyrinthGame() {
         >
           End turn
         </button>
-        <div
-          className="move-buttons"
-          style={{
-            ...moveButtonsStyle,
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 2.5rem)",
-            gridTemplateRows: "repeat(3, 2.5rem)",
-            gap: 2,
-            ...(cp && (cp.jumps ?? 0) > 0
-              ? {
-                  padding: 4,
-                  borderRadius: 8,
-                  border: "2px solid #66aaff",
-                  boxShadow: "0 0 12px rgba(102,170,255,0.4)",
-                }
-              : {}),
-          }}
-        >
-          <button
-            onClick={() => doMove(0, -1)}
-            disabled={!canUp}
-            style={{
-              ...moveButtonStyle,
-              gridColumn: 2,
-              gridRow: 1,
-              ...(canUp && cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
-            }}
-            title={cp && (cp.jumps ?? 0) > 0 ? "Up (or jump over wall)" : "Up"}
-          >
-            {cp && (cp.jumps ?? 0) > 0 ? "J↑" : "↑"}
-          </button>
-          <button
-            onClick={() => doMove(-1, 0)}
-            disabled={!canLeft}
-            style={{
-              ...moveButtonStyle,
-              gridColumn: 1,
-              gridRow: 2,
-              ...(canLeft && cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
-            }}
-            title={cp && (cp.jumps ?? 0) > 0 ? "Left (or jump over wall)" : "Left"}
-          >
-            {cp && (cp.jumps ?? 0) > 0 ? "J←" : "←"}
-          </button>
-          <button
-            onClick={() => doMove(1, 0)}
-            disabled={!canRight}
-            style={{
-              ...moveButtonStyle,
-              gridColumn: 3,
-              gridRow: 2,
-              ...(canRight && cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
-            }}
-            title={cp && (cp.jumps ?? 0) > 0 ? "Right (or jump over wall)" : "Right"}
-          >
-            {cp && (cp.jumps ?? 0) > 0 ? "J→" : "→"}
-          </button>
-          <button
-            onClick={() => doMove(0, 1)}
-            disabled={!canDown}
-            style={{
-              ...moveButtonStyle,
-              gridColumn: 2,
-              gridRow: 3,
-              ...(canDown && cp && (cp.jumps ?? 0) > 0 ? jumpButtonStyle : {}),
-            }}
-            title={cp && (cp.jumps ?? 0) > 0 ? "Down (or jump over wall)" : "Down"}
-          >
-            {cp && (cp.jumps ?? 0) > 0 ? "J↓" : "↓"}
-          </button>
+        <div style={controlsSectionStyle}>
+          <div style={controlsSectionLabelStyle}>Move</div>
+          <div className="move-buttons" style={{ ...moveButtonsStyle, display: "grid", gridTemplateColumns: "repeat(3, 2.5rem)", gridTemplateRows: "repeat(3, 2.5rem)", gap: 2, alignSelf: "center" }}>
+            <button onClick={() => doMove(0, -1, false)} disabled={!canMoveUp} style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 1 }} title="Move up">↑</button>
+            <button onClick={() => doMove(-1, 0, false)} disabled={!canMoveLeft} style={{ ...moveButtonStyle, gridColumn: 1, gridRow: 2 }} title="Move left">←</button>
+            <button onClick={() => doMove(1, 0, false)} disabled={!canMoveRight} style={{ ...moveButtonStyle, gridColumn: 3, gridRow: 2 }} title="Move right">→</button>
+            <button onClick={() => doMove(0, 1, false)} disabled={!canMoveDown} style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 3 }} title="Move down">↓</button>
+          </div>
+        </div>
+        <div style={{ ...controlsSectionStyle, borderColor: "#66aaff", background: (cp?.jumps ?? 0) > 0 ? "#1e2e3e22" : undefined }}>
+          <div style={{ ...controlsSectionLabelStyle, color: "#66aaff" }}>Jump {(cp?.jumps ?? 0) > 0 && `×${cp.jumps}`}</div>
+          <div className="jump-buttons" style={{ ...moveButtonsStyle, display: "grid", gridTemplateColumns: "repeat(3, 2.5rem)", gridTemplateRows: "repeat(3, 2.5rem)", gap: 2, alignSelf: "center", padding: 4, borderRadius: 8, border: "2px solid #66aaff" }}>
+            <button onClick={() => doMove(0, -1, true)} disabled={!canJumpUp} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 1 }} title="Jump up">J↑</button>
+            <button onClick={() => doMove(-1, 0, true)} disabled={!canJumpLeft} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 1, gridRow: 2 }} title="Jump left">J←</button>
+            <button onClick={() => doMove(1, 0, true)} disabled={!canJumpRight} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 3, gridRow: 2 }} title="Jump right">J→</button>
+            <button onClick={() => doMove(0, 1, true)} disabled={!canJumpDown} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 3 }} title="Jump down">J↓</button>
+          </div>
         </div>
 
         {winner !== null && (
@@ -1206,6 +1162,24 @@ const buttonStyle: React.CSSProperties = {
 const secondaryButtonStyle: React.CSSProperties = {
   background: "#444",
   color: "#c0c0c0",
+};
+
+const controlsSectionStyle: React.CSSProperties = {
+  marginTop: 8,
+  padding: 6,
+  borderRadius: 6,
+  border: "1px solid #444",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 4,
+};
+
+const controlsSectionLabelStyle: React.CSSProperties = {
+  fontSize: "0.7rem",
+  fontWeight: "bold",
+  color: "#888",
+  textTransform: "uppercase",
 };
 
 const moveButtonsStyle: React.CSSProperties = {

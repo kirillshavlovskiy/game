@@ -380,33 +380,44 @@ export class Labyrinth {
 
   /** Returns true if the player can move in direction (dx, dy) - either normal move or jump. */
   canMoveInDirection(dx: number, dy: number, playerIndex = 0): boolean {
+    return this.canMoveOnly(dx, dy, playerIndex) || this.canJumpInDirection(dx, dy, playerIndex);
+  }
+
+  /** Returns true if the player can walk normally (adjacent cell is path). */
+  canMoveOnly(dx: number, dy: number, playerIndex = 0): boolean {
     const p = this.players[playerIndex];
     if (!p) return false;
     const nx = p.x + dx;
     const ny = p.y + dy;
-    if (this.canMove(nx, ny)) return true;
-    if ((p.jumps ?? 0) > 0 && this.grid[ny]?.[nx] === WALL) {
-      const jx = nx + dx;
-      const jy = ny + dy;
-      return jx >= 0 && jx < this.width && jy >= 0 && jy < this.height && this.canMove(jx, jy);
-    }
-    return false;
+    return this.canMove(nx, ny);
   }
 
-  movePlayer(dx: number, dy: number, playerIndex = 0): boolean {
+  /** Returns true if the player can jump over wall in direction (dx, dy). */
+  canJumpInDirection(dx: number, dy: number, playerIndex = 0): boolean {
+    const p = this.players[playerIndex];
+    if (!p || (p.jumps ?? 0) <= 0) return false;
+    const nx = p.x + dx;
+    const ny = p.y + dy;
+    if (this.grid[ny]?.[nx] !== WALL) return false;
+    const jx = nx + dx;
+    const jy = ny + dy;
+    return jx >= 0 && jx < this.width && jy >= 0 && jy < this.height && this.canMove(jx, jy);
+  }
+
+  movePlayer(dx: number, dy: number, playerIndex = 0, jumpOnly = false): boolean {
     const p = this.players[playerIndex];
     if (!p) return false;
     const nx = p.x + dx, ny = p.y + dy;
 
-    // Normal move
-    if (this.canMove(nx, ny)) {
+    // Normal move (skip if jumpOnly)
+    if (!jumpOnly && this.canMove(nx, ny)) {
       p.x = nx;
       p.y = ny;
       return true;
     }
 
-    // Jump over wall: target is wall, check cell beyond
-    if (p.jumps > 0 && this.grid[ny]?.[nx] === WALL) {
+    // Jump over wall (only when jumpOnly - user explicitly chose jump)
+    if (jumpOnly && (p.jumps ?? 0) > 0 && this.grid[ny]?.[nx] === WALL) {
       const jx = nx + dx, jy = ny + dy;
       if (jx >= 0 && jx < this.width && jy >= 0 && jy < this.height && this.canMove(jx, jy)) {
         p.x = jx;
