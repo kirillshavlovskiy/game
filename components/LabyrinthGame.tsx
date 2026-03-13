@@ -301,33 +301,27 @@ export default function LabyrinthGame() {
     return () => window.removeEventListener("keydown", onKey);
   }, [newGame, doMove]);
 
-  if (!lab) {
-    return (
-      <div style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f0f14", color: "#00ff88", fontFamily: "Courier New, monospace", fontSize: "1.2rem" }}>
-        Generating maze…
-      </div>
-    );
-  }
-
   const playerCells: Record<string, number> = {};
-  lab.players.forEach((p, i) => {
-    playerCells[`${p.x},${p.y}`] = i;
-  });
-  const cp = lab.players[currentPlayer];
-  if (cp) playerCells[`${cp.x},${cp.y}`] = currentPlayer;
-
+  if (lab) {
+    lab.players.forEach((p, i) => {
+      playerCells[`${p.x},${p.y}`] = i;
+    });
+    const p = lab.players[currentPlayer];
+    if (p) playerCells[`${p.x},${p.y}`] = currentPlayer;
+  }
+  const cp = lab?.players[currentPlayer];
   const moveDisabled = movesLeft <= 0 || winner !== null;
   const rollDisabled = movesLeft > 0 || winner !== null || rolling;
   const showSecretCells = movesLeft > 0;
-  const jumpTargets = cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
-  const canUp = !moveDisabled && lab.canMoveInDirection(0, -1, currentPlayer);
-  const canLeft = !moveDisabled && lab.canMoveInDirection(-1, 0, currentPlayer);
-  const canRight = !moveDisabled && lab.canMoveInDirection(1, 0, currentPlayer);
-  const canDown = !moveDisabled && lab.canMoveInDirection(0, 1, currentPlayer);
+  const jumpTargets = lab && cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
+  const canUp = !moveDisabled && lab?.canMoveInDirection(0, -1, currentPlayer);
+  const canLeft = !moveDisabled && lab?.canMoveInDirection(-1, 0, currentPlayer);
+  const canRight = !moveDisabled && lab?.canMoveInDirection(1, 0, currentPlayer);
+  const canDown = !moveDisabled && lab?.canMoveInDirection(0, 1, currentPlayer);
 
   const handleCellTap = useCallback(
     (cellX: number, cellY: number) => {
-      if (moveDisabled || !cp) return;
+      if (moveDisabled || !cp || !lab) return;
       const jumpTarget = jumpTargets.find((t) => t.x === cellX && t.y === cellY);
       if (jumpTarget) {
         doMove(jumpTarget.dx, jumpTarget.dy);
@@ -353,6 +347,14 @@ export default function LabyrinthGame() {
     },
     [moveDisabled, cp, jumpTargets, lab, currentPlayer, doMove]
   );
+
+  if (!lab) {
+    return (
+      <div style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f0f14", color: "#00ff88", fontFamily: "Courier New, monospace", fontSize: "1.2rem" }}>
+        Generating maze…
+      </div>
+    );
+  }
 
   return (
     <div style={gamePaneStyle}>
