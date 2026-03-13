@@ -1263,7 +1263,7 @@ export default function LabyrinthGame() {
               const jumpTarget = jumpTargets.find((t) => t.x === x && t.y === y);
 
               const isTappable = (teleportPicker && isTeleportOption && !catapultMode) || (!moveDisabled && !catapultMode && (cellClass.includes("path") || !!jumpTarget));
-              const isCatapultCell = catapultMode && catapultPicker && catapultPicker.from[0] === x && catapultPicker.from[1] === y && pi === currentPlayer;
+              const isCatapultSourceCell = catapultMode && catapultPicker && catapultPicker.from[0] === x && catapultPicker.from[1] === y && pi === currentPlayer;
 
               const effectiveCellSize = CELL_SIZE * mazeZoom;
               return (
@@ -1278,11 +1278,11 @@ export default function LabyrinthGame() {
                     minWidth: effectiveCellSize,
                     minHeight: effectiveCellSize,
                     position: "relative",
-                    cursor: isTappable ? "pointer" : isCatapultCell ? "grab" : undefined,
-                    touchAction: isTappable || isCatapultCell ? "manipulation" : undefined,
+                    cursor: isTappable ? "pointer" : isCatapultSourceCell ? "grab" : undefined,
+                    touchAction: isTappable || isCatapultSourceCell ? "manipulation" : undefined,
                   }}
                   onClick={() => isTappable && handleCellTap(x, y)}
-                  onPointerDown={isCatapultCell ? (e) => {
+                  onPointerDown={isCatapultSourceCell ? (e) => {
                     e.preventDefault();
                     const rect = (e.target as HTMLElement).getBoundingClientRect();
                     catapultDragRef.current = {
