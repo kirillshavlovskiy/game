@@ -735,24 +735,30 @@ export default function LabyrinthGame() {
   );
 }
 
+const HEADER_HEIGHT = 56;
+
 const gamePaneStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  display: "grid",
-  gridTemplateRows: "auto 1fr",
+  display: "flex",
+  flexDirection: "column",
   overflow: "hidden",
   background: "#0f0f14",
 };
 
 const headerStyle: React.CSSProperties = {
+  position: "fixed",
+  top: 0,
+  left: 0,
+  right: 0,
+  height: HEADER_HEIGHT,
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  padding: "0.75rem 1rem",
+  padding: "0 1rem",
   background: "#1a1a24",
   borderBottom: "1px solid #333",
-  gridRow: 1,
-  position: "relative",
+  flexShrink: 0,
   zIndex: 10,
 };
 
@@ -799,8 +805,9 @@ const modalRowStyle: React.CSSProperties = {
 };
 
 const mazeAreaStyle: React.CSSProperties = {
-  gridRow: 2,
+  flex: 1,
   minHeight: 0,
+  marginTop: HEADER_HEIGHT,
   position: "relative",
   overflow: "auto",
   paddingTop: 12,
