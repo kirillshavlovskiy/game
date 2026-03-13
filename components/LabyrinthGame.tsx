@@ -106,16 +106,27 @@ export default function LabyrinthGame() {
     to: [number, number];
     playerIndex: number;
   } | null>(null);
+  const [jumpAnimation, setJumpAnimation] = useState<{
+    playerIndex: number;
+    x: number;
+    y: number;
+  } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playerNames, setPlayerNames] = useState<string[]>(() =>
     Array.from({ length: 3 }, (_, i) => `Player ${i + 1}`)
   );
   const diceRef = useRef<Dice3DRef>(null);
   const movesLeftRef = useRef(0);
+  const winnerRef = useRef(winner);
+  const currentPlayerRef = useRef(currentPlayer);
 
   useEffect(() => {
     movesLeftRef.current = movesLeft;
   }, [movesLeft]);
+  useEffect(() => {
+    winnerRef.current = winner;
+    currentPlayerRef.current = currentPlayer;
+  }, [winner, currentPlayer]);
 
   useEffect(() => {
     setPlayerNames((prev) => {
@@ -132,8 +143,8 @@ export default function LabyrinthGame() {
   }, [numPlayers]);
 
 
-  const DICE_PANEL_WIDTH = 180;
-  const DICE_PANEL_HEIGHT = 240;
+  const DICE_PANEL_WIDTH = 220;
+  const DICE_PANEL_HEIGHT = 260;
   const diceDrag = useDraggable(() => ({
     x: window.innerWidth - DICE_PANEL_WIDTH - 20,
     y: 20,
@@ -148,6 +159,12 @@ export default function LabyrinthGame() {
     const t = setTimeout(() => setTeleportAnimation(null), 600);
     return () => clearTimeout(t);
   }, [teleportAnimation]);
+
+  useEffect(() => {
+    if (!jumpAnimation) return;
+    const t = setTimeout(() => setJumpAnimation(null), 500);
+    return () => clearTimeout(t);
+  }, [jumpAnimation]);
 
   useEffect(() => {
     if (!eliminatedByMonster) return;
@@ -183,6 +200,7 @@ export default function LabyrinthGame() {
     setJumpAdded(null);
     setEliminatedByMonster(null);
     setTeleportAnimation(null);
+    setJumpAnimation(null);
   }, [getDimensions, numPlayers]);
 
   const generateWithAI = useCallback(async () => {
@@ -284,6 +302,11 @@ export default function LabyrinthGame() {
         setMovesLeft(newMovesLeft);
         setTotalMoves((t) => t + 1);
         const p = next.players[currentPlayer];
+        const prevX = lab.players[currentPlayer]?.x ?? 0;
+        const prevY = lab.players[currentPlayer]?.y ?? 0;
+        if (jumpOnly && p) {
+          setJumpAnimation({ playerIndex: currentPlayer, x: p.x, y: p.y });
+        }
         if (p) {
           const cell = next.grid[p.y]?.[p.x];
           if (cell && isJumpCell(cell)) {
@@ -304,7 +327,7 @@ export default function LabyrinthGame() {
             next.grid[p.y][p.x] = " ";
           }
         }
-        next.moveMonsters();
+        next.moveMonsters({ prevX, prevY, playerIndex: currentPlayer });
         const collision = next.checkMonsterCollision();
         if (collision) {
           next.eliminatedPlayers.add(collision.playerIndex);
@@ -358,6 +381,51 @@ export default function LabyrinthGame() {
   useEffect(() => {
     newGame();
   }, []);
+
+  const MONSTER_MOVE_INTERVAL_MS = 2200;
+
+  useEffect(() => {
+    if (!lab || winner !== null) return;
+    const id = setInterval(() => {
+      setLab((prev) => {
+        if (!prev || winnerRef.current !== null) return prev;
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers);
+        next.grid = prev.grid.map((r) => [...r]);
+        next.players = prev.players.map((p) => ({
+          ...p,
+          jumps: p.jumps ?? 0,
+          diamonds: p.diamonds ?? 0,
+        }));
+        next.goalX = prev.goalX;
+        next.goalY = prev.goalY;
+        next.monsters = prev.monsters.map((m) => ({
+          ...m,
+          patrolArea: [...m.patrolArea],
+        }));
+        next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+        next.moveMonsters();
+        const collision = next.checkMonsterCollision();
+        if (collision) {
+          next.eliminatedPlayers.add(collision.playerIndex);
+          setEliminatedByMonster({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
+          if (next.eliminatedPlayers.size >= next.numPlayers) {
+            setWinner(-1);
+          } else if (collision.playerIndex === currentPlayerRef.current) {
+            movesLeftRef.current = 0;
+            setMovesLeft(0);
+            setDiceResult(null);
+            let nextP = (currentPlayerRef.current + 1) % prev.numPlayers;
+            while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayerRef.current) {
+              nextP = (nextP + 1) % prev.numPlayers;
+            }
+            setCurrentPlayer(nextP);
+          }
+        }
+        return next;
+      });
+    }, MONSTER_MOVE_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [lab?.width, lab?.height, lab?.numPlayers, winner]);
 
   useEffect(() => {
     if (!lab || winner !== null || movesLeft > 0 || rolling) return;
@@ -649,9 +717,11 @@ export default function LabyrinthGame() {
                   teleportAnimation?.to[0] === x &&
                   teleportAnimation?.to[1] === y &&
                   teleportAnimation?.playerIndex === pi;
+                const isJumpLanding =
+                  jumpAnimation?.x === x && jumpAnimation?.y === y && jumpAnimation?.playerIndex === pi;
                 content = (
                   <div
-                    className={`marker ${pi === currentPlayer ? "active" : ""} ${isTeleportRise ? "teleport-rise" : ""}`}
+                    className={`marker ${pi === currentPlayer ? "active" : ""} ${isTeleportRise ? "teleport-rise" : ""} ${isJumpLanding ? "jump-landing" : ""}`}
                     style={{
                       ...markerStyle,
                       background: c,
@@ -766,7 +836,7 @@ export default function LabyrinthGame() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        doMove(jumpTarget.dx, jumpTarget.dy);
+                        doMove(jumpTarget.dx, jumpTarget.dy, true);
                       }}
                       style={jumpActionButtonStyle}
                       title={`Jump to (${jumpTarget.x},${jumpTarget.y})`}
@@ -806,11 +876,14 @@ export default function LabyrinthGame() {
       </div>
 
       <div
+        className="dice-panel"
         style={{
           position: "fixed",
           left: diceDrag.pos.x,
           top: diceDrag.pos.y,
           width: DICE_PANEL_WIDTH,
+          maxWidth: DICE_PANEL_WIDTH,
+          overflow: "hidden",
           zIndex: 100,
           background: "#1a1a24",
           padding: "0.5rem",
@@ -846,6 +919,8 @@ export default function LabyrinthGame() {
         style={{
           ...controlsPanelStyle,
           width: DICE_PANEL_WIDTH,
+          maxWidth: DICE_PANEL_WIDTH,
+          overflow: "hidden",
           position: "fixed",
           left: controlsDrag.pos.x,
           top: controlsDrag.pos.y,

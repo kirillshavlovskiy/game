@@ -121,15 +121,15 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
     }, []);
 
     return (
-      <div className="dice-tray" style={{ position: "relative" }}>
+      <div className="dice-tray" style={{ position: "relative", width: "100%", minWidth: 0 }}>
         <div
           ref={containerRef}
           className="dice-container"
           style={{
             width: "100%",
-            minWidth: 200,
-            minHeight: 140,
-            height: 140,
+            minWidth: 0,
+            minHeight: 120,
+            height: 120,
             borderRadius: 12,
             overflow: "hidden",
             background: "#0d0d12",

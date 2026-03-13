@@ -275,14 +275,30 @@ export class Labyrinth {
     }
   }
 
-  moveMonsters(): void {
+  /** Optional swapHint: when a player just moved from (prevX, prevY) to the monster's cell, force monster to move to prev so they pass. */
+  moveMonsters(swapHint?: { prevX: number; prevY: number; playerIndex: number }): void {
     for (const m of this.monsters) {
       if (m.patrolArea.length < 2) continue;
       const walkable = m.patrolArea.filter(([px, py]) =>
         (px !== m.x || py !== m.y) && isWalkable(this.grid[py]?.[px] ?? WALL)
       );
       if (walkable.length === 0) continue;
-      const next = walkable[Math.floor(Math.random() * walkable.length)];
+      let next: [number, number];
+      if (swapHint && this.players[swapHint.playerIndex]) {
+        const p = this.players[swapHint.playerIndex];
+        if (p && p.x === m.x && p.y === m.y) {
+          const prevInPatrol = walkable.some(([px, py]) => px === swapHint!.prevX && py === swapHint!.prevY);
+          if (prevInPatrol) {
+            next = [swapHint.prevX, swapHint.prevY];
+          } else {
+            next = walkable[Math.floor(Math.random() * walkable.length)];
+          }
+        } else {
+          next = walkable[Math.floor(Math.random() * walkable.length)];
+        }
+      } else {
+        next = walkable[Math.floor(Math.random() * walkable.length)];
+      }
       m.x = next[0];
       m.y = next[1];
     }

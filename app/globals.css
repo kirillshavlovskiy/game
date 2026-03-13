@@ -67,6 +67,29 @@ button {
   animation: teleportRise 0.4s ease-out 0.2s both;
 }
 
+/* Jump: marker bounces when landing after jump */
+@keyframes jumpLand {
+  0% {
+    transform: translateY(-14px) scale(0.9);
+    opacity: 0.8;
+  }
+  40% {
+    transform: translateY(4px) scale(1.1);
+    opacity: 1;
+  }
+  70% {
+    transform: translateY(-3px) scale(1.02);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.marker.jump-landing {
+  animation: jumpLand 0.45s ease-out both;
+}
+
 @keyframes effectPop {
   0% {
     transform: translateX(-50%) scale(0.8);
