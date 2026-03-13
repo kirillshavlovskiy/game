@@ -115,6 +115,25 @@ button {
   color: #5a5a7a !important;
 }
 
+/* Spider web effect - decorative overlay on corridor cells */
+.spider-web {
+  background: 
+    radial-gradient(ellipse 60% 60% at 50% 50%, transparent 40%, rgba(180,180,200,0.15) 70%, transparent 100%),
+    linear-gradient(135deg, rgba(200,200,220,0.12) 0%, transparent 50%, rgba(200,200,220,0.08) 100%),
+    linear-gradient(45deg, transparent 0%, rgba(220,220,240,0.1) 50%, transparent 100%);
+  opacity: 0.7;
+}
+
+.spider-web::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  background: 
+    repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(200,200,220,0.06) 3px, rgba(200,200,220,0.06) 4px),
+    repeating-linear-gradient(90deg, transparent, transparent 3px, rgba(200,200,220,0.06) 3px, rgba(200,200,220,0.06) 4px);
+  mask: radial-gradient(ellipse 80% 80% at 50% 50%, black 20%, transparent 70%);
+}
+
 /* Monster icons - ensure consistent rendering */
 .cell.monster .monster-icon {
   display: inline-flex;

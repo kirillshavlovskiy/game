@@ -83,6 +83,8 @@ export class Labyrinth {
   eliminatedPlayers: Set<number> = new Set();
   /** Hidden cells revealed when players collect diamonds. Key: "x,y", Value: cell type (M, J, 2, 3, 4, H) */
   hiddenCells: Map<string, string> = new Map();
+  /** Spider web decoration positions [x,y] for visual effect */
+  webPositions: [number, number][] = [];
 
   constructor(
     width: number,
@@ -245,6 +247,15 @@ export class Labyrinth {
       // Grid stays PATH until revealed
     }
     this._addMonsters(rest3);
+    this._addSpiderWebs(rest4.length > 0 ? rest4 : rest3);
+  }
+
+  private _addSpiderWebs(pathCells: [number, number][]): void {
+    const webCount = Math.max(3, Math.min(15, Math.floor(pathCells.length * 0.04)));
+    const shuffled = shuffle([...pathCells]);
+    for (let i = 0; i < webCount && i < shuffled.length; i++) {
+      this.webPositions.push(shuffled[i]);
+    }
   }
 
   /** Reveal hidden cells based on total diamonds collected by all players. Returns number revealed. */
@@ -302,7 +313,8 @@ export class Labyrinth {
     shuffle(intersections);
     const blocks10x10 = (this.width / 10) * (this.height / 10);
     const targetMonsters = Math.max(1, Math.floor(blocks10x10 * this.monsterDensity));
-    const MIN_MONSTER_DIST = 4;
+    // Lower min distance for higher difficulties so we can place more monsters
+    const MIN_MONSTER_DIST = this.monsterDensity >= 4 ? 2 : this.monsterDensity >= 3 ? 3 : 4;
     const chosen: [number, number][] = [];
     for (const [x, y] of intersections) {
       if (this.monsters.length >= targetMonsters) break;
@@ -437,8 +449,9 @@ export class Labyrinth {
     this.monsters = [];
     this.eliminatedPlayers = new Set();
     this.hiddenCells = new Map();
+    this.webPositions = [];
     this._addMonsters([]);
-    // Add hidden cells from path cells for AI-loaded mazes
+    // Add hidden cells and spider webs from path cells for AI-loaded mazes
     const pathCells: [number, number][] = [];
     for (let y = 1; y < this.height - 1; y++)
       for (let x = 1; x < this.width - 1; x++)
@@ -451,6 +464,11 @@ export class Labyrinth {
       const idx = Math.floor(Math.random() * pathCells.length);
       const [x, y] = pathCells.splice(idx, 1)[0];
       this.hiddenCells.set(`${x},${y}`, hiddenTypes[i % hiddenTypes.length]);
+    }
+    const webCount = Math.min(8, Math.floor(pathCells.length / 3));
+    for (let i = 0; i < webCount && pathCells.length > 0; i++) {
+      const idx = Math.floor(Math.random() * pathCells.length);
+      this.webPositions.push(pathCells.splice(idx, 1)[0]);
     }
     return true;
   }
@@ -538,6 +556,31 @@ export class Labyrinth {
     p.x = destX;
     p.y = destY;
     return true;
+  }
+
+  /** Catapult: launch player in direction (dx,dy) until hitting wall. Returns landing coords or null if invalid. */
+  catapultLaunch(playerIndex: number, dx: number, dy: number): { destX: number; destY: number } | null {
+    const p = this.players[playerIndex];
+    if (!p) return null;
+    const ndx = Math.sign(dx);
+    const ndy = Math.sign(dy);
+    if (ndx === 0 && ndy === 0) return null;
+    let x = p.x;
+    let y = p.y;
+    let lastPath: { x: number; y: number } | null = null;
+    while (true) {
+      const nx = x + ndx;
+      const ny = y + ndy;
+      if (nx < 0 || nx >= this.width || ny < 0 || ny >= this.height) break;
+      if (this.grid[ny][nx] === WALL) break;
+      x = nx;
+      y = ny;
+      lastPath = { x, y };
+    }
+    if (!lastPath || (lastPath.x === p.x && lastPath.y === p.y)) return null;
+    p.x = lastPath.x;
+    p.y = lastPath.y;
+    return lastPath;
   }
 
   getMagicCellPositions(): [number, number][] {
