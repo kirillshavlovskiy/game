@@ -9,7 +9,7 @@ export const MULT_X4 = "4";
 export const MAGIC = "M";
 export const JUMP = "J";
 
-export type MonsterType = "V" | "Z" | "S"; // Vampire, Zombie, Spider
+export type MonsterType = "V" | "Z" | "S" | "G"; // Vampire, Zombie, Spider, Ghost
 
 export interface Monster {
   x: number;
@@ -19,11 +19,11 @@ export interface Monster {
 }
 
 export function isMonsterType(type: string): type is MonsterType {
-  return type === "V" || type === "Z" || type === "S";
+  return type === "V" || type === "Z" || type === "S" || type === "G";
 }
 
 export function getMonsterName(type: MonsterType): string {
-  return type === "V" ? "Vampire" : type === "Z" ? "Zombie" : "Spider";
+  return type === "V" ? "Vampire" : type === "Z" ? "Zombie" : type === "S" ? "Spider" : "Ghost";
 }
 
 export function isMultiplierCell(cell: string): cell is "2" | "3" | "4" {
@@ -248,27 +248,31 @@ export class Labyrinth {
   }
 
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "Z", "S"];
+    const types: MonsterType[] = ["V", "Z", "S", "G"];
     const intersections: [number, number][] = [];
+    const pathCells: [number, number][] = [];
     for (let y = 1; y < this.height - 1; y++) {
       for (let x = 1; x < this.width - 1; x++) {
         if (!isWalkable(this.grid[y][x])) continue;
         const n = this._countPathNeighbors(x, y);
-        if (n >= 3 && (x !== 0 || y !== 0) && (x !== this.goalX || y !== this.goalY) &&
+        if ((x !== 0 || y !== 0) && (x !== this.goalX || y !== this.goalY) &&
             !excludeCells.some(([ex, ey]) => ex === x && ey === y)) {
-          intersections.push([x, y]);
+          pathCells.push([x, y]);
+          if (n >= 3) intersections.push([x, y]);
         }
       }
     }
-    const monsterCount = Math.min(6, Math.max(2, Math.floor(intersections.length * 0.3)));
-    const chosen = this._pickSpread(intersections, monsterCount);
-    for (let i = 0; i < chosen.length; i++) {
-      const [x, y] = chosen[i];
-      const patrolArea = this._getPatrolArea(x, y, 8);
+    shuffle(pathCells);
+    const monsterCount = Math.min(12, Math.max(5, Math.floor(pathCells.length * 0.08)));
+    const spawnPool = intersections.length >= monsterCount ? intersections : pathCells;
+    const spawnPoints = this._pickSpread(spawnPool, monsterCount);
+    for (let i = 0; i < spawnPoints.length; i++) {
+      const [x, y] = spawnPoints[i];
+      const patrolArea = this._getPatrolArea(x, y, 28);
       if (patrolArea.length >= 2) {
         this.monsters.push({
           x, y,
-          type: types[i % 3],
+          type: types[i % 4],
           patrolArea,
         });
       }
@@ -279,25 +283,26 @@ export class Labyrinth {
   moveMonsters(swapHint?: { prevX: number; prevY: number; playerIndex: number }): void {
     for (const m of this.monsters) {
       if (m.patrolArea.length < 2) continue;
-      const walkable = m.patrolArea.filter(([px, py]) =>
-        (px !== m.x || py !== m.y) && isWalkable(this.grid[py]?.[px] ?? WALL)
-      );
-      if (walkable.length === 0) continue;
+      const adjacent = m.patrolArea.filter(([px, py]) => {
+        const dist = Math.abs(px - m.x) + Math.abs(py - m.y);
+        return dist === 1 && isWalkable(this.grid[py]?.[px] ?? WALL);
+      });
+      if (adjacent.length === 0) continue;
       let next: [number, number];
       if (swapHint && this.players[swapHint.playerIndex]) {
         const p = this.players[swapHint.playerIndex];
         if (p && p.x === m.x && p.y === m.y) {
-          const prevInPatrol = walkable.some(([px, py]) => px === swapHint!.prevX && py === swapHint!.prevY);
+          const prevInPatrol = adjacent.some(([px, py]) => px === swapHint!.prevX && py === swapHint!.prevY);
           if (prevInPatrol) {
             next = [swapHint.prevX, swapHint.prevY];
           } else {
-            next = walkable[Math.floor(Math.random() * walkable.length)];
+            next = adjacent[Math.floor(Math.random() * adjacent.length)];
           }
         } else {
-          next = walkable[Math.floor(Math.random() * walkable.length)];
+          next = adjacent[Math.floor(Math.random() * adjacent.length)];
         }
       } else {
-        next = walkable[Math.floor(Math.random() * walkable.length)];
+        next = adjacent[Math.floor(Math.random() * adjacent.length)];
       }
       m.x = next[0];
       m.y = next[1];

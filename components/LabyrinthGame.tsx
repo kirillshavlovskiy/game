@@ -297,7 +297,12 @@ export default function LabyrinthGame() {
         patrolArea: [...m.patrolArea],
       }));
       next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
-      if (next.movePlayer(dx, dy, currentPlayer, jumpOnly)) {
+      const moveSucceeded = next.movePlayer(dx, dy, currentPlayer, jumpOnly);
+      if (!moveSucceeded) {
+        movesLeftRef.current++;
+        return;
+      }
+      {
         const newMovesLeft = Math.max(0, movesLeftRef.current);
         setMovesLeft(newMovesLeft);
         setTotalMoves((t) => t + 1);
@@ -464,6 +469,7 @@ export default function LabyrinthGame() {
       };
       const d = map[e.key];
       if (d) {
+        if (movesLeftRef.current <= 0 || winnerRef.current !== null || !lab) return;
         const jumpOnly = e.shiftKey;
         doMove(d[0], d[1], jumpOnly);
         e.preventDefault();
@@ -471,7 +477,7 @@ export default function LabyrinthGame() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [newGame, doMove]);
+  }, [newGame, doMove, lab]);
 
   const playerCells: Record<string, number> = {};
   if (lab) {
@@ -700,7 +706,7 @@ export default function LabyrinthGame() {
 
               if (monster) {
                 cellClass += " path monster";
-                const icon = monster.type === "V" ? "🧛" : monster.type === "Z" ? "🧟" : "🕷";
+                const icon = monster.type === "V" ? "🧛" : monster.type === "Z" ? "🧟" : monster.type === "G" ? "👻" : "🕷";
                 content = (
                   <span className="monster-icon" style={{ fontSize: "1.2rem", lineHeight: 1 }} title={getMonsterName(monster.type)}>
                     {icon}
