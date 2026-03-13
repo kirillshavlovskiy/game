@@ -67,6 +67,25 @@ button {
   animation: teleportRise 0.4s ease-out 0.2s both;
 }
 
+@keyframes effectPop {
+  0% {
+    transform: translateX(-50%) scale(0.8);
+    opacity: 0;
+  }
+  50% {
+    transform: translateX(-50%) scale(1.05);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(-50%) scale(1);
+    opacity: 1;
+  }
+}
+
+.effect-toast {
+  animation: effectPop 0.5s ease-out;
+}
+
 /* Magic hole cell - dark pit */
 .cell.magic.hole {
   background: #12121a !important;

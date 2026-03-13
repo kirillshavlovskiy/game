@@ -9,6 +9,23 @@ export const MULT_X4 = "4";
 export const MAGIC = "M";
 export const JUMP = "J";
 
+export type MonsterType = "V" | "Z" | "S"; // Vampire, Zombie, Spider
+
+export interface Monster {
+  x: number;
+  y: number;
+  type: MonsterType;
+  patrolArea: [number, number][];
+}
+
+export function isMonsterType(type: string): type is MonsterType {
+  return type === "V" || type === "Z" || type === "S";
+}
+
+export function getMonsterName(type: MonsterType): string {
+  return type === "V" ? "Vampire" : type === "Z" ? "Zombie" : "Spider";
+}
+
 export function isMultiplierCell(cell: string): cell is "2" | "3" | "4" {
   return cell === MULT_X2 || cell === MULT_X3 || cell === MULT_X4;
 }
@@ -56,6 +73,8 @@ export class Labyrinth {
   players: Array<{ x: number; y: number; jumps: number; diamonds: number }>;
   goalX: number;
   goalY: number;
+  monsters: Monster[] = [];
+  eliminatedPlayers: Set<number> = new Set();
 
   constructor(
     width: number,
@@ -180,8 +199,8 @@ export class Labyrinth {
 
     const mults: ("2" | "3" | "4")[] = ["2", "3", "4"];
     const multCount = Math.max(6, Math.min(15, Math.floor(pathCells.length * 0.12)));
-    const magicCount = Math.max(2, Math.min(4, Math.floor(pathCells.length * 0.02)));
-    const jumpCount = Math.max(1, Math.min(3, Math.floor(pathCells.length * 0.015)));
+    const magicCount = Math.max(4, Math.min(10, Math.floor(pathCells.length * 0.05)));
+    const jumpCount = Math.max(3, Math.min(8, Math.floor(pathCells.length * 0.04)));
     const diamondCount = Math.max(this.numPlayers * 2, Math.min(this.numPlayers * 4, Math.floor(pathCells.length * 0.08)));
 
     const total = multCount + magicCount + jumpCount + diamondCount;
@@ -205,6 +224,81 @@ export class Labyrinth {
       const [x, y] = diamondCells[i];
       this.grid[y][x] = `D${(i % this.numPlayers) + 1}`;
     }
+    this._addMonsters(rest3);
+  }
+
+  private _getPatrolArea(startX: number, startY: number, maxCells: number): [number, number][] {
+    const area: [number, number][] = [];
+    const seen = new Set<string>();
+    const q: [number, number][] = [[startX, startY]];
+    seen.add(`${startX},${startY}`);
+    while (q.length > 0 && area.length < maxCells) {
+      const [x, y] = q.shift()!;
+      area.push([x, y]);
+      for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height &&
+            this.grid[ny][nx] === PATH && !seen.has(`${nx},${ny}`)) {
+          seen.add(`${nx},${ny}`);
+          q.push([nx, ny]);
+        }
+      }
+    }
+    return area;
+  }
+
+  private _addMonsters(excludeCells: [number, number][]): void {
+    const types: MonsterType[] = ["V", "Z", "S"];
+    const intersections: [number, number][] = [];
+    for (let y = 1; y < this.height - 1; y++) {
+      for (let x = 1; x < this.width - 1; x++) {
+        if (this.grid[y][x] !== PATH) continue;
+        const n = this._countPathNeighbors(x, y);
+        if (n >= 3 && (x !== 0 || y !== 0) && (x !== this.goalX || y !== this.goalY) &&
+            !excludeCells.some(([ex, ey]) => ex === x && ey === y)) {
+          intersections.push([x, y]);
+        }
+      }
+    }
+    const monsterCount = Math.min(6, Math.max(2, Math.floor(intersections.length * 0.3)));
+    const chosen = this._pickSpread(intersections, monsterCount);
+    for (let i = 0; i < chosen.length; i++) {
+      const [x, y] = chosen[i];
+      const patrolArea = this._getPatrolArea(x, y, 8);
+      if (patrolArea.length >= 2) {
+        this.monsters.push({
+          x, y,
+          type: types[i % 3],
+          patrolArea,
+        });
+      }
+    }
+  }
+
+  moveMonsters(): void {
+    for (const m of this.monsters) {
+      if (m.patrolArea.length < 2) continue;
+      const walkable = m.patrolArea.filter(([px, py]) =>
+        (px !== m.x || py !== m.y) && this.grid[py]?.[px] === PATH
+      );
+      if (walkable.length === 0) continue;
+      const next = walkable[Math.floor(Math.random() * walkable.length)];
+      m.x = next[0];
+      m.y = next[1];
+    }
+  }
+
+  checkMonsterCollision(): { playerIndex: number; monsterType: MonsterType } | null {
+    for (const m of this.monsters) {
+      for (let i = 0; i < this.players.length; i++) {
+        if (this.eliminatedPlayers.has(i)) continue;
+        const p = this.players[i];
+        if (p && p.x === m.x && p.y === m.y) {
+          return { playerIndex: i, monsterType: m.type };
+        }
+      }
+    }
+    return null;
   }
 
   private _addExtraPaths(): void {
@@ -230,6 +324,8 @@ export class Labyrinth {
   }
 
   generate(): void {
+    this.monsters = [];
+    this.eliminatedPlayers = new Set();
     this._initGrid();
     this._carvePath(1, 1);
     this._ensureGoalReachable();
@@ -266,6 +362,9 @@ export class Labyrinth {
       jumps: 0,
       diamonds: 0,
     }));
+    this.monsters = [];
+    this.eliminatedPlayers = new Set();
+    this._addMonsters([]);
     return true;
   }
 
