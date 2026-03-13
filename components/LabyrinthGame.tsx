@@ -738,8 +738,8 @@ export default function LabyrinthGame() {
 const gamePaneStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  display: "flex",
-  flexDirection: "column",
+  display: "grid",
+  gridTemplateRows: "auto 1fr",
   overflow: "hidden",
   background: "#0f0f14",
 };
@@ -751,7 +751,8 @@ const headerStyle: React.CSSProperties = {
   padding: "0.75rem 1rem",
   background: "#1a1a24",
   borderBottom: "1px solid #333",
-  flexShrink: 0,
+  gridRow: 1,
+  position: "relative",
   zIndex: 10,
 };
 
@@ -798,11 +799,11 @@ const modalRowStyle: React.CSSProperties = {
 };
 
 const mazeAreaStyle: React.CSSProperties = {
-  flex: 1,
+  gridRow: 2,
   minHeight: 0,
   position: "relative",
   overflow: "auto",
-  paddingTop: 4,
+  paddingTop: 12,
 };
 
 const jumpActionButtonStyle: React.CSSProperties = {
