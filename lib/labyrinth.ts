@@ -584,7 +584,7 @@ export class Labyrinth {
     if (!lastPath || (lastPath.x === p.x && lastPath.y === p.y)) return null;
     p.x = lastPath.x;
     p.y = lastPath.y;
-    return lastPath;
+    return { destX: lastPath.x, destY: lastPath.y };
   }
 
   getMagicCellPositions(): [number, number][] {
