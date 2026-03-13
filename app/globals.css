@@ -27,6 +27,11 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Touch-friendly: reduce tap delay on buttons */
+button {
+  touch-action: manipulation;
+}
+
 /* Dice3D: ensure canvas fills container */
 .dice-tray [id^="dice-scene-"] canvas {
   width: 100% !important;

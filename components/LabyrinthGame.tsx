@@ -24,16 +24,28 @@ function useDraggable(getInitial: () => { x: number; y: number }) {
   const [dragging, setDragging] = useState(false);
   const dragRef = useRef({ startX: 0, startY: 0, startPosX: 0, startPosY: 0 });
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
+  const startDrag = useCallback((clientX: number, clientY: number) => {
     setDragging(true);
     dragRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
+      startX: clientX,
+      startY: clientY,
       startPosX: pos.x,
       startPosY: pos.y,
     };
   }, [pos.x, pos.y]);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    startDrag(e.clientX, e.clientY);
+  }, [startDrag]);
+
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    const t = e.touches[0];
+    if (t) {
+      e.preventDefault();
+      startDrag(t.clientX, t.clientY);
+    }
+  }, [startDrag]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -43,16 +55,31 @@ function useDraggable(getInitial: () => { x: number; y: number }) {
         y: dragRef.current.startPosY + e.clientY - dragRef.current.startY,
       });
     };
+    const onTouchMove = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (t) {
+        setPos({
+          x: dragRef.current.startPosX + t.clientX - dragRef.current.startX,
+          y: dragRef.current.startPosY + t.clientY - dragRef.current.startY,
+        });
+      }
+    };
     const onUp = () => setDragging(false);
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    window.addEventListener("touchend", onUp);
+    window.addEventListener("touchcancel", onUp);
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onUp);
+      window.removeEventListener("touchcancel", onUp);
     };
   }, [dragging]);
 
-  return { pos, onMouseDown, dragging };
+  return { pos, onMouseDown, onTouchStart, dragging };
 }
 
 export default function LabyrinthGame() {
@@ -80,8 +107,8 @@ export default function LabyrinthGame() {
     y: 20,
   }));
   const controlsDrag = useDraggable(() => ({
-    x: Math.max(20, window.innerWidth / 2 - 180),
-    y: window.innerHeight - 320,
+    x: window.innerWidth - 120,
+    y: Math.max(HEADER_HEIGHT + 20, window.innerHeight / 2 - 100),
   }));
 
   useEffect(() => {
@@ -168,6 +195,14 @@ export default function LabyrinthGame() {
     setRolling(true);
     await diceRef.current?.roll();
   }, [lab, movesLeft, winner]);
+
+  const endTurn = useCallback(() => {
+    if (winner !== null || !lab) return;
+    setCurrentPlayer((p) => (p + 1) % lab.numPlayers);
+    setMovesLeft(0);
+    setDiceResult(null);
+    setBonusAdded(null);
+  }, [lab, winner]);
 
   const doMove = useCallback(
     (dx: number, dy: number) => {
@@ -583,10 +618,15 @@ export default function LabyrinthGame() {
           borderRadius: 8,
           border: "1px solid #333",
           boxShadow: "0 0 20px rgba(0,255,136,0.1)",
-          cursor: diceDrag.dragging ? "grabbing" : "grab",
         }}
-        onMouseDown={diceDrag.onMouseDown}
       >
+        <div
+          style={{ ...dragHandleStyle, marginBottom: 4, borderBottom: "none" }}
+          onMouseDown={diceDrag.onMouseDown}
+          onTouchStart={diceDrag.onTouchStart}
+        >
+          ⋮⋮
+        </div>
         <div
           onClick={() => !rollDisabled && rollDice()}
           style={{ cursor: rollDisabled ? "default" : "pointer" }}
@@ -612,90 +652,22 @@ export default function LabyrinthGame() {
           zIndex: 99,
           cursor: controlsDrag.dragging ? "grabbing" : "grab",
         }}
-        onMouseDown={controlsDrag.onMouseDown}
       >
-        <div className="info" style={infoStyle}>
-          <span>
-            {winner === null
-              ? `Player ${currentPlayer + 1}`
-              : `Player ${winner + 1} wins!`}
-          </span>
-          &nbsp;|&nbsp; Moves left:{" "}
-          <span style={bonusAdded !== null ? bonusHighlightStyle : undefined}>
-            {movesLeft}
-            {bonusAdded !== null && (
-              <span style={bonusBadgeStyle}> +{bonusAdded} bonus!</span>
-            )}
-          </span>
-          &nbsp;|&nbsp; Moves: <span>{totalMoves}</span>
-          {cp && (cp.jumps ?? 0) > 0 && (
-            <>
-              &nbsp;|&nbsp; Jumps: <span style={{ color: "#66aaff" }}>{cp.jumps}</span>
-            </>
-          )}
+        <div
+          style={dragHandleStyle}
+          onMouseDown={controlsDrag.onMouseDown}
+          onTouchStart={controlsDrag.onTouchStart}
+        >
+          ⋮⋮
         </div>
-        <div className="info" style={{ ...infoStyle, marginTop: 4 }}>
-          S=Start &nbsp; X=Goal &nbsp; ×2/×3/×4=Bonus &nbsp; ○=Teleport hole &nbsp; J=Jump
-          {showSecretCells && " &nbsp; 💎=Diamond (your color)"}
-        </div>
-        <div className="player-legend" style={playerLegendStyle}>
-          {lab.players.map((_, i) => {
-            const c =
-              i === currentPlayer
-                ? PLAYER_COLORS_ACTIVE[i] ?? "#888"
-                : PLAYER_COLORS[i] ?? "#888";
-            const p = lab.players[i];
-            const diamonds = p?.diamonds ?? 0;
-            return (
-              <span
-                key={i}
-                className={i === currentPlayer ? "legend-item active" : "legend-item"}
-                style={{ color: c, display: "flex", alignItems: "center", gap: 6 }}
-              >
-                <span
-                  className="dot"
-                  style={{
-                    width: 14,
-                    height: 14,
-                    borderRadius: "50%",
-                    background: c,
-                  }}
-                />
-                <span style={{ fontSize: "0.75rem" }}>
-                  💎{diamonds}
-                </span>
-              </span>
-            );
-          })}
-        </div>
-
-        <div style={{ marginTop: "0.5rem" }}>
-          {cp && (cp.jumps ?? 0) > 0 && (
-            <div
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "4px 10px",
-                background: "#1e2e3e",
-                border: "2px solid #66aaff",
-                borderRadius: 6,
-                color: "#66aaff",
-                fontWeight: "bold",
-                fontSize: "0.9rem",
-                marginBottom: 6,
-                boxShadow: "0 0 10px rgba(102,170,255,0.3)",
-              }}
-              title="Arrows can jump over walls"
-            >
-              <span>J</span>
-              <span>×{cp.jumps}</span>
-              <span style={{ fontSize: "0.75rem", fontWeight: "normal", opacity: 0.9 }}>
-                Jump active
-              </span>
-            </div>
-          )}
-        </div>
+        <button
+          onClick={endTurn}
+          className="secondary"
+          disabled={winner !== null}
+          style={{ ...buttonStyle, ...secondaryButtonStyle, marginBottom: 6, width: "100%" }}
+        >
+          End turn
+        </button>
         <div
           className="move-buttons"
           style={{
@@ -768,10 +740,6 @@ export default function LabyrinthGame() {
           </button>
         </div>
 
-        <div className="controls" style={controlsStyle}>
-          WASD or Arrow keys &nbsp;|&nbsp; R = New maze &nbsp;|&nbsp; Dice auto-rolls
-        </div>
-
         {winner !== null && (
           <div className="won" style={wonStyle}>
             *** Player {winner + 1} WINS! ***
@@ -796,10 +764,6 @@ const gamePaneStyle: React.CSSProperties = {
 };
 
 const headerStyle: React.CSSProperties = {
-  position: "fixed",
-  top: 0,
-  left: 0,
-  right: 0,
   height: HEADER_HEIGHT,
   display: "flex",
   alignItems: "center",
@@ -808,7 +772,6 @@ const headerStyle: React.CSSProperties = {
   background: "#1a1a24",
   borderBottom: "1px solid #333",
   flexShrink: 0,
-  zIndex: 10,
 };
 
 const headerTitleStyle: React.CSSProperties = {
@@ -856,7 +819,6 @@ const modalRowStyle: React.CSSProperties = {
 const mazeAreaStyle: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
-  marginTop: HEADER_HEIGHT,
   position: "relative",
   overflow: "auto",
   paddingTop: 12,
@@ -948,11 +910,23 @@ const markerStyle: React.CSSProperties = {
   margin: "auto",
 };
 
+const dragHandleStyle: React.CSSProperties = {
+  padding: "4px 0",
+  fontSize: "0.75rem",
+  color: "#666",
+  textAlign: "center",
+  cursor: "grab",
+  touchAction: "none",
+  userSelect: "none",
+  borderBottom: "1px solid #333",
+  marginBottom: 6,
+};
+
 const controlsPanelStyle: React.CSSProperties = {
-  width: 360,
+  width: 120,
   flexShrink: 0,
   background: "#1a1a24",
-  padding: "1.5rem",
+  padding: "0.5rem",
   borderRadius: 8,
   border: "1px solid #333",
   boxShadow: "0 0 20px rgba(0,255,136,0.1)",
