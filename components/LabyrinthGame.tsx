@@ -132,6 +132,7 @@ export default function LabyrinthGame() {
     x: number;
     y: number;
   } | null>(null);
+  const [mazeZoom, setMazeZoom] = useState(1);
   const [gameStarted, setGameStarted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playerNames, setPlayerNames] = useState<string[]>(() =>
@@ -569,7 +570,7 @@ export default function LabyrinthGame() {
       const d = map[e.key];
       if (d) {
         if (movesLeftRef.current <= 0 || winnerRef.current !== null || !lab) return;
-        const jumpOnly = e.shiftKey;
+        const jumpOnly = e.shiftKey; // Shift+Arrow = jump
         doMove(d[0], d[1], jumpOnly);
         e.preventDefault();
       }
@@ -1036,21 +1037,24 @@ export default function LabyrinthGame() {
       )}
 
       <div style={mazeAreaStyle}>
+        <div style={mazeZoomControlsStyle}>
+          <button onClick={() => setMazeZoom((z) => Math.max(0.5, z - 0.25))} style={mazeZoomButtonStyle} title="Zoom out">−</button>
+          <span style={{ fontSize: "0.8rem", color: "#888", minWidth: 36, textAlign: "center" }}>{Math.round(mazeZoom * 100)}%</span>
+          <button onClick={() => setMazeZoom((z) => Math.min(2, z + 0.25))} style={mazeZoomButtonStyle} title="Zoom in">+</button>
+        </div>
         <div
           className="maze-wrap"
           style={{
             ...mazeWrapStyle,
-            position: "absolute",
-            left: "50%",
-            top: "50%",
-            transform: "translate(-50%, -50%)",
+            marginTop: MAZE_MARGIN,
           }}
         >
         <div
           className="maze"
           style={{
             ...mazeStyle,
-            gridTemplateColumns: `repeat(${lab.width}, ${CELL_SIZE}px)`,
+            gridTemplateColumns: `repeat(${lab.width}, ${CELL_SIZE * mazeZoom}px)`,
+            gridTemplateRows: lab ? `repeat(${lab.height}, ${CELL_SIZE * mazeZoom}px)` : undefined,
           }}
         >
           {Array.from({ length: lab.height }).map((_, y) =>
@@ -1088,16 +1092,43 @@ export default function LabyrinthGame() {
                     }}
                   />
                 );
+                const dirHintStyle: React.CSSProperties = {
+                  position: "absolute",
+                  fontSize: "0.85rem",
+                  fontWeight: "bold",
+                  textShadow: "0 0 4px rgba(0,0,0,1), 0 1px 3px rgba(0,0,0,1)",
+                  padding: "2px 4px",
+                  borderRadius: 4,
+                  background: "rgba(0,0,0,0.85)",
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  zIndex: 2,
+                };
                 const dirIndicators = pi === currentPlayer && cp && !moveDisabled ? (
                   <>
-                    {canMoveUp && <span style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", fontSize: "0.6rem", color: "#00ff88", fontWeight: "bold" }}>↑{movesLeft}</span>}
-                    {canMoveDown && <span style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", fontSize: "0.6rem", color: "#00ff88", fontWeight: "bold" }}>↓{movesLeft}</span>}
-                    {canMoveLeft && <span style={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", fontSize: "0.6rem", color: "#00ff88", fontWeight: "bold" }}>←{movesLeft}</span>}
-                    {canMoveRight && <span style={{ position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)", fontSize: "0.6rem", color: "#00ff88", fontWeight: "bold" }}>→{movesLeft}</span>}
-                    {canJumpUp && <span style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", fontSize: "0.6rem", color: "#66aaff", fontWeight: "bold" }}>J↑{cp.jumps ?? 0}</span>}
-                    {canJumpDown && <span style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", fontSize: "0.6rem", color: "#66aaff", fontWeight: "bold" }}>J↓{cp.jumps ?? 0}</span>}
-                    {canJumpLeft && <span style={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", fontSize: "0.6rem", color: "#66aaff", fontWeight: "bold" }}>J←{cp.jumps ?? 0}</span>}
-                    {canJumpRight && <span style={{ position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)", fontSize: "0.6rem", color: "#66aaff", fontWeight: "bold" }}>J→{cp.jumps ?? 0}</span>}
+                    {(canMoveUp || canJumpUp) && (
+                      <span style={{ ...dirHintStyle, top: -4, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                        {canMoveUp && <span style={{ color: "#00ff88" }}>↑{movesLeft}</span>}
+                        {canJumpUp && <span style={{ color: "#66aaff", fontSize: "0.75rem" }}>J↑{cp.jumps ?? 0}</span>}
+                      </span>
+                    )}
+                    {(canMoveDown || canJumpDown) && (
+                      <span style={{ ...dirHintStyle, bottom: -4, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                        {canMoveDown && <span style={{ color: "#00ff88" }}>↓{movesLeft}</span>}
+                        {canJumpDown && <span style={{ color: "#66aaff", fontSize: "0.75rem" }}>J↓{cp.jumps ?? 0}</span>}
+                      </span>
+                    )}
+                    {(canMoveLeft || canJumpLeft) && (
+                      <span style={{ ...dirHintStyle, left: -4, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 4 }}>
+                        {canMoveLeft && <span style={{ color: "#00ff88" }}>←{movesLeft}</span>}
+                        {canJumpLeft && <span style={{ color: "#66aaff", fontSize: "0.75rem" }}>J←{cp.jumps ?? 0}</span>}
+                      </span>
+                    )}
+                    {(canMoveRight || canJumpRight) && (
+                      <span style={{ ...dirHintStyle, right: -4, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 4 }}>
+                        {canMoveRight && <span style={{ color: "#00ff88" }}>→{movesLeft}</span>}
+                        {canJumpRight && <span style={{ color: "#66aaff", fontSize: "0.75rem" }}>J→{cp.jumps ?? 0}</span>}
+                      </span>
+                    )}
                   </>
                 ) : null;
                 content = (
@@ -1213,6 +1244,7 @@ export default function LabyrinthGame() {
               const isTappable = (teleportPicker && isTeleportOption && !catapultMode) || (!moveDisabled && !catapultMode && (cellClass.includes("path") || !!jumpTarget));
               const isCatapultCell = catapultMode && teleportPicker && teleportPicker.from[0] === x && teleportPicker.from[1] === y && pi === currentPlayer;
 
+              const effectiveCellSize = CELL_SIZE * mazeZoom;
               return (
                 <div
                   key={`${x}-${y}`}
@@ -1220,6 +1252,10 @@ export default function LabyrinthGame() {
                   style={{
                     ...cellStyle,
                     ...cellBg,
+                    width: effectiveCellSize,
+                    height: effectiveCellSize,
+                    minWidth: effectiveCellSize,
+                    minHeight: effectiveCellSize,
                     position: "relative",
                     cursor: isTappable ? "pointer" : isCatapultCell ? "grab" : undefined,
                     touchAction: isTappable || isCatapultCell ? "manipulation" : undefined,
@@ -1362,30 +1398,113 @@ export default function LabyrinthGame() {
           </div>
         </div>
         <div style={{ ...controlsSectionStyle, borderColor: "#66aaff", background: (cp?.jumps ?? 0) > 0 ? "#1e2e3e22" : undefined }}>
-          <div style={{ ...controlsSectionLabelStyle, color: "#66aaff" }}>Jump {(cp?.jumps ?? 0) > 0 && `×${cp?.jumps ?? 0}`}</div>
+          <div style={{ ...controlsSectionLabelStyle, color: "#66aaff" }}>Jump {(cp?.jumps ?? 0) > 0 && `×${cp?.jumps ?? 0}`} <span style={{ fontSize: "0.65rem", color: "#888", fontWeight: "normal" }}>(Shift+Arrow)</span></div>
           <div className="jump-buttons" style={{ ...moveButtonsStyle, display: "grid", gridTemplateColumns: "repeat(3, 2.5rem)", gridTemplateRows: "repeat(3, 2.5rem)", gap: 2, alignSelf: "center", padding: 4, borderRadius: 8, border: "2px solid #66aaff" }}>
-            <button onClick={() => doMove(0, -1, true)} disabled={!canJumpUp} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 1 }} title="Jump up">J↑</button>
-            <button onClick={() => doMove(-1, 0, true)} disabled={!canJumpLeft} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 1, gridRow: 2 }} title="Jump left">J←</button>
-            <button onClick={() => doMove(1, 0, true)} disabled={!canJumpRight} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 3, gridRow: 2 }} title="Jump right">J→</button>
-            <button onClick={() => doMove(0, 1, true)} disabled={!canJumpDown} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 3 }} title="Jump down">J↓</button>
+            <button onClick={() => doMove(0, -1, true)} disabled={!canJumpUp} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 1 }} title="Jump up (Shift+↑)">J↑</button>
+            <button onClick={() => doMove(-1, 0, true)} disabled={!canJumpLeft} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 1, gridRow: 2 }} title="Jump left (Shift+←)">J←</button>
+            <button onClick={() => doMove(1, 0, true)} disabled={!canJumpRight} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 3, gridRow: 2 }} title="Jump right (Shift+→)">J→</button>
+            <button onClick={() => doMove(0, 1, true)} disabled={!canJumpDown} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 3 }} title="Jump down (Shift+↓)">J↓</button>
           </div>
         </div>
-
-        {winner !== null && (
-          <div className="won" style={wonStyle}>
-            *** Player {winner + 1} WINS! ***
-          </div>
-        )}
 
         {error && <div className="error" style={errorStyle}>{error}</div>}
       </div>
         </div>
       </div>
+
+      {winner !== null && (
+        <div style={gameOverOverlayStyle} onClick={(e) => e.target === e.currentTarget && newGame()}>
+          <div style={gameOverModalStyle} onClick={(e) => e.stopPropagation()}>
+            <h2 style={gameOverTitleStyle}>
+              {winner >= 0 ? "🏆 Victory!" : "💀 Game Over"}
+            </h2>
+            <p style={{ ...gameOverResultStyle, color: winner >= 0 ? "#00ff88" : "#ff6666" }}>
+              {winner >= 0
+                ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
+                : "Monsters win!"}
+            </p>
+            <div style={gameOverStatsStyle}>
+              {lab.players.map((p, i) => (
+                <div key={i} style={{ ...gameOverStatRowStyle, color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#888") }}>
+                  <span style={{ fontWeight: "bold" }}>{playerNames[i] ?? `Player ${i + 1}`}</span>
+                  {lab.eliminatedPlayers.has(i) && <span style={{ marginLeft: 6, color: "#ff6666" }}>(out)</span>}
+                  <span style={{ marginLeft: 8, color: "#aaa", fontSize: "0.9rem" }}>
+                    Turns: {playerTurns[i] ?? 0} · Moves: {playerMoves[i] ?? 0} · 💎 {p?.diamonds ?? 0}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <button onClick={newGame} style={gameOverRestartButtonStyle}>
+              Restart Game
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 const HEADER_HEIGHT = 64;
+
+const gameOverOverlayStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.8)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1100,
+};
+
+const gameOverModalStyle: React.CSSProperties = {
+  background: "#1a1a24",
+  padding: "2rem",
+  borderRadius: 12,
+  border: "1px solid #333",
+  boxShadow: "0 0 40px rgba(0,255,136,0.2)",
+  minWidth: 320,
+  maxWidth: 400,
+};
+
+const gameOverTitleStyle: React.CSSProperties = {
+  margin: "0 0 0.5rem 0",
+  color: "#00ff88",
+  fontSize: "1.5rem",
+  fontWeight: "bold",
+  textAlign: "center",
+};
+
+const gameOverResultStyle: React.CSSProperties = {
+  margin: "0 0 1.5rem 0",
+  fontSize: "1.2rem",
+  textAlign: "center",
+  color: "#c0c0c0",
+};
+
+const gameOverStatsStyle: React.CSSProperties = {
+  marginBottom: "1.5rem",
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+};
+
+const gameOverStatRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
+const gameOverRestartButtonStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "0.75rem 1.5rem",
+  fontSize: "1rem",
+  fontWeight: "bold",
+  background: "#00ff88",
+  color: "#0a0a0f",
+  border: "none",
+  borderRadius: 8,
+  cursor: "pointer",
+};
 
 const gamePaneStyle: React.CSSProperties = {
   position: "fixed",
@@ -1638,12 +1757,46 @@ const modalRowStyle: React.CSSProperties = {
   marginBottom: "0.75rem",
 };
 
+const MAZE_MARGIN = 16;
+
 const mazeAreaStyle: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   position: "relative",
   overflow: "auto",
-  paddingTop: 12,
+  padding: MAZE_MARGIN,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  justifyContent: "flex-start",
+};
+
+const mazeZoomControlsStyle: React.CSSProperties = {
+  position: "sticky",
+  top: 0,
+  left: 0,
+  zIndex: 5,
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+  marginBottom: 8,
+  background: "#1a1a24",
+  padding: "4px 8px",
+  borderRadius: 6,
+  border: "1px solid #333",
+};
+
+const mazeZoomButtonStyle: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  padding: 0,
+  fontSize: "1.2rem",
+  lineHeight: 1,
+  background: "#2a2a35",
+  color: "#00ff88",
+  border: "1px solid #444",
+  borderRadius: 4,
+  cursor: "pointer",
 };
 
 const jumpActionButtonStyle: React.CSSProperties = {
