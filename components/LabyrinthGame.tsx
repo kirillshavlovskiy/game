@@ -758,7 +758,7 @@ export default function LabyrinthGame() {
   }, [lab?.width, lab?.height, lab?.numPlayers, winner]);
 
   useEffect(() => {
-    if (!lab || winner !== null || movesLeft > 0 || rolling) return;
+    if (!lab || winner !== null || movesLeft > 0 || rolling || catapultPicker) return;
     if (lab.eliminatedPlayers.has(currentPlayer)) {
       let nextP = (currentPlayer + 1) % lab.numPlayers;
       while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
@@ -769,7 +769,7 @@ export default function LabyrinthGame() {
     }
     const t = setTimeout(() => rollDice(), 400);
     return () => clearTimeout(t);
-  }, [lab, winner, movesLeft, rolling, rollDice, currentPlayer]);
+  }, [lab, winner, movesLeft, rolling, rollDice, currentPlayer, catapultPicker]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -886,13 +886,22 @@ export default function LabyrinthGame() {
       const dy = d.startY - releaseY;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 15) return; // too short a drag
-      const [launchDx, launchDy] = getLaunchDirection(dx, dy);
+      const [rawDx, rawDy] = getLaunchDirection(dx, dy);
+      const [launchDx, launchDy] = [-rawDx, -rawDy];
       if (launchDx !== 0 || launchDy !== 0) {
         handleCatapultLaunch(launchDx, launchDy, dist);
       }
     };
+    const onPointerCancel = () => {
+      catapultDragRef.current = null;
+      setCatapultDragOffset(null);
+    };
     window.addEventListener("pointerup", onPointerUp);
-    return () => window.removeEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+    return () => {
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+    };
   }, [catapultMode, catapultPicker, handleCatapultLaunch]);
 
   const handleCellTap = useCallback(
@@ -1061,6 +1070,14 @@ export default function LabyrinthGame() {
             ))}
           </span>
         </div>
+        {catapultPicker && (
+          <button
+            onClick={() => { setCatapultMode(false); setCatapultPicker(null); setCatapultDragOffset(null); }}
+            style={{ ...buttonStyle, ...headerButtonStyle, background: "#664400", borderColor: "#ffcc00" }}
+          >
+            Cancel slingshot
+          </button>
+        )}
         <button
           onClick={() => setSettingsOpen(true)}
           style={{ ...buttonStyle, ...headerButtonStyle }}
@@ -1108,9 +1125,8 @@ export default function LabyrinthGame() {
         <div style={mainContentStyle}>
       {catapultPicker && (
         <div style={{ ...eliminatedOverlayStyle, pointerEvents: "none" }}>
-          <div style={{ ...eliminatedBannerStyle, borderColor: "#ffcc00", background: "rgba(0,0,0,0.9)", pointerEvents: "auto", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ ...eliminatedBannerStyle, borderColor: "#ffcc00", background: "rgba(0,0,0,0.9)", pointerEvents: "none", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <span style={{ color: "#ffcc00" }}>Slingshot: drag back to aim, release to launch (parabolic arc)</span>
-            <button onClick={() => { setCatapultMode(false); setCatapultPicker(null); setCatapultDragOffset(null); }} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
           </div>
         </div>
       )}
@@ -1325,29 +1341,27 @@ export default function LabyrinthGame() {
                   zIndex: 2,
                 };
                 const dirOffset = 10;
-                const dirIndicators = pi === currentPlayer && cp && !moveDisabled ? (
+                const dirIndicators = pi === currentPlayer && cp && !moveDisabled && !catapultMode ? (
                   <>
-                    {(canMoveUp || canJumpUp) && (
-                      <span style={{ ...dirHintStyle, top: -dirOffset, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
-                        {canMoveUp && <span style={{ color: "#00ff88" }}>↑{movesLeft}</span>}
-                        {canJumpUp && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J↑{cp.jumps ?? 0}</span>}
-                      </span>
-                    )}
+                    <span style={{ ...dirHintStyle, top: -dirOffset, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                      <span style={{ color: "#00ff88" }}>{movesLeft}</span>
+                      {canJumpUp && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J↑{cp.jumps ?? 0}</span>}
+                    </span>
                     {(canMoveDown || canJumpDown) && (
                       <span style={{ ...dirHintStyle, bottom: -dirOffset, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
-                        {canMoveDown && <span style={{ color: "#00ff88" }}>↓{movesLeft}</span>}
+                        {canMoveDown && <span style={{ color: "#00ff88" }}>↓</span>}
                         {canJumpDown && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J↓{cp.jumps ?? 0}</span>}
                       </span>
                     )}
                     {(canMoveLeft || canJumpLeft) && (
                       <span style={{ ...dirHintStyle, left: -dirOffset, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 4 }}>
-                        {canMoveLeft && <span style={{ color: "#00ff88" }}>←{movesLeft}</span>}
+                        {canMoveLeft && <span style={{ color: "#00ff88" }}>←</span>}
                         {canJumpLeft && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J←{cp.jumps ?? 0}</span>}
                       </span>
                     )}
                     {(canMoveRight || canJumpRight) && (
                       <span style={{ ...dirHintStyle, right: -dirOffset, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 4 }}>
-                        {canMoveRight && <span style={{ color: "#00ff88" }}>→{movesLeft}</span>}
+                        {canMoveRight && <span style={{ color: "#00ff88" }}>→</span>}
                         {canJumpRight && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J→{cp.jumps ?? 0}</span>}
                       </span>
                     )}
@@ -1508,12 +1522,15 @@ export default function LabyrinthGame() {
                     minHeight: effectiveCellSize,
                     position: "relative",
                     cursor: isTappable ? "pointer" : isCatapultSourceCell ? "grab" : undefined,
-                    touchAction: isTappable || isCatapultSourceCell ? "manipulation" : undefined,
+                    touchAction: isCatapultSourceCell ? "none" : isTappable ? "manipulation" : undefined,
+                    userSelect: isCatapultSourceCell ? "none" : undefined,
                   }}
                   onClick={() => isTappable && handleCellTap(x, y)}
                   onPointerDown={isCatapultSourceCell ? (e) => {
                     e.preventDefault();
-                    const rect = (e.target as HTMLElement).getBoundingClientRect();
+                    e.stopPropagation();
+                    const cellEl = e.currentTarget as HTMLElement;
+                    const rect = cellEl.getBoundingClientRect();
                     catapultDragRef.current = {
                       startX: rect.left + rect.width / 2,
                       startY: rect.top + rect.height / 2,
@@ -1521,7 +1538,7 @@ export default function LabyrinthGame() {
                       cellY: y,
                     };
                     setCatapultDragOffset({ dx: 0, dy: 0 });
-                    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+                    cellEl.setPointerCapture?.(e.pointerId);
                   } : undefined}
                   onPointerMove={isCatapultSourceCell ? (e) => {
                     const d = catapultDragRef.current;
@@ -1582,7 +1599,8 @@ export default function LabyrinthGame() {
           const dx = catapultDragOffset.dx;
           const dy = catapultDragOffset.dy;
           const strength = Math.sqrt(dx * dx + dy * dy);
-          const [launchDx, launchDy] = getLaunchDirection(dx, dy);
+          const [rawDx, rawDy] = getLaunchDirection(dx, dy);
+          const [launchDx, launchDy] = [-rawDx, -rawDy];
           if (launchDx === 0 && launchDy === 0) return null;
           const traj = lab.getCatapultTrajectory(catapultPicker.from[0], catapultPicker.from[1], launchDx, launchDy, strength, false);
           if (!traj) return null;
