@@ -108,6 +108,7 @@ export default function LabyrinthGame() {
   const [shieldAbsorbed, setShieldAbsorbed] = useState<boolean | null>(null);
   const [shieldGained, setShieldGained] = useState<boolean | null>(null);
   const [bombGained, setBombGained] = useState<boolean | null>(null);
+  const [hiddenGemTeleport, setHiddenGemTeleport] = useState<boolean | null>(null);
   const [cellsRevealed, setCellsRevealed] = useState<number | null>(null);
   const [eliminatedByMonster, setEliminatedByMonster] = useState<{
     playerIndex: number;
@@ -235,6 +236,12 @@ export default function LabyrinthGame() {
   }, [bombGained]);
 
   useEffect(() => {
+    if (hiddenGemTeleport === null) return;
+    const t = setTimeout(() => setHiddenGemTeleport(null), 1500);
+    return () => clearTimeout(t);
+  }, [hiddenGemTeleport]);
+
+  useEffect(() => {
     if (cellsRevealed === null) return;
     const t = setTimeout(() => setCellsRevealed(null), 2000);
     return () => clearTimeout(t);
@@ -269,6 +276,7 @@ export default function LabyrinthGame() {
     setShieldAbsorbed(null);
     setShieldGained(null);
     setBombGained(null);
+    setHiddenGemTeleport(null);
     setCellsRevealed(null);
     setEliminatedByMonster(null);
     setTeleportAnimation(null);
@@ -319,6 +327,7 @@ export default function LabyrinthGame() {
         setShieldAbsorbed(null);
         setShieldGained(null);
         setBombGained(null);
+        setHiddenGemTeleport(null);
         setCellsRevealed(null);
         setTeleportAnimation(null);
         setCatapultMode(false);
@@ -418,6 +427,7 @@ export default function LabyrinthGame() {
         jumps: p.jumps ?? 0,
         diamonds: p.diamonds ?? 0,
         shield: p.shield ?? 0,
+        bombs: p.bombs ?? 0,
       }));
       next.hiddenCells = new Map(lab.hiddenCells);
       next.webPositions = [...(lab.webPositions || [])];
@@ -463,7 +473,7 @@ export default function LabyrinthGame() {
           if (cell && isBombCell(cell)) {
             p.bombs = (p.bombs ?? 0) + 1;
             setBombGained(true);
-            next.grid[p.y][p.x] = PATH;
+            // Bomb stays on cell so other players can collect it too
           }
           if (cell && isMagicCell(cell)) {
             const magicX = p.x;
@@ -496,6 +506,41 @@ export default function LabyrinthGame() {
             const totalDiamonds = next.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
             const revealed = next.revealHiddenCells(totalDiamonds);
             if (revealed > 0) setCellsRevealed(revealed);
+            // Random hidden gem in some diamonds: shield, jump, or teleport
+            if (Math.random() < 0.4) {
+              const gems = ["shield", "jump", "teleport"] as const;
+              const gem = gems[Math.floor(Math.random() * gems.length)];
+              if (gem === "shield") {
+                p.shield = (p.shield ?? 0) + 1;
+                setShieldGained(true);
+              } else if (gem === "jump") {
+                p.jumps = (p.jumps ?? 0) + 1;
+                setJumpAdded(1);
+              } else {
+                setHiddenGemTeleport(true);
+                const fromX = p.x;
+                const fromY = p.y;
+                const playerToTeleport = currentPlayer;
+                if (teleportTimerRef.current) {
+                  clearTimeout(teleportTimerRef.current);
+                  teleportTimerRef.current = null;
+                }
+                teleportTimerRef.current = setTimeout(() => {
+                  teleportTimerRef.current = null;
+                  setLab((prev) => {
+                    if (!prev || winnerRef.current !== null) return prev;
+                    const cp = prev.players[playerToTeleport];
+                    if (!cp || cp.x !== fromX || cp.y !== fromY) return prev;
+                    if (prev.eliminatedPlayers.has(playerToTeleport)) return prev;
+                    const options = prev.getTeleportOptions(playerToTeleport, 6);
+                    if (options.length > 0) {
+                      setTeleportPicker({ playerIndex: playerToTeleport, from: [fromX, fromY], options });
+                    }
+                    return prev;
+                  });
+                }, 400);
+              }
+            }
           }
         }
         next.moveMonsters({ prevX, prevY, playerIndex: currentPlayer });
@@ -570,6 +615,7 @@ export default function LabyrinthGame() {
           jumps: p.jumps ?? 0,
           diamonds: p.diamonds ?? 0,
           shield: p.shield ?? 0,
+          bombs: p.bombs ?? 0,
         }));
         next.goalX = prev.goalX;
         next.goalY = prev.goalY;
@@ -663,7 +709,7 @@ export default function LabyrinthGame() {
       const { playerIndex, from } = catapultPicker;
       const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
       next.grid = lab.grid.map((r) => [...r]);
-      next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0 }));
+      next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
       next.hiddenCells = new Map(lab.hiddenCells);
       next.webPositions = [...(lab.webPositions || [])];
       next.goalX = lab.goalX;
@@ -727,7 +773,7 @@ export default function LabyrinthGame() {
       const { playerIndex, from } = teleportPicker;
       const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
       next.grid = lab.grid.map((r) => [...r]);
-      next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0 }));
+      next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
       next.hiddenCells = new Map(lab.hiddenCells);
       next.webPositions = [...(lab.webPositions || [])];
       next.goalX = lab.goalX;
@@ -988,7 +1034,7 @@ export default function LabyrinthGame() {
         </div>
       )}
 
-      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || bombGained !== null || cellsRevealed !== null) && (
+      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || bombGained !== null || hiddenGemTeleport !== null || cellsRevealed !== null) && (
         <div style={effectToastStyle} className="effect-toast">
           {bonusAdded !== null && diceResult !== null && (
             <span style={{ color: "#ffcc00" }}>×{bonusAdded / diceResult} moves!</span>
@@ -1006,6 +1052,9 @@ export default function LabyrinthGame() {
           )}
           {bombGained !== null && (
             <span style={{ color: "#ff8844", marginLeft: 12 }}>💣 +1 Bomb!</span>
+          )}
+          {hiddenGemTeleport !== null && (
+            <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ Hidden gem: Teleport!</span>
           )}
           {cellsRevealed !== null && (
             <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ {cellsRevealed} hidden cells revealed!</span>
