@@ -149,6 +149,20 @@ export default function LabyrinthGame() {
   const winnerRef = useRef(winner);
   const currentPlayerRef = useRef(currentPlayer);
   const teleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hiddenGemTeleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (teleportTimerRef.current) {
+        clearTimeout(teleportTimerRef.current);
+        teleportTimerRef.current = null;
+      }
+      if (hiddenGemTeleportTimerRef.current) {
+        clearTimeout(hiddenGemTeleportTimerRef.current);
+        hiddenGemTeleportTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     movesLeftRef.current = movesLeft;
@@ -261,6 +275,10 @@ export default function LabyrinthGame() {
       clearTimeout(teleportTimerRef.current);
       teleportTimerRef.current = null;
     }
+    if (hiddenGemTeleportTimerRef.current) {
+      clearTimeout(hiddenGemTeleportTimerRef.current);
+      hiddenGemTeleportTimerRef.current = null;
+    }
     setLab(l);
     setCurrentPlayer(0);
     movesLeftRef.current = 0;
@@ -312,6 +330,14 @@ export default function LabyrinthGame() {
       const h = data.height ?? size;
       const l = new Labyrinth(w, h, 0, n, difficulty);
       if (l.loadGrid(data.grid)) {
+        if (teleportTimerRef.current) {
+          clearTimeout(teleportTimerRef.current);
+          teleportTimerRef.current = null;
+        }
+        if (hiddenGemTeleportTimerRef.current) {
+          clearTimeout(hiddenGemTeleportTimerRef.current);
+          hiddenGemTeleportTimerRef.current = null;
+        }
         setLab(l);
         setCurrentPlayer(0);
         movesLeftRef.current = 0;
@@ -413,6 +439,10 @@ export default function LabyrinthGame() {
       if (teleportTimerRef.current) {
         clearTimeout(teleportTimerRef.current);
         teleportTimerRef.current = null;
+      }
+      if (hiddenGemTeleportTimerRef.current) {
+        clearTimeout(hiddenGemTeleportTimerRef.current);
+        hiddenGemTeleportTimerRef.current = null;
       }
       setTeleportPicker(null);
       setCatapultPicker(null);
@@ -525,8 +555,12 @@ export default function LabyrinthGame() {
                   clearTimeout(teleportTimerRef.current);
                   teleportTimerRef.current = null;
                 }
-                teleportTimerRef.current = setTimeout(() => {
-                  teleportTimerRef.current = null;
+                if (hiddenGemTeleportTimerRef.current) {
+                  clearTimeout(hiddenGemTeleportTimerRef.current);
+                  hiddenGemTeleportTimerRef.current = null;
+                }
+                hiddenGemTeleportTimerRef.current = setTimeout(() => {
+                  hiddenGemTeleportTimerRef.current = null;
                   setLab((prev) => {
                     if (!prev || winnerRef.current !== null) return prev;
                     const cp = prev.players[playerToTeleport];
