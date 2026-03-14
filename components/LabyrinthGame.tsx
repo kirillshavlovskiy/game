@@ -1222,6 +1222,7 @@ export default function LabyrinthGame() {
             Array.from({ length: lab.width }).map((_, x) => {
               const monster = lab.monsters.find((m) => m.x === x && m.y === y);
               const pi = playerCells[`${x},${y}`];
+              const isCatapultSourceCell = catapultMode && catapultPicker && catapultPicker.from[0] === x && catapultPicker.from[1] === y && pi === currentPlayer;
               const isTeleportOption = teleportPicker?.options.some(([ox, oy]) => ox === x && oy === y);
               let content: React.ReactNode = null;
               let cellClass = "cell";
@@ -1444,7 +1445,6 @@ export default function LabyrinthGame() {
               const jumpTarget = jumpTargets.find((t) => t.x === x && t.y === y);
 
               const isTappable = (teleportPicker && isTeleportOption && !catapultMode) || (!moveDisabled && !catapultMode && (cellClass.includes("path") || !!jumpTarget));
-              const isCatapultSourceCell = catapultMode && catapultPicker && catapultPicker.from[0] === x && catapultPicker.from[1] === y && pi === currentPlayer;
 
               const effectiveCellSize = CELL_SIZE * mazeZoom;
               const isCurrentPlayerCell = cp && x === cp.x && y === cp.y;
