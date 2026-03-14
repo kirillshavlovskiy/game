@@ -12,7 +12,7 @@ export const JUMP = "J";
 export const SHIELD = "H";
 export const BOMB = "B";
 
-export type MonsterType = "V" | "Z" | "S" | "G"; // Vampire, Zombie, Spider, Ghost
+export type MonsterType = "V" | "Z" | "S" | "G" | "K"; // Vampire, Zombie, Spider, Ghost, Skeleton
 
 export interface Monster {
   x: number;
@@ -22,11 +22,11 @@ export interface Monster {
 }
 
 export function isMonsterType(type: string): type is MonsterType {
-  return type === "V" || type === "Z" || type === "S" || type === "G";
+  return type === "V" || type === "Z" || type === "S" || type === "G" || type === "K";
 }
 
 export function getMonsterName(type: MonsterType): string {
-  return type === "V" ? "Vampire" : type === "Z" ? "Zombie" : type === "S" ? "Spider" : "Ghost";
+  return type === "V" ? "Vampire" : type === "Z" ? "Zombie" : type === "S" ? "Spider" : type === "G" ? "Ghost" : "Skeleton";
 }
 
 export function isMultiplierCell(cell: string): cell is "2" | "3" | "4" {
@@ -340,7 +340,7 @@ export class Labyrinth {
   }
 
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "Z", "S", "G"];
+    const types: MonsterType[] = ["V", "Z", "S", "G", "K"];
     const intersections: [number, number][] = [];
     const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
@@ -370,7 +370,7 @@ export class Labyrinth {
           chosen.push([x, y]);
           this.monsters.push({
             x, y,
-            type: types[(this.monsters.length) % 4],
+            type: types[(this.monsters.length) % 5],
             patrolArea,
           });
         }
@@ -381,13 +381,16 @@ export class Labyrinth {
   /** Optional swapHint: when a player just moved from (prevX, prevY) to the monster's cell, force monster to move to prev so they pass. */
   moveMonsters(swapHint?: { prevX: number; prevY: number; playerIndex: number }): void {
     for (const m of this.monsters) {
-      // Consider all adjacent walkable cells - monsters can roam the entire labyrinth
+      // Ghosts move through walls; other monsters need walkable cells
+      const canPhase = m.type === "G";
       const adjacent: [number, number][] = [];
       for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
         const nx = m.x + dx;
         const ny = m.y + dy;
-        if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height && isWalkable(this.grid[ny][nx])) {
-          adjacent.push([nx, ny]);
+        if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
+          if (canPhase || isWalkable(this.grid[ny][nx])) {
+            adjacent.push([nx, ny]);
+          }
         }
       }
       if (adjacent.length === 0) continue;
@@ -412,9 +415,11 @@ export class Labyrinth {
     }
   }
 
-  checkMonsterCollision(): { playerIndex: number; monsterType: MonsterType } | null {
+  /** Check monster collision. Pass activePlayerIndex to only check the player whose turn it is (inactive players are protected). */
+  checkMonsterCollision(activePlayerIndex?: number): { playerIndex: number; monsterType: MonsterType } | null {
+    const indices = activePlayerIndex !== undefined ? [activePlayerIndex] : Array.from({ length: this.players.length }, (_, i) => i);
     for (const m of this.monsters) {
-      for (let i = 0; i < this.players.length; i++) {
+      for (const i of indices) {
         if (this.eliminatedPlayers.has(i)) continue;
         const p = this.players[i];
         if (p && p.x === m.x && p.y === m.y) {

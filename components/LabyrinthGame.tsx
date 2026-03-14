@@ -132,6 +132,7 @@ export default function LabyrinthGame() {
     playerIndex: number;
   } | null>(null);
   const catapultDragRef = useRef<{ startX: number; startY: number; cellX: number; cellY: number } | null>(null);
+  const [catapultDragOffset, setCatapultDragOffset] = useState<{ dx: number; dy: number } | null>(null);
   const [jumpAnimation, setJumpAnimation] = useState<{
     playerIndex: number;
     x: number;
@@ -150,6 +151,7 @@ export default function LabyrinthGame() {
   const currentPlayerRef = useRef(currentPlayer);
   const teleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hiddenGemTeleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentPlayerCellRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     return () => {
@@ -171,6 +173,17 @@ export default function LabyrinthGame() {
     winnerRef.current = winner;
     currentPlayerRef.current = currentPlayer;
   }, [winner, currentPlayer]);
+
+  useEffect(() => {
+    if (winner !== null || !lab || lab.eliminatedPlayers.has(currentPlayer)) return;
+    const el = currentPlayerCellRef.current;
+    if (el) {
+      const id = requestAnimationFrame(() => {
+        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      });
+      return () => cancelAnimationFrame(id);
+    }
+  }, [currentPlayer, lab, winner]);
 
   useEffect(() => {
     setPlayerNames((prev) => {
@@ -302,6 +315,7 @@ export default function LabyrinthGame() {
     setTeleportPicker(null);
     setCatapultPicker(null);
     setCatapultMode(false);
+    setCatapultDragOffset(null);
     setCatapultAnimation(null);
     setBombExplosion(null);
   }, [getDimensions, numPlayers, difficulty]);
@@ -358,6 +372,7 @@ export default function LabyrinthGame() {
         setTeleportAnimation(null);
         setCatapultMode(false);
         setCatapultPicker(null);
+        setCatapultDragOffset(null);
         setCatapultAnimation(null);
         setBombExplosion(null);
       } else {
@@ -447,6 +462,7 @@ export default function LabyrinthGame() {
       setTeleportPicker(null);
       setCatapultPicker(null);
       setCatapultMode(false);
+      setCatapultDragOffset(null);
       movesLeftRef.current--;
       setBonusAdded(null);
       setJumpAdded(null);
@@ -578,7 +594,7 @@ export default function LabyrinthGame() {
           }
         }
         next.moveMonsters({ prevX, prevY, playerIndex: currentPlayer });
-        const collision = next.checkMonsterCollision();
+        const collision = next.checkMonsterCollision(currentPlayer);
         if (collision) {
           const usedShield = next.tryConsumeShield(collision.playerIndex);
           if (usedShield) {
@@ -763,7 +779,7 @@ export default function LabyrinthGame() {
           return arr;
         });
         next.moveMonsters({ prevX: from[0], prevY: from[1], playerIndex });
-        const collision = next.checkMonsterCollision();
+        const collision = next.checkMonsterCollision(playerIndex);
         if (collision) {
           const usedShield = next.tryConsumeShield(collision.playerIndex);
           if (usedShield) setShieldAbsorbed(true);
@@ -784,6 +800,7 @@ export default function LabyrinthGame() {
     const onPointerUp = (e: PointerEvent) => {
       const d = catapultDragRef.current;
       catapultDragRef.current = null;
+      setCatapultDragOffset(null);
       if (!d) return;
       const releaseX = e.clientX;
       const releaseY = e.clientY;
@@ -1045,7 +1062,7 @@ export default function LabyrinthGame() {
             {catapultPicker ? (
               <>
                 <span style={{ color: "#ffcc00" }}>Catapult: drag marker back, then release to launch</span>
-                <button onClick={() => { setCatapultMode(false); setCatapultPicker(null); }} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
+                <button onClick={() => { setCatapultMode(false); setCatapultPicker(null); setCatapultDragOffset(null); }} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
               </>
             ) : (
               <>
@@ -1211,7 +1228,7 @@ export default function LabyrinthGame() {
 
               const monsterIcon = monster ? (
                 <span key="m" className="monster-icon" style={{ fontSize: "1.4rem", lineHeight: 1 }} title={getMonsterName(monster.type)}>
-                  {monster.type === "V" ? "🧛" : monster.type === "Z" ? "🧟" : monster.type === "G" ? "👻" : "🕷"}
+                  {monster.type === "V" ? "🧛" : monster.type === "Z" ? "🧟" : monster.type === "G" ? "👻" : monster.type === "K" ? "💀" : "🕷"}
                 </span>
               ) : null;
               if (monster) cellClass += " path monster";
@@ -1227,11 +1244,25 @@ export default function LabyrinthGame() {
                   (catapultAnimation?.to[0] === x && catapultAnimation?.to[1] === y && catapultAnimation?.playerIndex === pi);
                 const isJumpLanding =
                   jumpAnimation?.x === x && jumpAnimation?.y === y && jumpAnimation?.playerIndex === pi;
+                const isCatapultStretch = isCatapultSourceCell && catapultDragOffset && (catapultDragOffset.dx !== 0 || catapultDragOffset.dy !== 0);
+                const stretchDist = isCatapultStretch
+                  ? Math.sqrt(catapultDragOffset!.dx ** 2 + catapultDragOffset!.dy ** 2)
+                  : 0;
+                const stretchAmount = Math.min(stretchDist / 40, 0.7);
+                const stretchX = stretchDist > 0 ? stretchAmount * Math.abs(catapultDragOffset!.dx) / stretchDist : 0;
+                const stretchY = stretchDist > 0 ? stretchAmount * Math.abs(catapultDragOffset!.dy) / stretchDist : 0;
+                const markerStretchStyle: React.CSSProperties = isCatapultStretch && catapultDragOffset
+                  ? {
+                      transform: `scale(${1 + stretchX}, ${1 + stretchY})`,
+                      transformOrigin: `${catapultDragOffset.dx >= 0 ? "right" : "left"} ${catapultDragOffset.dy >= 0 ? "bottom" : "top"}`,
+                    }
+                  : {};
                 const playerMarker = (
                   <div
                     className={`marker ${pi === currentPlayer ? "active" : ""} ${isTeleportRise ? "teleport-rise" : ""} ${isJumpLanding ? "jump-landing" : ""}`}
                     style={{
                       ...markerStyle,
+                      ...markerStretchStyle,
                       background: c,
                       boxShadow: pi === currentPlayer ? `0 0 8px ${c}, 0 0 12px ${c}` : undefined,
                     }}
@@ -1416,9 +1447,11 @@ export default function LabyrinthGame() {
               const isCatapultSourceCell = catapultMode && catapultPicker && catapultPicker.from[0] === x && catapultPicker.from[1] === y && pi === currentPlayer;
 
               const effectiveCellSize = CELL_SIZE * mazeZoom;
+              const isCurrentPlayerCell = cp && x === cp.x && y === cp.y;
               return (
                 <div
                   key={`${x}-${y}`}
+                  ref={isCurrentPlayerCell ? (el) => { currentPlayerCellRef.current = el; } : undefined}
                   className={cellClass}
                   style={{
                     ...cellStyle,
@@ -1441,7 +1474,15 @@ export default function LabyrinthGame() {
                       cellX: x,
                       cellY: y,
                     };
+                    setCatapultDragOffset({ dx: 0, dy: 0 });
                     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+                  } : undefined}
+                  onPointerMove={isCatapultSourceCell ? (e) => {
+                    const d = catapultDragRef.current;
+                    if (!d) return;
+                    const dx = d.startX - e.clientX;
+                    const dy = d.startY - e.clientY;
+                    setCatapultDragOffset({ dx, dy });
                   } : undefined}
                 >
                   {content}
