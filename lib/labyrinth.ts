@@ -269,7 +269,15 @@ export class Labyrinth {
       this.hiddenCells.set(`${x},${y}`, hiddenTypes[i % hiddenTypes.length]);
       // Grid stays PATH until revealed
     }
-    this._addMonsters(rest3);
+    const excludeFromMonsters: [number, number][] = [
+      ...multCells,
+      ...magicCells,
+      ...catapultCells,
+      ...jumpCells,
+      ...diamondCells,
+      ...hiddenCellCoords,
+    ];
+    this._addMonsters(excludeFromMonsters);
     this._addSpiderWebs(rest4.length > 0 ? rest4 : rest3);
   }
 
@@ -335,8 +343,11 @@ export class Labyrinth {
       }
     }
     shuffle(intersections);
+    const area = this.width * this.height;
     const blocks10x10 = (this.width / 10) * (this.height / 10);
-    const targetMonsters = Math.max(1, Math.floor(blocks10x10 * this.monsterDensity));
+    const fromArea = Math.floor((area / 80) * this.monsterDensity);
+    const minPerDifficulty = this.monsterDensity * 2;
+    const targetMonsters = Math.max(minPerDifficulty, Math.min(intersections.length, fromArea));
     const isSmallMap = this.width * this.height <= 400;
     const baseDist = this.monsterDensity >= 4 ? 2 : this.monsterDensity >= 3 ? 3 : 4;
     const MIN_MONSTER_DIST = isSmallMap ? Math.max(1, baseDist - 1) : baseDist;
