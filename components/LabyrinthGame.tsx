@@ -43,8 +43,9 @@ function getParabolicArcPath(from: [number, number], to: [number, number], cellS
   const dist = Math.sqrt(dx * dx + dy * dy) || 1;
   const ndx = dx / dist;
   const ndy = dy / dist;
-  const perpX = -ndy;
-  const perpY = ndx;
+  const perp1 = [-ndy, ndx];
+  const perp2 = [ndy, -ndx];
+  const [perpX, perpY] = perp1[1] < 0 ? perp1 : perp2;
   const arcHeight = dist * 0.35;
   const pts: string[] = [];
   for (let i = 0; i <= steps; i++) {
@@ -815,7 +816,7 @@ export default function LabyrinthGame() {
   const cp = lab?.players[currentPlayer];
   const gameOver = winner !== null;
   const moveDisabled = movesLeft <= 0 || gameOver || (lab?.eliminatedPlayers.has(currentPlayer) ?? false);
-  const rollDisabled = movesLeft > 0 || gameOver || rolling;
+  const rollDisabled = movesLeft > 0 || gameOver || rolling || !!catapultPicker;
   const showSecretCells = movesLeft > 0;
   const jumpTargets = lab && cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
   const canMoveUp = !moveDisabled && lab?.canMoveOnly(0, -1, currentPlayer);
@@ -886,8 +887,7 @@ export default function LabyrinthGame() {
       const dy = d.startY - releaseY;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 15) return; // too short a drag
-      const [rawDx, rawDy] = getLaunchDirection(dx, dy);
-      const [launchDx, launchDy] = [-rawDx, -rawDy];
+      const [launchDx, launchDy] = getLaunchDirection(-dx, -dy);
       if (launchDx !== 0 || launchDy !== 0) {
         handleCatapultLaunch(launchDx, launchDy, dist);
       }
@@ -1599,8 +1599,7 @@ export default function LabyrinthGame() {
           const dx = catapultDragOffset.dx;
           const dy = catapultDragOffset.dy;
           const strength = Math.sqrt(dx * dx + dy * dy);
-          const [rawDx, rawDy] = getLaunchDirection(dx, dy);
-          const [launchDx, launchDy] = [-rawDx, -rawDy];
+          const [launchDx, launchDy] = getLaunchDirection(-dx, -dy);
           if (launchDx === 0 && launchDy === 0) return null;
           const traj = lab.getCatapultTrajectory(catapultPicker.from[0], catapultPicker.from[1], launchDx, launchDy, strength, false);
           if (!traj) return null;
@@ -1726,7 +1725,7 @@ export default function LabyrinthGame() {
         <button
           onClick={endTurn}
           className="secondary"
-          disabled={winner !== null}
+          disabled={winner !== null || !!catapultPicker}
           style={{ ...buttonStyle, ...secondaryButtonStyle, marginBottom: 6, width: "100%" }}
         >
           End turn

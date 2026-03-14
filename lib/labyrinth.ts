@@ -701,12 +701,14 @@ export class Labyrinth {
     const scaleX = ndx / norm;
     const scaleY = ndy / norm;
     const maxDist = Math.max(this.width, this.height) * 0.8;
-    const strengthScale = 0.15;
+    const strengthScale = 0.2;
     const baseDist = Math.min(maxDist, Math.max(2, strength * strengthScale));
     const dist = useRandom ? baseDist * (0.85 + Math.random() * 0.3) : baseDist;
     const destXClamped = Math.max(0, Math.min(this.width - 1, Math.round(fromX + scaleX * dist)));
     const destYClamped = Math.max(0, Math.min(this.height - 1, Math.round(fromY + scaleY * dist)));
-    const perp = ndx !== 0 ? [-ndy, ndx] : [ndx, -ndy];
+    const perp1 = ndx !== 0 ? [-ndy, ndx] : [ndx, -ndy];
+    const perp2 = ndx !== 0 ? [ndy, -ndx] : [-ndx, ndy];
+    const perp = perp1[1] < 0 ? perp1 : perp2;
     const perpX = perp[0];
     const perpY = perp[1];
     const arcHeight = dist * 0.35;
