@@ -10,6 +10,7 @@ export const MAGIC = "M";
 export const CATAPULT = "C";
 export const JUMP = "J";
 export const SHIELD = "H";
+export const BOMB = "B";
 
 export type MonsterType = "V" | "Z" | "S" | "G"; // Vampire, Zombie, Spider, Ghost
 
@@ -52,6 +53,10 @@ export function isShieldCell(cell: string): boolean {
   return cell === SHIELD;
 }
 
+export function isBombCell(cell: string): boolean {
+  return cell === BOMB;
+}
+
 export function isDiamondCell(cell: string): boolean {
   return /^D\d+$/.test(cell);
 }
@@ -81,7 +86,7 @@ export class Labyrinth {
   numPlayers: number;
   monsterDensity: number;
   grid: string[][];
-  players: Array<{ x: number; y: number; jumps: number; diamonds: number; shield: number }>;
+  players: Array<{ x: number; y: number; jumps: number; diamonds: number; shield: number; bombs: number }>;
   goalX: number;
   goalY: number;
   monsters: Monster[] = [];
@@ -104,7 +109,7 @@ export class Labyrinth {
     this.numPlayers = numPlayers;
     this.monsterDensity = Math.min(4, Math.max(1, monsterDensity));
     this.grid = [];
-    this.players = Array.from({ length: numPlayers }, () => ({ x: 0, y: 0, jumps: 0, diamonds: 0, shield: 0 }));
+    this.players = Array.from({ length: numPlayers }, () => ({ x: 0, y: 0, jumps: 0, diamonds: 0, shield: 0, bombs: 0 }));
     this.goalX = width - 1;
     this.goalY = height - 1;
   }
@@ -234,8 +239,10 @@ export class Labyrinth {
     const catapultCount = Math.max(3, Math.min(8, Math.floor(pathCells.length * 0.04)));
     const jumpCount = Math.max(3, Math.min(8, Math.floor(pathCells.length * 0.04)));
     const diamondCount = Math.max(this.numPlayers * 2, Math.min(this.numPlayers * 4, Math.floor(pathCells.length * 0.08)));
+    const blocks10x10 = (this.width / 10) * (this.height / 10);
+    const bombCount = Math.max(1, Math.min(16, Math.floor(blocks10x10)));
 
-    const total = multCount + magicCount + catapultCount + jumpCount + diamondCount;
+    const total = multCount + magicCount + catapultCount + jumpCount + diamondCount + bombCount;
     if (total > pathCells.length) return;
 
     const multCells = this._pickSpread(pathCells, multCount);
@@ -247,6 +254,8 @@ export class Labyrinth {
     const jumpCells = this._pickSpread(rest2b, jumpCount);
     const rest3 = rest2b.filter((c) => !jumpCells.some((j) => j[0] === c[0] && j[1] === c[1]));
     const diamondCells = this._pickSpread(rest3, diamondCount);
+    const rest3b = rest3.filter((c) => !diamondCells.some((d) => d[0] === c[0] && d[1] === c[1]));
+    const bombCells = this._pickSpread(rest3b, bombCount);
 
     for (let i = 0; i < multCells.length; i++) {
       const [x, y] = multCells[i];
@@ -259,9 +268,10 @@ export class Labyrinth {
       const [x, y] = diamondCells[i];
       this.grid[y][x] = `D${(i % this.numPlayers) + 1}`;
     }
+    for (const [x, y] of bombCells) this.grid[y][x] = BOMB;
     // Add hidden cells (revealed when diamonds collected): magic, jump, multipliers, shield
     const hiddenCount = Math.max(4, Math.min(12, Math.floor(pathCells.length * 0.06)));
-    const rest4 = rest3.filter((c) => !diamondCells.some((d) => d[0] === c[0] && d[1] === c[1]));
+    const rest4 = rest3b.filter((c) => !bombCells.some((b) => b[0] === c[0] && b[1] === c[1]));
     const hiddenCellCoords = this._pickSpread(rest4, hiddenCount);
     const hiddenTypes: string[] = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, MULT_X2, MULT_X3, SHIELD, SHIELD];
     for (let i = 0; i < hiddenCellCoords.length; i++) {
@@ -275,10 +285,11 @@ export class Labyrinth {
       ...catapultCells,
       ...jumpCells,
       ...diamondCells,
+      ...bombCells,
       ...hiddenCellCoords,
     ];
     this._addMonsters(excludeFromMonsters);
-    this._addSpiderWebs(rest4.length > 0 ? rest4 : rest3);
+    this._addSpiderWebs(rest4.length > 0 ? rest4 : rest3b);
   }
 
   private _addSpiderWebs(pathCells: [number, number][]): void {
@@ -424,6 +435,31 @@ export class Labyrinth {
     return true;
   }
 
+  /** Use bomb at player position: explode 3x3 area, kill monsters, destroy walls. Returns true if used. */
+  useBomb(playerIndex: number): { used: boolean; monstersKilled: number; wallsDestroyed: number } {
+    const p = this.players[playerIndex];
+    if (!p || (p.bombs ?? 0) <= 0) return { used: false, monstersKilled: 0, wallsDestroyed: 0 };
+    const cx = p.x;
+    const cy = p.y;
+    const inBlast = (mx: number, my: number) => Math.abs(mx - cx) <= 1 && Math.abs(my - cy) <= 1;
+    const monstersKilled = this.monsters.filter((m) => inBlast(m.x, m.y)).length;
+    this.monsters = this.monsters.filter((m) => !inBlast(m.x, m.y));
+    let wallsDestroyed = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx < 0 || nx >= this.width || ny < 0 || ny >= this.height) continue;
+        if (this.grid[ny][nx] === WALL) {
+          this.grid[ny][nx] = PATH;
+          wallsDestroyed++;
+        }
+      }
+    }
+    p.bombs = (p.bombs ?? 0) - 1;
+    return { used: true, monstersKilled, wallsDestroyed };
+  }
+
   private _addExtraPaths(): void {
     // Prefer walls with 2+ path neighbors - these create loops (alternative routes)
     let walls: [number, number][] = [];
@@ -485,6 +521,7 @@ export class Labyrinth {
       jumps: 0,
       diamonds: 0,
       shield: 0,
+      bombs: 0,
     }));
     this.monsters = [];
     this.eliminatedPlayers = new Set();
@@ -496,9 +533,9 @@ export class Labyrinth {
     for (let y = 1; y < this.height - 1; y++)
       for (let x = 1; x < this.width - 1; x++)
         if (this.grid[y][x] === PATH && (x !== this.goalX || y !== this.goalY) &&
-            !["M", "J", "2", "3", "4", "H"].includes(this.grid[y][x]))
+            !["M", "J", "2", "3", "4", "H", "B"].includes(this.grid[y][x]))
           pathCells.push([x, y]);
-    const hiddenTypes = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, "2", "3", SHIELD, SHIELD];
+    const hiddenTypes = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, "2", "3", SHIELD, SHIELD, BOMB];
     const n = Math.min(6, Math.floor(pathCells.length / 2));
     for (let i = 0; i < n; i++) {
       const idx = Math.floor(Math.random() * pathCells.length);
