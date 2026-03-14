@@ -697,12 +697,15 @@ export class Labyrinth {
     const ndx = Math.sign(dx);
     const ndy = Math.sign(dy);
     if (ndx === 0 && ndy === 0) return null;
+    const norm = Math.sqrt(ndx * ndx + ndy * ndy);
+    const scaleX = ndx / norm;
+    const scaleY = ndy / norm;
     const maxDist = Math.max(this.width, this.height) * 0.8;
     const strengthScale = 0.15;
     const baseDist = Math.min(maxDist, Math.max(2, strength * strengthScale));
     const dist = useRandom ? baseDist * (0.85 + Math.random() * 0.3) : baseDist;
-    const destXClamped = Math.max(0, Math.min(this.width - 1, Math.round(fromX + ndx * dist)));
-    const destYClamped = Math.max(0, Math.min(this.height - 1, Math.round(fromY + ndy * dist)));
+    const destXClamped = Math.max(0, Math.min(this.width - 1, Math.round(fromX + scaleX * dist)));
+    const destYClamped = Math.max(0, Math.min(this.height - 1, Math.round(fromY + scaleY * dist)));
     const perp = ndx !== 0 ? [-ndy, ndx] : [ndx, -ndy];
     const perpX = perp[0];
     const perpY = perp[1];
@@ -711,8 +714,8 @@ export class Labyrinth {
     const steps = 16;
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      const x = fromX + ndx * dist * t + perpX * arcHeight * 4 * t * (1 - t);
-      const y = fromY + ndy * dist * t + perpY * arcHeight * 4 * t * (1 - t);
+      const x = fromX + scaleX * dist * t + perpX * arcHeight * 4 * t * (1 - t);
+      const y = fromY + scaleY * dist * t + perpY * arcHeight * 4 * t * (1 - t);
       arcPoints.push([x, y]);
     }
     let landX = destXClamped;
@@ -741,7 +744,8 @@ export class Labyrinth {
       let x = fromX;
       let y = fromY;
       let lastPath: { x: number; y: number } | null = null;
-      for (let i = 0; i < Math.ceil(dist) + 2; i++) {
+      const stepCount = Math.ceil(dist / norm) + 2;
+      for (let i = 0; i < stepCount; i++) {
         const nx = x + ndx;
         const ny = y + ndy;
         if (nx < 0 || nx >= this.width || ny < 0 || ny >= this.height) break;
