@@ -107,6 +107,7 @@ export default function LabyrinthGame() {
   const [jumpAdded, setJumpAdded] = useState<number | null>(null);
   const [shieldAbsorbed, setShieldAbsorbed] = useState<boolean | null>(null);
   const [shieldGained, setShieldGained] = useState<boolean | null>(null);
+  const [bombGained, setBombGained] = useState<boolean | null>(null);
   const [cellsRevealed, setCellsRevealed] = useState<number | null>(null);
   const [eliminatedByMonster, setEliminatedByMonster] = useState<{
     playerIndex: number;
@@ -135,6 +136,7 @@ export default function LabyrinthGame() {
     x: number;
     y: number;
   } | null>(null);
+  const [bombExplosion, setBombExplosion] = useState<{ x: number; y: number } | null>(null);
   const [mazeZoom, setMazeZoom] = useState(1);
   const [gameStarted, setGameStarted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -227,6 +229,12 @@ export default function LabyrinthGame() {
   }, [shieldGained]);
 
   useEffect(() => {
+    if (bombGained === null) return;
+    const t = setTimeout(() => setBombGained(null), 1500);
+    return () => clearTimeout(t);
+  }, [bombGained]);
+
+  useEffect(() => {
     if (cellsRevealed === null) return;
     const t = setTimeout(() => setCellsRevealed(null), 2000);
     return () => clearTimeout(t);
@@ -260,6 +268,7 @@ export default function LabyrinthGame() {
     setJumpAdded(null);
     setShieldAbsorbed(null);
     setShieldGained(null);
+    setBombGained(null);
     setCellsRevealed(null);
     setEliminatedByMonster(null);
     setTeleportAnimation(null);
@@ -268,6 +277,7 @@ export default function LabyrinthGame() {
     setCatapultPicker(null);
     setCatapultMode(false);
     setCatapultAnimation(null);
+    setBombExplosion(null);
   }, [getDimensions, numPlayers, difficulty]);
 
   const generateWithAI = useCallback(async () => {
@@ -308,11 +318,13 @@ export default function LabyrinthGame() {
         setJumpAdded(null);
         setShieldAbsorbed(null);
         setShieldGained(null);
+        setBombGained(null);
         setCellsRevealed(null);
         setTeleportAnimation(null);
         setCatapultMode(false);
         setCatapultPicker(null);
         setCatapultAnimation(null);
+        setBombExplosion(null);
       } else {
         setError("Invalid maze from AI, using random maze.");
         newGame();
@@ -355,6 +367,34 @@ export default function LabyrinthGame() {
     setMovesLeft(0);
     setDiceResult(null);
     setBonusAdded(null);
+  }, [lab, winner, currentPlayer]);
+
+  const handleUseBomb = useCallback(() => {
+    if (!lab || winner !== null || lab.eliminatedPlayers.has(currentPlayer)) return;
+    const cp = lab.players[currentPlayer];
+    if (!cp || (cp.bombs ?? 0) <= 0 || movesLeftRef.current <= 0) return;
+    const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
+    next.grid = lab.grid.map((r) => [...r]);
+    next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
+    next.hiddenCells = new Map(lab.hiddenCells);
+    next.webPositions = [...(lab.webPositions || [])];
+    next.goalX = lab.goalX;
+    next.goalY = lab.goalY;
+    next.monsters = lab.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+    next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
+    const result = next.useBomb(currentPlayer);
+    if (!result.used) return;
+    setBombExplosion({ x: cp.x, y: cp.y });
+    setLab(next);
+    movesLeftRef.current--;
+    setMovesLeft((m) => Math.max(0, m - 1));
+    setTotalMoves((t) => t + 1);
+    setPlayerMoves((prev) => {
+      const arr = [...prev];
+      if (currentPlayer < arr.length) arr[currentPlayer] = (arr[currentPlayer] ?? 0) + 1;
+      return arr;
+    });
+    setTimeout(() => setBombExplosion(null), 600);
   }, [lab, winner, currentPlayer]);
 
   const doMove = useCallback(
@@ -422,6 +462,7 @@ export default function LabyrinthGame() {
           }
           if (cell && isBombCell(cell)) {
             p.bombs = (p.bombs ?? 0) + 1;
+            setBombGained(true);
             next.grid[p.y][p.x] = PATH;
           }
           if (cell && isMagicCell(cell)) {
@@ -947,7 +988,7 @@ export default function LabyrinthGame() {
         </div>
       )}
 
-      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || cellsRevealed !== null) && (
+      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || bombGained !== null || cellsRevealed !== null) && (
         <div style={effectToastStyle} className="effect-toast">
           {bonusAdded !== null && diceResult !== null && (
             <span style={{ color: "#ffcc00" }}>×{bonusAdded / diceResult} moves!</span>
@@ -962,6 +1003,9 @@ export default function LabyrinthGame() {
           )}
           {shieldGained !== null && (
             <span style={{ color: "#44ff88", marginLeft: 12 }}>🛡 +1 Shield!</span>
+          )}
+          {bombGained !== null && (
+            <span style={{ color: "#ff8844", marginLeft: 12 }}>💣 +1 Bomb!</span>
           )}
           {cellsRevealed !== null && (
             <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ {cellsRevealed} hidden cells revealed!</span>
@@ -1333,6 +1377,9 @@ export default function LabyrinthGame() {
                   {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && (
                     <div className="spider-web" style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
                   )}
+                  {bombExplosion && Math.abs(x - bombExplosion.x) <= 1 && Math.abs(y - bombExplosion.y) <= 1 && (
+                    <div className="bomb-explosion" style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
+                  )}
                   {isTeleportFrom && (
                     <div
                       className="teleport-fall"
@@ -1449,6 +1496,17 @@ export default function LabyrinthGame() {
             <button onClick={() => doMove(1, 0, true)} disabled={!canJumpRight} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 3, gridRow: 2 }} title="Jump right (Shift+→)">J→</button>
             <button onClick={() => doMove(0, 1, true)} disabled={!canJumpDown} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 3 }} title="Jump down (Shift+↓)">J↓</button>
           </div>
+        </div>
+        <div style={{ ...controlsSectionStyle, borderColor: "#ff8844", background: (cp?.bombs ?? 0) > 0 ? "#2e1e1e22" : undefined }}>
+          <div style={{ ...controlsSectionLabelStyle, color: "#ff8844" }}>Bomb {(cp?.bombs ?? 0) > 0 && `×${cp?.bombs ?? 0}`}</div>
+          <button
+            onClick={handleUseBomb}
+            disabled={!cp || (cp?.bombs ?? 0) <= 0 || moveDisabled}
+            style={{ ...buttonStyle, width: "100%", background: (cp?.bombs ?? 0) > 0 ? "#ff8844" : "#444", color: "#fff" }}
+            title="Explode 3×3 area (uses 1 move)"
+          >
+            💣 Use Bomb
+          </button>
         </div>
 
         {error && <div className="error" style={errorStyle}>{error}</div>}

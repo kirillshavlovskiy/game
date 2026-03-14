@@ -134,6 +134,33 @@ button {
   mask: radial-gradient(ellipse 80% 80% at 50% 50%, black 20%, transparent 70%);
 }
 
+/* Bomb explosion - flash overlay on 3×3 blast zone */
+@keyframes bombExplosion {
+  0% {
+    background: rgba(255, 150, 50, 0.95);
+    opacity: 1;
+    transform: scale(0.3);
+    box-shadow: inset 0 0 20px rgba(255, 200, 100, 0.8);
+  }
+  25% {
+    background: rgba(255, 180, 80, 0.9);
+    opacity: 1;
+    transform: scale(1.1);
+    box-shadow: inset 0 0 30px rgba(255, 220, 120, 0.6);
+  }
+  100% {
+    background: rgba(255, 100, 0, 0);
+    opacity: 0;
+    transform: scale(1.4);
+    box-shadow: inset 0 0 0 transparent;
+  }
+}
+
+.cell .bomb-explosion {
+  animation: bombExplosion 0.5s ease-out forwards;
+  border-radius: 4px;
+}
+
 /* Monster icons - ensure consistent rendering */
 .cell.monster .monster-icon {
   display: inline-flex;
