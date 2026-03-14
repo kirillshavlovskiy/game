@@ -343,11 +343,9 @@ export class Labyrinth {
       }
     }
     shuffle(intersections);
-    const area = this.width * this.height;
     const blocks10x10 = (this.width / 10) * (this.height / 10);
-    const fromArea = Math.floor((area / 80) * this.monsterDensity);
-    const minPerDifficulty = this.monsterDensity * 2;
-    const targetMonsters = Math.max(minPerDifficulty, Math.min(intersections.length, fromArea));
+    const targetFromDifficulty = Math.round(blocks10x10 * this.monsterDensity);
+    const targetMonsters = Math.min(intersections.length, Math.max(1, targetFromDifficulty));
     const isSmallMap = this.width * this.height <= 400;
     const baseDist = this.monsterDensity >= 4 ? 2 : this.monsterDensity >= 3 ? 3 : 4;
     const MIN_MONSTER_DIST = isSmallMap ? Math.max(1, baseDist - 1) : baseDist;
