@@ -323,11 +323,12 @@ export class Labyrinth {
   private _addMonsters(excludeCells: [number, number][]): void {
     const types: MonsterType[] = ["V", "Z", "S", "G"];
     const intersections: [number, number][] = [];
+    const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
       for (let x = 1; x < this.width - 1; x++) {
         if (!isWalkable(this.grid[y][x])) continue;
         const n = this._countPathNeighbors(x, y);
-        if (n >= 3 && (x !== 0 || y !== 0) && (x !== this.goalX || y !== this.goalY) &&
+        if (n >= minNeighbors && (x !== 0 || y !== 0) && (x !== this.goalX || y !== this.goalY) &&
             !excludeCells.some(([ex, ey]) => ex === x && ey === y)) {
           intersections.push([x, y]);
         }
@@ -336,8 +337,12 @@ export class Labyrinth {
     shuffle(intersections);
     const blocks10x10 = (this.width / 10) * (this.height / 10);
     const targetMonsters = Math.max(1, Math.floor(blocks10x10 * this.monsterDensity));
-    // Lower min distance for higher difficulties so we can place more monsters
-    const MIN_MONSTER_DIST = this.monsterDensity >= 4 ? 2 : this.monsterDensity >= 3 ? 3 : 4;
+    const MIN_MONSTER_DIST =
+      this.monsterDensity >= 4
+        ? (this.width >= 30 || this.height >= 30 ? 1 : 2)
+        : this.monsterDensity >= 3
+          ? 3
+          : 4;
     const chosen: [number, number][] = [];
     for (const [x, y] of intersections) {
       if (this.monsters.length >= targetMonsters) break;
