@@ -1208,8 +1208,10 @@ export default function LabyrinthGame() {
           style={{
             ...mazeWrapStyle,
             marginTop: MAZE_MARGIN,
+            position: "relative",
           }}
         >
+        <div style={{ position: "relative", display: "inline-block" }}>
         <div
           className="maze"
           style={{
@@ -1531,6 +1533,48 @@ export default function LabyrinthGame() {
               );
             })
           )}
+        </div>
+        {catapultPicker && catapultDragOffset && lab && (catapultDragOffset.dx !== 0 || catapultDragOffset.dy !== 0) && (() => {
+          const dx = catapultDragOffset.dx;
+          const dy = catapultDragOffset.dy;
+          const launchDx = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
+          const launchDy = Math.abs(dy) > Math.abs(dx) ? Math.sign(dy) : 0;
+          if (launchDx === 0 && launchDy === 0) return null;
+          const traj = lab.getCatapultTrajectory(catapultPicker.from[0], catapultPicker.from[1], launchDx, launchDy);
+          if (!traj) return null;
+          const cs = CELL_SIZE * mazeZoom;
+          const x1 = (catapultPicker.from[0] + 0.5) * cs;
+          const y1 = (catapultPicker.from[1] + 0.5) * cs;
+          const x2 = (traj.destX + 0.5) * cs;
+          const y2 = (traj.destY + 0.5) * cs;
+          return (
+            <svg
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: lab.width * cs,
+                height: lab.height * cs,
+                pointerEvents: "none",
+                zIndex: 10,
+              }}
+              viewBox={`0 0 ${lab.width * cs} ${lab.height * cs}`}
+            >
+              <line
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                stroke="#ffcc00"
+                strokeWidth={3}
+                strokeDasharray="8 6"
+                strokeLinecap="round"
+                opacity={0.9}
+              />
+              <circle cx={x2} cy={y2} r={6} fill="#ffcc00" opacity={0.8} />
+            </svg>
+          );
+        })()}
         </div>
         </div>
       </div>

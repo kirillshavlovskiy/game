@@ -640,29 +640,37 @@ export class Labyrinth {
     return true;
   }
 
-  /** Catapult: launch player in direction (dx,dy) until hitting wall. Returns landing coords or null if invalid. */
-  catapultLaunch(playerIndex: number, dx: number, dy: number): { destX: number; destY: number } | null {
-    const p = this.players[playerIndex];
-    if (!p) return null;
+  /** Catapult trajectory: flies over walls, lands on last path cell in direction. Returns path cells and destination. */
+  getCatapultTrajectory(fromX: number, fromY: number, dx: number, dy: number): { path: [number, number][]; destX: number; destY: number } | null {
     const ndx = Math.sign(dx);
     const ndy = Math.sign(dy);
     if (ndx === 0 && ndy === 0) return null;
-    let x = p.x;
-    let y = p.y;
+    const path: [number, number][] = [];
+    let x = fromX;
+    let y = fromY;
     let lastPath: { x: number; y: number } | null = null;
     while (true) {
       const nx = x + ndx;
       const ny = y + ndy;
       if (nx < 0 || nx >= this.width || ny < 0 || ny >= this.height) break;
-      if (this.grid[ny][nx] === WALL) break;
       x = nx;
       y = ny;
-      lastPath = { x, y };
+      path.push([x, y]);
+      if (isWalkable(this.grid[y][x])) lastPath = { x, y };
     }
-    if (!lastPath || (lastPath.x === p.x && lastPath.y === p.y)) return null;
-    p.x = lastPath.x;
-    p.y = lastPath.y;
-    return { destX: lastPath.x, destY: lastPath.y };
+    if (!lastPath || (lastPath.x === fromX && lastPath.y === fromY)) return null;
+    return { path, destX: lastPath.x, destY: lastPath.y };
+  }
+
+  /** Catapult: launch player in direction (dx,dy), flying over walls. Lands on last path cell. Returns landing coords or null if invalid. */
+  catapultLaunch(playerIndex: number, dx: number, dy: number): { destX: number; destY: number } | null {
+    const p = this.players[playerIndex];
+    if (!p) return null;
+    const traj = this.getCatapultTrajectory(p.x, p.y, dx, dy);
+    if (!traj) return null;
+    p.x = traj.destX;
+    p.y = traj.destY;
+    return { destX: traj.destX, destY: traj.destY };
   }
 
   getMagicCellPositions(): [number, number][] {
