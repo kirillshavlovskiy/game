@@ -95,6 +95,10 @@ export class Labyrinth {
   hiddenCells: Map<string, string> = new Map();
   /** Spider web decoration positions [x,y] for visual effect */
   webPositions: [number, number][] = [];
+  /** Bomb cells collected by player: key "x,y" -> Set of player indices who collected from that cell */
+  bombCollectedBy: Map<string, Set<number>> = new Map();
+  /** Magic cells used for teleport by player: key "x,y" -> Set of player indices who teleported from that cell */
+  teleportUsedFrom: Map<string, Set<number>> = new Map();
 
   constructor(
     width: number,
@@ -530,6 +534,8 @@ export class Labyrinth {
     this.eliminatedPlayers = new Set();
     this.hiddenCells = new Map();
     this.webPositions = [];
+    this.bombCollectedBy = new Map();
+    this.teleportUsedFrom = new Map();
     this._addMonsters([]);
     // Add hidden cells and spider webs from path cells for AI-loaded mazes
     const pathCells: [number, number][] = [];
@@ -630,6 +636,12 @@ export class Labyrinth {
     return sorted.slice(0, maxOptions);
   }
 
+  getRandomTeleportDestination(playerIndex: number): [number, number] | null {
+    const options = this.getTeleportOptions(playerIndex, 20);
+    if (options.length === 0) return null;
+    return options[Math.floor(Math.random() * options.length)];
+  }
+
   teleportToCell(playerIndex: number, destX: number, destY: number): boolean {
     const p = this.players[playerIndex];
     if (!p) return false;
@@ -640,33 +652,119 @@ export class Labyrinth {
     return true;
   }
 
-  /** Catapult trajectory: flies over walls, lands on last path cell in direction. Returns path cells and destination. */
-  getCatapultTrajectory(fromX: number, fromY: number, dx: number, dy: number): { path: [number, number][]; destX: number; destY: number } | null {
+  hasCollectedBombFrom(playerIndex: number, x: number, y: number): boolean {
+    const key = `${x},${y}`;
+    return this.bombCollectedBy.get(key)?.has(playerIndex) ?? false;
+  }
+
+  recordBombCollected(playerIndex: number, x: number, y: number): void {
+    const key = `${x},${y}`;
+    let set = this.bombCollectedBy.get(key);
+    if (!set) {
+      set = new Set();
+      this.bombCollectedBy.set(key, set);
+    }
+    set.add(playerIndex);
+  }
+
+  hasUsedTeleportFrom(playerIndex: number, x: number, y: number): boolean {
+    const key = `${x},${y}`;
+    return this.teleportUsedFrom.get(key)?.has(playerIndex) ?? false;
+  }
+
+  recordTeleportUsedFrom(playerIndex: number, x: number, y: number): void {
+    const key = `${x},${y}`;
+    let set = this.teleportUsedFrom.get(key);
+    if (!set) {
+      set = new Set();
+      this.teleportUsedFrom.set(key, set);
+    }
+    set.add(playerIndex);
+  }
+
+  /**
+   * Catapult trajectory: parabolic arc. strength = drag distance in pixels.
+   * useRandom: when true (launch), add random landing; when false (preview), deterministic.
+   */
+  getCatapultTrajectory(
+    fromX: number,
+    fromY: number,
+    dx: number,
+    dy: number,
+    strength: number,
+    useRandom = false
+  ): { arcPoints: [number, number][]; destX: number; destY: number } | null {
     const ndx = Math.sign(dx);
     const ndy = Math.sign(dy);
     if (ndx === 0 && ndy === 0) return null;
-    const path: [number, number][] = [];
-    let x = fromX;
-    let y = fromY;
-    let lastPath: { x: number; y: number } | null = null;
-    while (true) {
-      const nx = x + ndx;
-      const ny = y + ndy;
-      if (nx < 0 || nx >= this.width || ny < 0 || ny >= this.height) break;
-      x = nx;
-      y = ny;
-      path.push([x, y]);
-      if (isWalkable(this.grid[y][x])) lastPath = { x, y };
+    const maxDist = Math.max(this.width, this.height) * 0.8;
+    const strengthScale = 0.15;
+    const baseDist = Math.min(maxDist, Math.max(2, strength * strengthScale));
+    const dist = useRandom ? baseDist * (0.85 + Math.random() * 0.3) : baseDist;
+    const destXClamped = Math.max(0, Math.min(this.width - 1, Math.round(fromX + ndx * dist)));
+    const destYClamped = Math.max(0, Math.min(this.height - 1, Math.round(fromY + ndy * dist)));
+    const perp = ndx !== 0 ? [-ndy, ndx] : [ndx, -ndy];
+    const perpX = perp[0];
+    const perpY = perp[1];
+    const arcHeight = dist * 0.35;
+    const arcPoints: [number, number][] = [];
+    const steps = 16;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const x = fromX + ndx * dist * t + perpX * arcHeight * 4 * t * (1 - t);
+      const y = fromY + ndy * dist * t + perpY * arcHeight * 4 * t * (1 - t);
+      arcPoints.push([x, y]);
     }
-    if (!lastPath || (lastPath.x === fromX && lastPath.y === fromY)) return null;
-    return { path, destX: lastPath.x, destY: lastPath.y };
+    let landX = destXClamped;
+    let landY = destYClamped;
+    const candidates: [number, number][] = [];
+    const r = 2;
+    for (let oy = -r; oy <= r; oy++) {
+      for (let ox = -r; ox <= r; ox++) {
+        const cx = destXClamped + ox;
+        const cy = destYClamped + oy;
+        if (cx >= 0 && cx < this.width && cy >= 0 && cy < this.height && isWalkable(this.grid[cy][cx])) {
+          candidates.push([cx, cy]);
+        }
+      }
+    }
+    if (candidates.length > 0) {
+      const idx = useRandom
+        ? Math.floor(Math.random() * candidates.length)
+        : candidates.reduce((best, c, i) => {
+            const d = Math.abs(c[0] - destXClamped) ** 2 + Math.abs(c[1] - destYClamped) ** 2;
+            const bestD = Math.abs(candidates[best][0] - destXClamped) ** 2 + Math.abs(candidates[best][1] - destYClamped) ** 2;
+            return d < bestD ? i : best;
+          }, 0);
+      [landX, landY] = candidates[idx];
+    } else {
+      let x = fromX;
+      let y = fromY;
+      let lastPath: { x: number; y: number } | null = null;
+      for (let i = 0; i < Math.ceil(dist) + 2; i++) {
+        const nx = x + ndx;
+        const ny = y + ndy;
+        if (nx < 0 || nx >= this.width || ny < 0 || ny >= this.height) break;
+        x = nx;
+        y = ny;
+        if (isWalkable(this.grid[y][x])) lastPath = { x, y };
+      }
+      if (lastPath) {
+        landX = lastPath.x;
+        landY = lastPath.y;
+      } else {
+        return null;
+      }
+    }
+    if (landX === fromX && landY === fromY) return null;
+    return { arcPoints, destX: landX, destY: landY };
   }
 
-  /** Catapult: launch player in direction (dx,dy), flying over walls. Lands on last path cell. Returns landing coords or null if invalid. */
-  catapultLaunch(playerIndex: number, dx: number, dy: number): { destX: number; destY: number } | null {
+  /** Catapult: launch player in direction (dx,dy) with strength. Parabolic arc, random landing. */
+  catapultLaunch(playerIndex: number, dx: number, dy: number, strength: number): { destX: number; destY: number } | null {
     const p = this.players[playerIndex];
     if (!p) return null;
-    const traj = this.getCatapultTrajectory(p.x, p.y, dx, dy);
+    const traj = this.getCatapultTrajectory(p.x, p.y, dx, dy, strength, true);
     if (!traj) return null;
     p.x = traj.destX;
     p.y = traj.destY;

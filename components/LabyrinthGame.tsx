@@ -24,6 +24,29 @@ import {
 
 const CELL_SIZE = 44;
 
+function getParabolicArcPath(from: [number, number], to: [number, number], cellSize: number, steps = 16): string {
+  const fx = (from[0] + 0.5) * cellSize;
+  const fy = (from[1] + 0.5) * cellSize;
+  const tx = (to[0] + 0.5) * cellSize;
+  const ty = (to[1] + 0.5) * cellSize;
+  const dx = tx - fx;
+  const dy = ty - fy;
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+  const ndx = dx / dist;
+  const ndy = dy / dist;
+  const perpX = -ndy;
+  const perpY = ndx;
+  const arcHeight = dist * 0.35;
+  const pts: string[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = fx + dx * t + perpX * arcHeight * 4 * t * (1 - t);
+    const y = fy + dy * t + perpY * arcHeight * 4 * t * (1 - t);
+    pts.push(`${x} ${y}`);
+  }
+  return pts.map((p, i) => (i === 0 ? `M ${p}` : `L ${p}`)).join(" ");
+}
+
 function useDraggable(getInitial: () => { x: number; y: number }) {
   const [pos, setPos] = useState(() =>
     typeof window !== "undefined" ? getInitial() : { x: 0, y: 0 }
@@ -428,6 +451,8 @@ export default function LabyrinthGame() {
     next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
     next.hiddenCells = new Map(lab.hiddenCells);
     next.webPositions = [...(lab.webPositions || [])];
+    next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+    next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
     next.goalX = lab.goalX;
     next.goalY = lab.goalY;
     next.monsters = lab.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
@@ -477,6 +502,8 @@ export default function LabyrinthGame() {
       }));
       next.hiddenCells = new Map(lab.hiddenCells);
       next.webPositions = [...(lab.webPositions || [])];
+      next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
       next.monsters = lab.monsters.map((m) => ({
@@ -516,12 +543,12 @@ export default function LabyrinthGame() {
             setShieldGained(true);
             next.grid[p.y][p.x] = PATH;
           }
-          if (cell && isBombCell(cell)) {
+          if (cell && isBombCell(cell) && !next.hasCollectedBombFrom(currentPlayer, p.x, p.y)) {
             p.bombs = (p.bombs ?? 0) + 1;
+            next.recordBombCollected(currentPlayer, p.x, p.y);
             setBombGained(true);
-            // Bomb stays on cell so other players can collect it too
           }
-          if (cell && isMagicCell(cell)) {
+          if (cell && isMagicCell(cell) && !next.hasUsedTeleportFrom(currentPlayer, p.x, p.y)) {
             const magicX = p.x;
             const magicY = p.y;
             const playerToTeleport = currentPlayer;
@@ -533,9 +560,28 @@ export default function LabyrinthGame() {
                 if (!cp || cp.x !== magicX || cp.y !== magicY) return prev;
                 const cellNow = prev.grid[cp.y]?.[cp.x];
                 if (!cellNow || !isMagicCell(cellNow)) return prev;
-                const options = prev.getTeleportOptions(playerToTeleport, 6);
-                if (options.length > 0) {
-                  setTeleportPicker({ playerIndex: playerToTeleport, from: [magicX, magicY], options });
+                if (prev.hasUsedTeleportFrom(playerToTeleport, magicX, magicY)) return prev;
+                const dest = prev.getRandomTeleportDestination(playerToTeleport);
+                if (dest) {
+                  const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
+                  next.grid = prev.grid.map((r) => [...r]);
+                  next.players = prev.players.map((pl) => ({ ...pl, jumps: pl.jumps ?? 0, diamonds: pl.diamonds ?? 0, shield: pl.shield ?? 0, bombs: pl.bombs ?? 0 }));
+                  next.hiddenCells = new Map(prev.hiddenCells);
+                  next.webPositions = [...(prev.webPositions || [])];
+                  next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+                  next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+                  next.goalX = prev.goalX;
+                  next.goalY = prev.goalY;
+                  next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+                  next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+                  if (next.teleportToCell(playerToTeleport, dest[0], dest[1])) {
+                    next.recordTeleportUsedFrom(playerToTeleport, magicX, magicY);
+                    setTeleportAnimation({ from: [magicX, magicY], to: dest, playerIndex: playerToTeleport });
+                    movesLeftRef.current = 0;
+                    setMovesLeft(0);
+                    setDiceResult(null);
+                    return next;
+                  }
                 }
                 return prev;
               });
@@ -582,9 +628,26 @@ export default function LabyrinthGame() {
                     const cp = prev.players[playerToTeleport];
                     if (!cp || cp.x !== fromX || cp.y !== fromY) return prev;
                     if (prev.eliminatedPlayers.has(playerToTeleport)) return prev;
-                    const options = prev.getTeleportOptions(playerToTeleport, 6);
-                    if (options.length > 0) {
-                      setTeleportPicker({ playerIndex: playerToTeleport, from: [fromX, fromY], options });
+                    const dest = prev.getRandomTeleportDestination(playerToTeleport);
+                    if (dest) {
+                      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
+                      next.grid = prev.grid.map((r) => [...r]);
+                      next.players = prev.players.map((pl) => ({ ...pl, jumps: pl.jumps ?? 0, diamonds: pl.diamonds ?? 0, shield: pl.shield ?? 0, bombs: pl.bombs ?? 0 }));
+                      next.hiddenCells = new Map(prev.hiddenCells);
+                      next.webPositions = [...(prev.webPositions || [])];
+                      next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+                      next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+                      next.goalX = prev.goalX;
+                      next.goalY = prev.goalY;
+                      next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+                      next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+                      if (next.teleportToCell(playerToTeleport, dest[0], dest[1])) {
+                        setTeleportAnimation({ from: [fromX, fromY], to: dest, playerIndex: playerToTeleport });
+                        movesLeftRef.current = 0;
+                        setMovesLeft(0);
+                        setDiceResult(null);
+                        return next;
+                      }
                     }
                     return prev;
                   });
@@ -676,6 +739,8 @@ export default function LabyrinthGame() {
         next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
         next.hiddenCells = new Map(prev.hiddenCells);
         next.webPositions = [...(prev.webPositions || [])];
+        next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.moveMonsters();
         return next;
       });
@@ -754,7 +819,7 @@ export default function LabyrinthGame() {
   const canJumpDown = !moveDisabled && lab?.canJumpInDirection(0, 1, currentPlayer);
 
   const handleCatapultLaunch = useCallback(
-    (dx: number, dy: number) => {
+    (dx: number, dy: number, strength: number) => {
       if (!lab || !catapultPicker || !catapultMode) return;
       const { playerIndex, from } = catapultPicker;
       const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
@@ -762,16 +827,20 @@ export default function LabyrinthGame() {
       next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
       next.hiddenCells = new Map(lab.hiddenCells);
       next.webPositions = [...(lab.webPositions || [])];
+      next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
       next.monsters = lab.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
       next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
-      const result = next.catapultLaunch(playerIndex, dx, dy);
+      const result = next.catapultLaunch(playerIndex, dx, dy, strength);
       if (result) {
         setCatapultAnimation({ from, to: [result.destX, result.destY], playerIndex });
         setTeleportPicker(null);
         setCatapultPicker(null);
         setCatapultMode(false);
+        movesLeftRef.current++;
+        setMovesLeft((m) => m + 1);
         setTotalMoves((t) => t + 1);
         setPlayerMoves((prev) => {
           const arr = [...prev];
@@ -811,43 +880,16 @@ export default function LabyrinthGame() {
       const launchDx = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
       const launchDy = Math.abs(dy) > Math.abs(dx) ? Math.sign(dy) : 0;
       if (launchDx !== 0 || launchDy !== 0) {
-        handleCatapultLaunch(launchDx, launchDy);
+        handleCatapultLaunch(launchDx, launchDy, dist);
       }
     };
     window.addEventListener("pointerup", onPointerUp);
     return () => window.removeEventListener("pointerup", onPointerUp);
   }, [catapultMode, catapultPicker, handleCatapultLaunch]);
 
-  const handleTeleportSelect = useCallback(
-    (destX: number, destY: number) => {
-      if (!teleportPicker || !lab) return;
-      const { playerIndex, from } = teleportPicker;
-      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
-      next.grid = lab.grid.map((r) => [...r]);
-      next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
-      next.hiddenCells = new Map(lab.hiddenCells);
-      next.webPositions = [...(lab.webPositions || [])];
-      next.goalX = lab.goalX;
-      next.goalY = lab.goalY;
-      next.monsters = lab.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
-      next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
-      if (next.teleportToCell(playerIndex, destX, destY)) {
-        setTeleportAnimation({ from, to: [destX, destY], playerIndex });
-        setLab(next);
-        setTeleportPicker(null);
-      }
-    },
-    [teleportPicker, lab]
-  );
-
   const handleCellTap = useCallback(
     (cellX: number, cellY: number) => {
       if (!lab) return;
-      if (teleportPicker) {
-        const isOption = teleportPicker.options.some(([ox, oy]) => ox === cellX && oy === cellY);
-        if (isOption) handleTeleportSelect(cellX, cellY);
-        return;
-      }
       if (moveDisabled || !cp) return;
       const jumpTarget = jumpTargets.find((t) => t.x === cellX && t.y === cellY);
       if (jumpTarget) {
@@ -872,7 +914,7 @@ export default function LabyrinthGame() {
         doMove(stepX, 0, false);
       }
     },
-    [moveDisabled, cp, jumpTargets, lab, currentPlayer, doMove, teleportPicker, handleTeleportSelect]
+    [moveDisabled, cp, jumpTargets, lab, currentPlayer, doMove]
   );
 
   if (!gameStarted) {
@@ -1056,20 +1098,11 @@ export default function LabyrinthGame() {
         </aside>
 
         <div style={mainContentStyle}>
-      {(teleportPicker || catapultPicker) && (
+      {catapultPicker && (
         <div style={{ ...eliminatedOverlayStyle, pointerEvents: "none" }}>
-          <div style={{ ...eliminatedBannerStyle, borderColor: catapultPicker ? "#ffcc00" : "#aa66ff", background: "rgba(0,0,0,0.9)", pointerEvents: "auto", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            {catapultPicker ? (
-              <>
-                <span style={{ color: "#ffcc00" }}>Catapult: drag marker back, then release to launch</span>
-                <button onClick={() => { setCatapultMode(false); setCatapultPicker(null); setCatapultDragOffset(null); }} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
-              </>
-            ) : (
-              <>
-                <span style={{ color: "#aa66ff" }}>Pick teleport destination (click ○ on map)</span>
-                <button onClick={() => setTeleportPicker(null)} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
-              </>
-            )}
+          <div style={{ ...eliminatedBannerStyle, borderColor: "#ffcc00", background: "rgba(0,0,0,0.9)", pointerEvents: "auto", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <span style={{ color: "#ffcc00" }}>Slingshot: drag back to aim, release to launch (parabolic arc)</span>
+            <button onClick={() => { setCatapultMode(false); setCatapultPicker(null); setCatapultDragOffset(null); }} style={{ ...buttonStyle, padding: "4px 12px", fontSize: "0.85rem" }}>Cancel</button>
           </div>
         </div>
       )}
@@ -1243,8 +1276,8 @@ export default function LabyrinthGame() {
                     ? PLAYER_COLORS_ACTIVE[pi] ?? "#888"
                     : PLAYER_COLORS[pi] ?? "#888";
                 const isTeleportRise =
-                  (teleportAnimation?.to[0] === x && teleportAnimation?.to[1] === y && teleportAnimation?.playerIndex === pi) ||
-                  (catapultAnimation?.to[0] === x && catapultAnimation?.to[1] === y && catapultAnimation?.playerIndex === pi);
+                  teleportAnimation?.to[0] === x && teleportAnimation?.to[1] === y && teleportAnimation?.playerIndex === pi;
+                const isCatapultFlying = catapultAnimation?.to[0] === x && catapultAnimation?.to[1] === y && catapultAnimation?.playerIndex === pi;
                 const isJumpLanding =
                   jumpAnimation?.x === x && jumpAnimation?.y === y && jumpAnimation?.playerIndex === pi;
                 const isCatapultStretch = isCatapultSourceCell && catapultDragOffset && (catapultDragOffset.dx !== 0 || catapultDragOffset.dy !== 0);
@@ -1268,6 +1301,7 @@ export default function LabyrinthGame() {
                       ...markerStretchStyle,
                       background: c,
                       boxShadow: pi === currentPlayer ? `0 0 8px ${c}, 0 0 12px ${c}` : undefined,
+                      ...(isTeleportRise ? { zIndex: 20, position: "relative" as const } : {}),
                     }}
                   />
                 );
@@ -1314,7 +1348,7 @@ export default function LabyrinthGame() {
                 content = (
                   <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {monsterIcon && <span style={{ position: "absolute", left: 2, top: 2, fontSize: "1rem", lineHeight: 1 }}>{monsterIcon}</span>}
-                    {playerMarker}
+                    {!isCatapultFlying && playerMarker}
                     {dirIndicators}
                   </div>
                 );
@@ -1345,8 +1379,12 @@ export default function LabyrinthGame() {
                 cellClass += " path magic hole";
               } else if (showSecretCells && isCatapultCell(lab.grid[y][x])) {
                 content = (
-                  <span style={{ fontSize: "1.1rem" }} title="Catapult">
-                    ⊢
+                  <span style={{ fontSize: "1.2rem", display: "inline-flex", alignItems: "center", justifyContent: "center" }} title="Slingshot">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M5 4v4a7 7 0 0 0 14 0V4" />
+                      <path d="M5 8h14" />
+                      <ellipse cx="12" cy="14" rx="3" ry="2" fill="#ffcc0044" stroke="#ffcc00" />
+                    </svg>
                   </span>
                 );
                 cellClass += " path catapult";
@@ -1436,17 +1474,15 @@ export default function LabyrinthGame() {
                 cellBg.zIndex = 5;
               }
 
-              const isTeleportFrom =
-                (teleportAnimation?.from[0] === x && teleportAnimation?.from[1] === y) ||
-                (catapultAnimation?.from[0] === x && catapultAnimation?.from[1] === y);
-              const fallAnim = teleportAnimation || catapultAnimation;
+              const isTeleportFrom = teleportAnimation?.from[0] === x && teleportAnimation?.from[1] === y;
+              const fallAnim = teleportAnimation;
               const fallColor =
                 fallAnim && lab.players[fallAnim.playerIndex]
                   ? PLAYER_COLORS_ACTIVE[fallAnim.playerIndex] ?? "#888"
                   : "#888";
               const jumpTarget = jumpTargets.find((t) => t.x === x && t.y === y);
 
-              const isTappable = (teleportPicker && isTeleportOption && !catapultMode) || (!moveDisabled && !catapultMode && (cellClass.includes("path") || !!jumpTarget));
+              const isTappable = !moveDisabled && !catapultMode && (cellClass.includes("path") || !!jumpTarget);
 
               const effectiveCellSize = CELL_SIZE * mazeZoom;
               const isCurrentPlayerCell = cp && x === cp.x && y === cp.y;
@@ -1537,16 +1573,16 @@ export default function LabyrinthGame() {
         {catapultPicker && catapultDragOffset && lab && (catapultDragOffset.dx !== 0 || catapultDragOffset.dy !== 0) && (() => {
           const dx = catapultDragOffset.dx;
           const dy = catapultDragOffset.dy;
+          const strength = Math.sqrt(dx * dx + dy * dy);
           const launchDx = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
           const launchDy = Math.abs(dy) > Math.abs(dx) ? Math.sign(dy) : 0;
           if (launchDx === 0 && launchDy === 0) return null;
-          const traj = lab.getCatapultTrajectory(catapultPicker.from[0], catapultPicker.from[1], launchDx, launchDy);
+          const traj = lab.getCatapultTrajectory(catapultPicker.from[0], catapultPicker.from[1], launchDx, launchDy, strength, false);
           if (!traj) return null;
           const cs = CELL_SIZE * mazeZoom;
-          const x1 = (catapultPicker.from[0] + 0.5) * cs;
-          const y1 = (catapultPicker.from[1] + 0.5) * cs;
-          const x2 = (traj.destX + 0.5) * cs;
-          const y2 = (traj.destY + 0.5) * cs;
+          const pathD = traj.arcPoints.map(([px, py], i) => `${i === 0 ? "M" : "L"} ${px * cs} ${py * cs}`).join(" ");
+          const destX = (traj.destX + 0.5) * cs;
+          const destY = (traj.destY + 0.5) * cs;
           return (
             <svg
               style={{
@@ -1560,18 +1596,41 @@ export default function LabyrinthGame() {
               }}
               viewBox={`0 0 ${lab.width * cs} ${lab.height * cs}`}
             >
-              <line
-                x1={x1}
-                y1={y1}
-                x2={x2}
-                y2={y2}
+              <path
+                d={pathD}
+                fill="none"
                 stroke="#ffcc00"
                 strokeWidth={3}
                 strokeDasharray="8 6"
                 strokeLinecap="round"
+                strokeLinejoin="round"
                 opacity={0.9}
               />
-              <circle cx={x2} cy={y2} r={6} fill="#ffcc00" opacity={0.8} />
+              <circle cx={destX} cy={destY} r={8} fill="#ffcc00" opacity={0.6} stroke="#ffdd44" strokeWidth={2} />
+            </svg>
+          );
+        })()}
+        {catapultAnimation && lab && (() => {
+          const { from, to, playerIndex } = catapultAnimation;
+          const c = PLAYER_COLORS_ACTIVE[playerIndex] ?? PLAYER_COLORS[playerIndex] ?? "#888";
+          const cs = CELL_SIZE * mazeZoom;
+          const pathD = getParabolicArcPath(from, to, cs);
+          return (
+            <svg
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: lab.width * cs,
+                height: lab.height * cs,
+                pointerEvents: "none",
+                zIndex: 15,
+              }}
+              viewBox={`0 0 ${lab.width * cs} ${lab.height * cs}`}
+            >
+              <circle r={12} fill={c} stroke="#fff" strokeWidth={2}>
+                <animateMotion dur="0.6s" fill="freeze" calcMode="linear" path={pathD} />
+              </circle>
             </svg>
           );
         })()}
@@ -2138,6 +2197,7 @@ const markerStyle: React.CSSProperties = {
   height: 24,
   borderRadius: "50%",
   margin: "auto",
+  opacity: 1,
 };
 
 const dragHandleStyle: React.CSSProperties = {
