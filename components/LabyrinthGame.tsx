@@ -16,6 +16,7 @@ import {
   isJumpCell,
   isDiamondCell,
   isShieldCell,
+  isBombCell,
   getCollectibleOwner,
   getMonsterName,
   type MonsterType,
@@ -417,6 +418,10 @@ export default function LabyrinthGame() {
           if (cell && isShieldCell(cell)) {
             p.shield = (p.shield ?? 0) + 1;
             setShieldGained(true);
+            next.grid[p.y][p.x] = PATH;
+          }
+          if (cell && isBombCell(cell)) {
+            p.bombs = (p.bombs ?? 0) + 1;
             next.grid[p.y][p.x] = PATH;
           }
           if (cell && isMagicCell(cell)) {
@@ -905,6 +910,9 @@ export default function LabyrinthGame() {
               <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
                 Shield: {p?.shield ?? 0}
               </div>
+              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
+                Bombs: {p?.bombs ?? 0}
+              </div>
             </div>
           ))}
         </aside>
@@ -1082,6 +1090,7 @@ export default function LabyrinthGame() {
               if (monster) cellClass += " path monster";
               if (pi !== undefined && !lab.eliminatedPlayers.has(pi)) {
                 cellClass += " path";
+                if (isTeleportOption) cellClass += " magic hole";
                 const c =
                   pi === currentPlayer
                     ? PLAYER_COLORS_ACTIVE[pi] ?? "#888"
@@ -1159,6 +1168,13 @@ export default function LabyrinthGame() {
               } else if (isMultiplierCell(lab.grid[y][x])) {
                 content = `×${lab.grid[y][x]}`;
                 cellClass += " path multiplier mult-x" + lab.grid[y][x];
+              } else if (isBombCell(lab.grid[y][x])) {
+                content = (
+                  <span style={{ fontSize: "1.1rem" }} title="Bomb pickup">
+                    💣
+                  </span>
+                );
+                cellClass += " path bomb";
               } else if ((showSecretCells || isTeleportOption) && isMagicCell(lab.grid[y][x])) {
                 content = (
                   <span className="hole-cell" style={{ fontSize: "1.1rem" }} title="Teleport hole">
@@ -1234,6 +1250,11 @@ export default function LabyrinthGame() {
               if (cellClass.includes("shield")) {
                 cellBg.background = "#1e2e1e";
                 cellBg.color = "#44ff88";
+                cellBg.fontWeight = "bold";
+              }
+              if (cellClass.includes("bomb")) {
+                cellBg.background = "#2e1e1e";
+                cellBg.color = "#ff8844";
                 cellBg.fontWeight = "bold";
               }
               if (cellClass.includes("collectible")) {
