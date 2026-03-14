@@ -1103,39 +1103,40 @@ export default function LabyrinthGame() {
                 );
                 const dirHintStyle: React.CSSProperties = {
                   position: "absolute",
-                  fontSize: "1.05rem",
+                  fontSize: "0.7rem",
                   fontWeight: "bold",
-                  textShadow: "0 0 4px rgba(0,0,0,1), 0 1px 3px rgba(0,0,0,1)",
-                  padding: "3px 5px",
-                  borderRadius: 4,
+                  textShadow: "0 0 4px rgba(0,0,0,1), 0 1px 2px rgba(0,0,0,1)",
+                  padding: "2px 4px",
+                  borderRadius: 3,
                   background: "rgba(0,0,0,0.85)",
                   border: "1px solid rgba(255,255,255,0.2)",
                   zIndex: 2,
                 };
+                const dirOffset = 10;
                 const dirIndicators = pi === currentPlayer && cp && !moveDisabled ? (
                   <>
                     {(canMoveUp || canJumpUp) && (
-                      <span style={{ ...dirHintStyle, top: -4, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                      <span style={{ ...dirHintStyle, top: -dirOffset, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
                         {canMoveUp && <span style={{ color: "#00ff88" }}>↑{movesLeft}</span>}
-                        {canJumpUp && <span style={{ color: "#66aaff", fontSize: "0.95rem" }}>J↑{cp.jumps ?? 0}</span>}
+                        {canJumpUp && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J↑{cp.jumps ?? 0}</span>}
                       </span>
                     )}
                     {(canMoveDown || canJumpDown) && (
-                      <span style={{ ...dirHintStyle, bottom: -4, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                      <span style={{ ...dirHintStyle, bottom: -dirOffset, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
                         {canMoveDown && <span style={{ color: "#00ff88" }}>↓{movesLeft}</span>}
-                        {canJumpDown && <span style={{ color: "#66aaff", fontSize: "0.95rem" }}>J↓{cp.jumps ?? 0}</span>}
+                        {canJumpDown && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J↓{cp.jumps ?? 0}</span>}
                       </span>
                     )}
                     {(canMoveLeft || canJumpLeft) && (
-                      <span style={{ ...dirHintStyle, left: -4, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <span style={{ ...dirHintStyle, left: -dirOffset, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 4 }}>
                         {canMoveLeft && <span style={{ color: "#00ff88" }}>←{movesLeft}</span>}
-                        {canJumpLeft && <span style={{ color: "#66aaff", fontSize: "0.95rem" }}>J←{cp.jumps ?? 0}</span>}
+                        {canJumpLeft && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J←{cp.jumps ?? 0}</span>}
                       </span>
                     )}
                     {(canMoveRight || canJumpRight) && (
-                      <span style={{ ...dirHintStyle, right: -4, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <span style={{ ...dirHintStyle, right: -dirOffset, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 4 }}>
                         {canMoveRight && <span style={{ color: "#00ff88" }}>→{movesLeft}</span>}
-                        {canJumpRight && <span style={{ color: "#66aaff", fontSize: "0.95rem" }}>J→{cp.jumps ?? 0}</span>}
+                        {canJumpRight && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J→{cp.jumps ?? 0}</span>}
                       </span>
                     )}
                   </>
@@ -1250,6 +1251,7 @@ export default function LabyrinthGame() {
               if (cellClass.includes("monster")) {
                 cellBg.background = "#2e1e1e";
                 cellBg.color = "#ff6666";
+                cellBg.zIndex = 5;
               }
 
               const isTeleportFrom =
