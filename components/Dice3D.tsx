@@ -103,7 +103,7 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
           assetPath: "https://cdn.jsdelivr.net/gh/MajorVictory/3DDiceRoller@master/textures/envmap/",
           theme_surface: "taverntable",
           theme_material: "glass",
-          theme_colorset: "green",
+          theme_customColorset: { background: "#00ff88", foreground: "#000000", outline: "#00ff88" },
           sounds: false,
           shadows: true,
           baseScale: 100,
@@ -133,8 +133,6 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
             borderRadius: 12,
             overflow: "hidden",
             background: "#0d0d12",
-            border: "2px solid #00ff88",
-            boxShadow: "0 0 12px rgba(0,255,136,0.3)",
             pointerEvents: disabled ? "none" : "auto",
             opacity: disabled ? 0.6 : 1,
           }}

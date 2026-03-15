@@ -562,15 +562,16 @@ export class Labyrinth {
     return best;
   }
 
-  /** Check monster collision. Pass activePlayerIndex to only check the player whose turn it is (inactive players are protected). */
-  checkMonsterCollision(activePlayerIndex?: number): { playerIndex: number; monsterType: MonsterType } | null {
+  /** Check monster collision. Pass activePlayerIndex to only check the player whose turn it is (inactive players are protected). Returns monsterIndex for reliable removal after combat. */
+  checkMonsterCollision(activePlayerIndex?: number): { playerIndex: number; monsterType: MonsterType; monsterIndex: number } | null {
     const indices = activePlayerIndex !== undefined ? [activePlayerIndex] : Array.from({ length: this.players.length }, (_, i) => i);
-    for (const m of this.monsters) {
+    for (let mi = 0; mi < this.monsters.length; mi++) {
+      const m = this.monsters[mi];
       for (const i of indices) {
         if (this.eliminatedPlayers.has(i)) continue;
         const p = this.players[i];
         if (p && p.x === m.x && p.y === m.y) {
-          return { playerIndex: i, monsterType: m.type };
+          return { playerIndex: i, monsterType: m.type, monsterIndex: mi };
         }
       }
     }

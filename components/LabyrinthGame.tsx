@@ -178,6 +178,7 @@ export default function LabyrinthGame() {
   const [combatState, setCombatState] = useState<{
     playerIndex: number;
     monsterType: MonsterType;
+    monsterIndex: number;
   } | null>(null);
   const [combatResult, setCombatResult] = useState<{ won: boolean; damage: number } | null>(null);
   const [eventLog, setEventLog] = useState<GameEvent[]>([]);
@@ -469,8 +470,8 @@ export default function LabyrinthGame() {
         next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
         const pi = combat.playerIndex;
         const p = next.players[pi];
-        const monsterIdx = next.monsters.findIndex((m) => p && m.x === p.x && m.y === p.y);
-        if (result.won && monsterIdx >= 0) {
+        const monsterIdx = combat.monsterIndex;
+        if (result.won && monsterIdx >= 0 && monsterIdx < next.monsters.length) {
           next.monsters.splice(monsterIdx, 1);
         } else if (!result.won && p) {
           const usedShield = next.tryConsumeShield(pi);
@@ -596,7 +597,9 @@ export default function LabyrinthGame() {
     while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
       nextP = (nextP + 1) % lab.numPlayers;
     }
-    const roundComplete = nextP <= currentPlayer;
+    const living = [...Array(lab.numPlayers).keys()].filter((i) => !lab.eliminatedPlayers.has(i));
+    const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+    const roundComplete = living.length <= 1 || nextP === firstLiving;
     setCurrentPlayer(nextP);
     movesLeftRef.current = 0;
     setMovesLeft(0);
@@ -880,7 +883,7 @@ export default function LabyrinthGame() {
         // Combat: when player lands on monster, enter combat mode (roll to resolve)
         const collision = next.checkMonsterCollision(currentPlayer);
         if (collision) {
-          setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
+          setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType, monsterIndex: collision.monsterIndex });
           setLab(next);
           return;
         }
@@ -908,7 +911,9 @@ export default function LabyrinthGame() {
             while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
               nextP = (nextP + 1) % lab.numPlayers;
             }
-            const roundComplete = nextP <= currentPlayer;
+            const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
+            const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+            const roundComplete = living.length <= 1 || nextP === firstLiving;
             setCurrentPlayer(nextP);
             setDiceResult(null);
             if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
@@ -955,7 +960,7 @@ export default function LabyrinthGame() {
         next.moveMonsters();
         const collision = next.checkMonsterCollision();
         if (collision) {
-          setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
+          setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType, monsterIndex: collision.monsterIndex });
         }
         return next;
       });
