@@ -1699,8 +1699,14 @@ export default function LabyrinthGame() {
               } else {
               const cellType = lab.getCellAt(x, y);
               if (isMultiplierCell(cellType)) {
-                content = `×${cellType}`;
-                cellClass += " path multiplier mult-x" + cellType;
+                const isRevealed = isMultiplierCell(lab.grid[y]?.[x]);
+                const isHidden = lab.hiddenCells.has(`${x},${y}`);
+                if (isRevealed || (isHidden && showSecretCells)) {
+                  content = `×${cellType}`;
+                  cellClass += " path multiplier mult-x" + cellType;
+                } else {
+                  cellClass += " path";
+                }
               } else if (isArtifactCell(cellType)) {
                 const art = cellType;
                 content = (
