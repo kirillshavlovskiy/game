@@ -127,8 +127,10 @@ export class Labyrinth {
     bombs: number;
     hp: number;
     artifacts: number;
+    artifactsCollected?: string[];
     diceBonus?: number; // +1 to next roll from A1
     hasTeleportArtifact?: boolean; // A3
+    hasTorch?: boolean; // from hidden gem - clears fog zones
   }>;
   goalX: number;
   goalY: number;
@@ -140,6 +142,8 @@ export class Labyrinth {
   hiddenCells: Map<string, string> = new Map();
   /** Spider web decoration positions [x,y] for visual effect */
   webPositions: [number, number][] = [];
+  /** Fog/darkness zone cells (key "x,y") - cleared only when player has torch from hidden gem */
+  fogZones: Set<string> = new Set();
   /** Bomb cells collected by player: key "x,y" -> Set of player indices who collected from that cell */
   bombCollectedBy: Map<string, Set<number>> = new Map();
   /** Magic cells used for teleport by player: key "x,y" -> Set of player indices who teleported from that cell */
@@ -168,8 +172,10 @@ export class Labyrinth {
       bombs: 0,
       hp: DEFAULT_PLAYER_HP,
       artifacts: 0,
+      artifactsCollected: [] as string[],
       diceBonus: 0,
       hasTeleportArtifact: false,
+      hasTorch: false,
     }));
     this.goalX = width - 1;
     this.goalY = height - 1;
@@ -360,6 +366,13 @@ export class Labyrinth {
       const [x, y] = hiddenCellCoords[i];
       this.hiddenCells.set(`${x},${y}`, hiddenTypes[i % hiddenTypes.length]);
       // Grid stays PATH until revealed
+    }
+    // Fog/darkness zones: selected path areas cleared only with torch (hidden gem)
+    const rest5 = rest4.filter((c) => !hiddenCellCoords.some((h) => h[0] === c[0] && h[1] === c[1]));
+    const fogCount = Math.max(4, Math.min(12, Math.floor(pathCells.length * 0.05)));
+    const fogCells = this._pickSpread(rest5.length > 0 ? rest5 : rest4, fogCount);
+    for (const [x, y] of fogCells) {
+      this.fogZones.add(`${x},${y}`);
     }
     const spawnPositions = this._getCornerSpawns();
     const excludeFromMonsters: [number, number][] = [
@@ -645,8 +658,10 @@ export class Labyrinth {
       y: spawns[i]?.[1] ?? p.y,
       hp: DEFAULT_PLAYER_HP,
       artifacts: 0,
+      artifactsCollected: [] as string[],
       diceBonus: 0,
       hasTeleportArtifact: false,
+      hasTorch: false,
     }));
   }
 
@@ -679,13 +694,16 @@ export class Labyrinth {
       bombs: 0,
       hp: DEFAULT_PLAYER_HP,
       artifacts: 0,
+      artifactsCollected: [] as string[],
       diceBonus: 0,
       hasTeleportArtifact: false,
+      hasTorch: false,
     }));
     this.monsters = [];
     this.eliminatedPlayers = new Set();
     this.hiddenCells = new Map();
     this.webPositions = [];
+    this.fogZones = new Set();
     this.bombCollectedBy = new Map();
     this.teleportUsedFrom = new Map();
     this._addMonsters([]);
@@ -707,6 +725,12 @@ export class Labyrinth {
     for (let i = 0; i < webCount && pathCells.length > 0; i++) {
       const idx = Math.floor(Math.random() * pathCells.length);
       this.webPositions.push(pathCells.splice(idx, 1)[0]);
+    }
+    const fogCount = Math.min(8, Math.floor(pathCells.length / 4));
+    for (let i = 0; i < fogCount && pathCells.length > 0; i++) {
+      const idx = Math.floor(Math.random() * pathCells.length);
+      const [x, y] = pathCells.splice(idx, 1)[0];
+      this.fogZones.add(`${x},${y}`);
     }
     const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL];
     const artifactCount = Math.min(4, pathCells.length);
@@ -978,9 +1002,9 @@ export class Labyrinth {
     return p && p.x === this.goalX && p.y === this.goalY;
   }
 
-  /** Movement cost for tile at (x,y). Web = 2, normal = 1. */
+  /** Movement cost for tile at (x,y). Web = 3 (slows player), normal = 1. */
   getTileMoveCost(x: number, y: number): number {
-    if (this.webPositions.some(([wx, wy]) => wx === x && wy === y)) return 2;
+    if (this.webPositions.some(([wx, wy]) => wx === x && wy === y)) return 3;
     return 1;
   }
 
