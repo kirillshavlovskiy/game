@@ -20,6 +20,7 @@ import {
   isBombCell,
   getCollectibleOwner,
   getMonsterName,
+  getMonsterDefense,
   isArtifactCell,
   isTrapCell,
   TRAP_LOSE_TURN,
@@ -32,7 +33,7 @@ import {
   type MonsterType,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
-import { resolveCombat } from "@/lib/combatSystem";
+import { resolveCombat, type CombatResult } from "@/lib/combatSystem";
 import { drawEvent, applyEvent, type GameEvent } from "@/lib/eventDeck";
 
 const CELL_SIZE = 44;
@@ -182,7 +183,7 @@ export default function LabyrinthGame() {
     monsterType: MonsterType;
     monsterIndex: number;
   } | null>(null);
-  const [combatResult, setCombatResult] = useState<{ won: boolean; damage: number } | null>(null);
+  const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; shieldAbsorbed?: boolean }) | null>(null);
   const [eventLog, setEventLog] = useState<GameEvent[]>([]);
   const [mazeZoom, setMazeZoom] = useState(1);
   const [gameStarted, setGameStarted] = useState(false);
@@ -191,6 +192,7 @@ export default function LabyrinthGame() {
     Array.from({ length: 3 }, (_, i) => `Player ${i + 1}`)
   );
   const diceRef = useRef<Dice3DRef>(null);
+  const combatDiceRef = useRef<Dice3DRef>(null);
   const movesLeftRef = useRef(0);
   const winnerRef = useRef(winner);
   const combatStateRef = useRef(combatState);
@@ -463,7 +465,7 @@ export default function LabyrinthGame() {
       // Combat roll: resolve and update state
       const attackBonus = Math.floor((movesLeftRef.current ?? 0) / 2);
       const result = resolveCombat(value, attackBonus, combat.monsterType);
-      setCombatResult({ won: result.won, damage: result.damage });
+      setCombatResult({ ...result, monsterType: combat.monsterType });
       setRolling(false);
       setLab((prev) => {
         if (!prev || winnerRef.current !== null) return prev;
@@ -509,6 +511,7 @@ export default function LabyrinthGame() {
           const usedShield = next.tryConsumeShield(pi);
           if (usedShield) {
             setShieldAbsorbed(true);
+            setCombatResult((prev) => (prev ? { ...prev, shieldAbsorbed: true } : null));
           } else {
             p.hp = (p.hp ?? 3) - result.damage;
             if (p.hp <= 0) {
@@ -1425,23 +1428,64 @@ export default function LabyrinthGame() {
         </div>
       )}
 
-      {combatState && (
-        <div style={eliminatedOverlayStyle}>
-          <div style={{ ...eliminatedBannerStyle, borderColor: "#ffcc00", background: "rgba(0,0,0,0.9)" }}>
-            <span style={{ color: "#ffcc00" }}>⚔️ Combat vs {getMonsterName(combatState.monsterType)}! Roll to attack</span>
-          </div>
-        </div>
-      )}
-      {combatResult && (
-        <div style={eliminatedOverlayStyle}>
-          <div style={{
-            ...eliminatedBannerStyle,
-            borderColor: combatResult.won ? "#00ff88" : "#ff4444",
-            background: "rgba(0,0,0,0.9)",
-          }}>
-            <span style={{ color: combatResult.won ? "#00ff88" : "#ff6666" }}>
-              {combatResult.won ? "✓ Monster defeated!" : `✗ -${combatResult.damage} HP`}
-            </span>
+      {(combatState || combatResult) && (
+        <div style={combatModalOverlayStyle}>
+          <div style={combatModalStyle} onClick={(e) => e.stopPropagation()}>
+            <h2 style={combatModalTitleStyle}>
+              ⚔️ Combat vs {combatState ? getMonsterName(combatState.monsterType) : combatResult?.monsterType ? getMonsterName(combatResult.monsterType) : "Monster"}
+            </h2>
+            {combatResult ? (
+              <div style={combatResultSectionStyle}>
+                <div style={{
+                  ...combatResultBannerStyle,
+                  borderColor: combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
+                  background: combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)",
+                }}>
+                  <span style={{
+                    color: combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
+                    fontSize: "1.3rem",
+                    fontWeight: "bold",
+                  }}>
+                    {combatResult.won ? "✓ Monster defeated!" : combatResult.shieldAbsorbed ? "🛡 Shield absorbed!" : `✗ -${combatResult.damage} HP`}
+                  </span>
+                </div>
+                <div style={combatStatsStyle}>
+                  <span>Dice: <strong>{combatResult.playerRoll}</strong></span>
+                  <span>+ Attack bonus: <strong>{combatResult.attackTotal - combatResult.playerRoll}</strong></span>
+                  <span>= Total: <strong>{combatResult.attackTotal}</strong></span>
+                  <span>vs Defense: <strong>{combatResult.monsterDefense}</strong></span>
+                </div>
+              </div>
+            ) : combatState ? (
+              <div style={combatRollSectionStyle}>
+                <div style={combatMonsterInfoStyle}>
+                  Defense: <strong>{getMonsterDefense(combatState.monsterType)}</strong>
+                  {lab?.players[combatState.playerIndex] && (
+                    <span style={{ marginLeft: 12, color: "#888" }}>
+                      (Attack bonus: +{Math.floor((movesLeftRef.current ?? 0) / 2)} from moves)
+                    </span>
+                  )}
+                </div>
+                <div
+                  className="combat-dice"
+                  onClick={() => !rolling && combatDiceRef.current?.roll()}
+                  style={{ cursor: rolling ? "default" : "pointer", display: "inline-block" }}
+                >
+                  <Dice3D
+                    ref={combatDiceRef}
+                    onRollComplete={handleRollComplete}
+                    disabled={rolling}
+                  />
+                </div>
+                <button
+                  onClick={() => !rolling && combatDiceRef.current?.roll()}
+                  disabled={rolling}
+                  style={{ ...buttonStyle, marginTop: 12, background: "#ffcc00", color: "#111" }}
+                >
+                  {rolling ? "Rolling..." : "Roll to attack"}
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
       )}
@@ -2436,6 +2480,69 @@ const modalOverlayStyle: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   zIndex: 1000,
+};
+
+const combatModalOverlayStyle: React.CSSProperties = {
+  ...modalOverlayStyle,
+  background: "rgba(0,0,0,0.85)",
+  zIndex: 1050,
+};
+
+const combatModalStyle: React.CSSProperties = {
+  background: "#1a1a24",
+  padding: "2rem",
+  borderRadius: 12,
+  border: "2px solid #ffcc00",
+  boxShadow: "0 0 40px rgba(255,204,0,0.3)",
+  minWidth: 320,
+  maxWidth: 420,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+};
+
+const combatModalTitleStyle: React.CSSProperties = {
+  margin: "0 0 1.5rem 0",
+  color: "#ffcc00",
+  fontSize: "1.4rem",
+  fontWeight: "bold",
+  textAlign: "center",
+};
+
+const combatRollSectionStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  width: "100%",
+};
+
+const combatMonsterInfoStyle: React.CSSProperties = {
+  marginBottom: 1,
+  color: "#aaa",
+  fontSize: "0.95rem",
+};
+
+const combatResultSectionStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  width: "100%",
+  gap: 12,
+};
+
+const combatResultBannerStyle: React.CSSProperties = {
+  padding: "1rem 1.5rem",
+  borderRadius: 8,
+  border: "2px solid",
+  fontSize: "1.1rem",
+};
+
+const combatStatsStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  color: "#888",
+  fontSize: "0.9rem",
 };
 
 const modalStyle: React.CSSProperties = {

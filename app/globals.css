@@ -39,6 +39,11 @@ button {
   display: block;
 }
 
+/* Combat modal: hide dice hint */
+.combat-dice .hint {
+  display: none;
+}
+
 /* Teleport: ball falls into hole */
 @keyframes teleportFall {
   0% {
