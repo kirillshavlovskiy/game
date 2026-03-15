@@ -5,6 +5,7 @@ import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import {
   Labyrinth,
   PATH,
+  MAX_ROUNDS,
   SIZE_OPTIONS,
   DIFFICULTY_OPTIONS,
   PLAYER_COLORS,
@@ -19,8 +20,19 @@ import {
   isBombCell,
   getCollectibleOwner,
   getMonsterName,
+  isArtifactCell,
+  isTrapCell,
+  TRAP_LOSE_TURN,
+  TRAP_HARM,
+  TRAP_TELEPORT,
+  ARTIFACT_DICE,
+  ARTIFACT_SHIELD,
+  ARTIFACT_TELEPORT as ARTIFACT_TELEPORT_CELL,
+  ARTIFACT_REVEAL,
   type MonsterType,
 } from "@/lib/labyrinth";
+import { resolveCombat } from "@/lib/combatSystem";
+import { drawEvent, applyEvent, type GameEvent } from "@/lib/eventDeck";
 
 const CELL_SIZE = 44;
 
@@ -163,6 +175,12 @@ export default function LabyrinthGame() {
     y: number;
   } | null>(null);
   const [bombExplosion, setBombExplosion] = useState<{ x: number; y: number } | null>(null);
+  const [combatState, setCombatState] = useState<{
+    playerIndex: number;
+    monsterType: MonsterType;
+  } | null>(null);
+  const [combatResult, setCombatResult] = useState<{ won: boolean; damage: number } | null>(null);
+  const [eventLog, setEventLog] = useState<GameEvent[]>([]);
   const [mazeZoom, setMazeZoom] = useState(1);
   const [gameStarted, setGameStarted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -172,6 +190,7 @@ export default function LabyrinthGame() {
   const diceRef = useRef<Dice3DRef>(null);
   const movesLeftRef = useRef(0);
   const winnerRef = useRef(winner);
+  const combatStateRef = useRef(combatState);
   const currentPlayerRef = useRef(currentPlayer);
   const teleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hiddenGemTeleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -197,6 +216,9 @@ export default function LabyrinthGame() {
     winnerRef.current = winner;
     currentPlayerRef.current = currentPlayer;
   }, [winner, currentPlayer]);
+  useEffect(() => {
+    combatStateRef.current = combatState;
+  }, [combatState]);
 
   useEffect(() => {
     if (winner !== null || !lab || lab.eliminatedPlayers.has(currentPlayer)) return;
@@ -342,6 +364,9 @@ export default function LabyrinthGame() {
     setCatapultDragOffset(null);
     setCatapultAnimation(null);
     setBombExplosion(null);
+    setCombatState(null);
+    setCombatResult(null);
+    setEventLog([]);
   }, [getDimensions, numPlayers, difficulty]);
 
   const generateWithAI = useCallback(async () => {
@@ -399,6 +424,8 @@ export default function LabyrinthGame() {
         setCatapultDragOffset(null);
         setCatapultAnimation(null);
         setBombExplosion(null);
+        setCombatState(null);
+        setCombatResult(null);
       } else {
         setError("Invalid maze from AI, using random maze.");
         newGame();
@@ -412,9 +439,99 @@ export default function LabyrinthGame() {
   }, [getDimensions, numPlayers, newGame, difficulty]);
 
   const handleRollComplete = useCallback((value: number) => {
-    setDiceResult(value);
-    movesLeftRef.current = value;
-    setMovesLeft(value);
+    const combat = combatStateRef.current;
+    if (combat) {
+      // Combat roll: resolve and update state
+      const attackBonus = Math.floor((movesLeftRef.current ?? 0) / 2);
+      const result = resolveCombat(value, attackBonus, combat.monsterType);
+      setCombatResult({ won: result.won, damage: result.damage });
+      setRolling(false);
+      setLab((prev) => {
+        if (!prev || winnerRef.current !== null) return prev;
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
+        next.grid = prev.grid.map((r) => [...r]);
+        next.players = prev.players.map((p) => ({
+          ...p,
+          jumps: p.jumps ?? 0,
+          diamonds: p.diamonds ?? 0,
+          shield: p.shield ?? 0,
+          bombs: p.bombs ?? 0,
+          hp: p.hp ?? 3,
+          artifacts: p.artifacts ?? 0,
+        }));
+        next.hiddenCells = new Map(prev.hiddenCells);
+        next.webPositions = [...(prev.webPositions || [])];
+        next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.goalX = prev.goalX;
+        next.goalY = prev.goalY;
+        next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+        next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+        const pi = combat.playerIndex;
+        const p = next.players[pi];
+        const monsterIdx = next.monsters.findIndex((m) => p && m.x === p.x && m.y === p.y);
+        if (result.won && monsterIdx >= 0) {
+          next.monsters.splice(monsterIdx, 1);
+        } else if (!result.won && p) {
+          const usedShield = next.tryConsumeShield(pi);
+          if (usedShield) {
+            setShieldAbsorbed(true);
+          } else {
+            p.hp = (p.hp ?? 3) - result.damage;
+            if (p.hp <= 0) {
+              next.eliminatedPlayers.add(pi);
+              if (next.eliminatedPlayers.size >= next.numPlayers) setWinner(-1);
+              setEliminatedByMonster({ playerIndex: pi, monsterType: combat.monsterType });
+              if (pi === currentPlayerRef.current) {
+                movesLeftRef.current = 0;
+                setMovesLeft(0);
+                setDiceResult(null);
+                let nextP = (pi + 1) % next.numPlayers;
+                while (next.eliminatedPlayers.has(nextP) && nextP !== pi) {
+                  nextP = (nextP + 1) % next.numPlayers;
+                }
+                setCurrentPlayer(nextP);
+              }
+            }
+          }
+        }
+        return next;
+      });
+      setCombatState(null);
+      setTimeout(() => setCombatResult(null), 2000);
+      return;
+    }
+    const bonus = lab?.players[currentPlayerRef.current]?.diceBonus ?? 0;
+    const totalValue = Math.min(6, value + bonus);
+    if (bonus > 0 && lab) {
+      setLab((prev) => {
+        if (!prev) return prev;
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
+        next.grid = prev.grid.map((r) => [...r]);
+        next.players = prev.players.map((pl, i) => ({
+          ...pl,
+          jumps: pl.jumps ?? 0,
+          diamonds: pl.diamonds ?? 0,
+          shield: pl.shield ?? 0,
+          bombs: pl.bombs ?? 0,
+          hp: pl.hp ?? 3,
+          artifacts: pl.artifacts ?? 0,
+          diceBonus: i === currentPlayerRef.current ? 0 : pl.diceBonus ?? 0,
+        }));
+        next.goalX = prev.goalX;
+        next.goalY = prev.goalY;
+        next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+        next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+        next.hiddenCells = new Map(prev.hiddenCells);
+        next.webPositions = [...(prev.webPositions || [])];
+        next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        return next;
+      });
+    }
+    setDiceResult(totalValue);
+    movesLeftRef.current = totalValue;
+    setMovesLeft(totalValue);
     setRolling(false);
     setBonusAdded(null);
     setPlayerTurns((prev) => {
@@ -425,10 +542,53 @@ export default function LabyrinthGame() {
   }, []);
 
   const rollDice = useCallback(async () => {
-    if (winner !== null || !lab || movesLeft > 0) return;
+    if (winner !== null || !lab) return;
+    if (!combatState && movesLeft > 0) return;
     setRolling(true);
     await diceRef.current?.roll();
-  }, [lab, movesLeft, winner]);
+  }, [lab, movesLeft, winner, combatState]);
+
+  const triggerRoundEnd = useCallback(() => {
+    setLab((prev) => {
+      if (!prev || winnerRef.current !== null) return prev;
+      const newRound = (prev.round ?? 0) + 1;
+      if (newRound >= MAX_ROUNDS) {
+        const winnerByArtifacts = prev.getPlayerWithMostArtifacts();
+        if (winnerByArtifacts !== null) setTimeout(() => setWinner(winnerByArtifacts), 0);
+      }
+      if (Math.random() < 0.35) {
+        const ev = drawEvent();
+        setEventLog((log) => [...log.slice(-19), ev]);
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
+        next.grid = prev.grid.map((r) => [...r]);
+        next.players = prev.players.map((p) => ({ ...p }));
+        next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+        next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+        next.hiddenCells = new Map(prev.hiddenCells);
+        next.webPositions = [...(prev.webPositions || [])];
+        next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.goalX = prev.goalX;
+        next.goalY = prev.goalY;
+        next.round = newRound;
+        applyEvent(next, ev);
+        return next;
+      }
+      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
+      next.grid = prev.grid.map((r) => [...r]);
+      next.players = prev.players.map((p) => ({ ...p }));
+      next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+      next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+      next.hiddenCells = new Map(prev.hiddenCells);
+      next.webPositions = [...(prev.webPositions || [])];
+      next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.goalX = prev.goalX;
+      next.goalY = prev.goalY;
+      next.round = newRound;
+      return next;
+    });
+  }, []);
 
   const endTurn = useCallback(() => {
     if (winner !== null || !lab) return;
@@ -436,12 +596,16 @@ export default function LabyrinthGame() {
     while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
       nextP = (nextP + 1) % lab.numPlayers;
     }
+    const roundComplete = nextP <= currentPlayer;
     setCurrentPlayer(nextP);
     movesLeftRef.current = 0;
     setMovesLeft(0);
     setDiceResult(null);
     setBonusAdded(null);
-  }, [lab, winner, currentPlayer]);
+    if (roundComplete) {
+      triggerRoundEnd();
+    }
+  }, [lab, winner, currentPlayer, triggerRoundEnd]);
 
   const handleUseBomb = useCallback(() => {
     if (!lab || winner !== null || lab.eliminatedPlayers.has(currentPlayer)) return;
@@ -489,7 +653,12 @@ export default function LabyrinthGame() {
       setCatapultPicker(null);
       setCatapultMode(false);
       setCatapultDragOffset(null);
-      movesLeftRef.current--;
+      const p = lab.players[currentPlayer]!;
+      const destX = jumpOnly ? p.x + 2 * dx : p.x + dx;
+      const destY = jumpOnly ? p.y + 2 * dy : p.y + dy;
+      const tileCost = lab.getTileMoveCost(destX, destY);
+      if (movesLeftRef.current < tileCost) return;
+      movesLeftRef.current -= tileCost;
       setBonusAdded(null);
       setJumpAdded(null);
       const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
@@ -514,7 +683,7 @@ export default function LabyrinthGame() {
       next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
       const moveSucceeded = next.movePlayer(dx, dy, currentPlayer, jumpOnly);
       if (!moveSucceeded) {
-        movesLeftRef.current++;
+        movesLeftRef.current += tileCost;
         return;
       }
       {
@@ -534,6 +703,57 @@ export default function LabyrinthGame() {
         }
         if (p) {
           const cell = next.grid[p.y]?.[p.x];
+          if (cell && isTrapCell(cell)) {
+            if (cell === TRAP_LOSE_TURN) {
+              movesLeftRef.current = 0;
+              setMovesLeft(0);
+              setDiceResult(null);
+              let nextP = (currentPlayer + 1) % lab.numPlayers;
+              while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
+                nextP = (nextP + 1) % lab.numPlayers;
+              }
+              setCurrentPlayer(nextP);
+            } else if (cell === TRAP_HARM) {
+              const usedShield = next.tryConsumeShield(currentPlayer);
+              if (usedShield) setShieldAbsorbed(true);
+              else {
+                p.hp = (p.hp ?? 3) - 1;
+                if (p.hp <= 0) {
+                  next.eliminatedPlayers.add(currentPlayer);
+                  setEliminatedByMonster({ playerIndex: currentPlayer, monsterType: "Z" });
+                  if (next.eliminatedPlayers.size >= next.numPlayers) setWinner(-1);
+                  movesLeftRef.current = 0;
+                  setMovesLeft(0);
+                  setDiceResult(null);
+                  let nextP = (currentPlayer + 1) % lab.numPlayers;
+                  while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
+                    nextP = (nextP + 1) % lab.numPlayers;
+                  }
+                  setCurrentPlayer(nextP);
+                }
+              }
+            } else if (cell === TRAP_TELEPORT) {
+              const dest = next.getRandomPathCell();
+              if (dest) {
+                const [fromX, fromY] = [p.x, p.y];
+                p.x = dest[0];
+                p.y = dest[1];
+                setTeleportAnimation({ from: [fromX, fromY], to: dest, playerIndex: currentPlayer });
+              }
+            }
+          }
+          if (cell && isArtifactCell(cell)) {
+            p.artifacts = (p.artifacts ?? 0) + 1;
+            if (cell === ARTIFACT_DICE) p.diceBonus = (p.diceBonus ?? 0) + 1;
+            if (cell === ARTIFACT_SHIELD) p.shield = (p.shield ?? 0) + 1;
+            if (cell === ARTIFACT_TELEPORT_CELL) p.hasTeleportArtifact = true;
+            if (cell === ARTIFACT_REVEAL) {
+              const totalDiamonds = next.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0) + 1;
+              const revealed = next.revealHiddenCells(totalDiamonds);
+              if (revealed > 0) setCellsRevealed(revealed);
+            }
+            next.grid[p.y][p.x] = PATH;
+          }
           if (cell && isJumpCell(cell)) {
             const mult = 1;
             p.jumps = (p.jumps ?? 0) + mult;
@@ -657,30 +877,14 @@ export default function LabyrinthGame() {
             }
           }
         }
-        next.moveMonsters({ prevX, prevY, playerIndex: currentPlayer });
+        // Combat: when player lands on monster, enter combat mode (roll to resolve)
         const collision = next.checkMonsterCollision(currentPlayer);
         if (collision) {
-          const usedShield = next.tryConsumeShield(collision.playerIndex);
-          if (usedShield) {
-            setShieldAbsorbed(true);
-          } else {
-            next.eliminatedPlayers.add(collision.playerIndex);
-            setEliminatedByMonster({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
-            if (next.eliminatedPlayers.size >= next.numPlayers) {
-              setWinner(-1);
-            } else if (collision.playerIndex === currentPlayer) {
-              movesLeftRef.current = 0;
-              setMovesLeft(0);
-              setDiceResult(null);
-              let nextP = (currentPlayer + 1) % lab.numPlayers;
-              while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
-                nextP = (nextP + 1) % lab.numPlayers;
-              }
-              setCurrentPlayer(nextP);
-            }
-          }
+          setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
+          setLab(next);
+          return;
         }
-        if (next.isGoalReached(currentPlayer)) {
+        if (next.hasWonByArtifactsAndExit(currentPlayer)) {
           setWinner(currentPlayer);
         }
         setLab(next);
@@ -704,18 +908,20 @@ export default function LabyrinthGame() {
             while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
               nextP = (nextP + 1) % lab.numPlayers;
             }
+            const roundComplete = nextP <= currentPlayer;
             setCurrentPlayer(nextP);
             setDiceResult(null);
+            if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
           }
         }
       }
     },
-    [lab, currentPlayer, movesLeft, winner, diceResult]
+    [lab, currentPlayer, movesLeft, winner, diceResult, triggerRoundEnd]
   );
 
   // Game starts only when user clicks Start in the start modal
 
-  const MONSTER_MOVE_INTERVAL_MS = 2200;
+  const MONSTER_MOVE_INTERVAL_MS = 2500;
 
   useEffect(() => {
     if (!lab || winner !== null) return;
@@ -730,9 +936,13 @@ export default function LabyrinthGame() {
           diamonds: p.diamonds ?? 0,
           shield: p.shield ?? 0,
           bombs: p.bombs ?? 0,
+          hp: p.hp ?? 3,
+          artifacts: p.artifacts ?? 0,
         }));
         next.goalX = prev.goalX;
         next.goalY = prev.goalY;
+        next.round = prev.round;
+        next.currentRound = prev.currentRound;
         next.monsters = prev.monsters.map((m) => ({
           ...m,
           patrolArea: [...m.patrolArea],
@@ -743,6 +953,10 @@ export default function LabyrinthGame() {
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.moveMonsters();
+        const collision = next.checkMonsterCollision();
+        if (collision) {
+          setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
+        }
         return next;
       });
     }, MONSTER_MOVE_INTERVAL_MS);
@@ -750,7 +964,7 @@ export default function LabyrinthGame() {
   }, [lab?.width, lab?.height, lab?.numPlayers, winner]);
 
   useEffect(() => {
-    if (!lab || winner !== null || movesLeft > 0 || rolling || catapultPicker) return;
+    if (!lab || winner !== null || combatState || movesLeft > 0 || rolling || catapultPicker) return;
     if (lab.eliminatedPlayers.has(currentPlayer)) {
       let nextP = (currentPlayer + 1) % lab.numPlayers;
       while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
@@ -787,14 +1001,15 @@ export default function LabyrinthGame() {
       const d = map[e.key];
       if (d) {
         if (movesLeftRef.current <= 0 || winnerRef.current !== null || !lab) return;
-        const jumpOnly = e.shiftKey; // Shift+Arrow = jump
-        doMove(d[0], d[1], jumpOnly);
+        // Same keys for move and jump: prefer jump when possible in that direction
+        const jumpPreferred = lab.canJumpInDirection(d[0], d[1], currentPlayer);
+        doMove(d[0], d[1], jumpPreferred);
         e.preventDefault();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [newGame, doMove, lab]);
+  }, [newGame, doMove, lab, currentPlayer]);
 
   const playerCells: Record<string, number> = {};
   if (lab) {
@@ -807,7 +1022,7 @@ export default function LabyrinthGame() {
   const cp = lab?.players[currentPlayer];
   const gameOver = winner !== null;
   const moveDisabled = movesLeft <= 0 || gameOver || (lab?.eliminatedPlayers.has(currentPlayer) ?? false);
-  const rollDisabled = movesLeft > 0 || gameOver || rolling || !!catapultPicker;
+  const rollDisabled = (!combatState && movesLeft > 0) || gameOver || rolling || !!catapultPicker;
   const showSecretCells = movesLeft > 0;
   const jumpTargets = lab && cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
   const canMoveUp = !moveDisabled && lab?.canMoveOnly(0, -1, currentPlayer);
@@ -848,7 +1063,7 @@ export default function LabyrinthGame() {
           if (playerIndex < arr.length) arr[playerIndex] = (arr[playerIndex] ?? 0) + 1;
           return arr;
         });
-        next.moveMonsters({ prevX: from[0], prevY: from[1], playerIndex });
+        // Monsters move only via timer
         const collision = next.checkMonsterCollision(playerIndex);
         if (collision) {
           const usedShield = next.tryConsumeShield(collision.playerIndex);
@@ -858,7 +1073,7 @@ export default function LabyrinthGame() {
             setEliminatedByMonster({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
           }
         }
-        if (next.isGoalReached(playerIndex)) setWinner(playerIndex);
+        if (next.hasWonByArtifactsAndExit(playerIndex)) setWinner(playerIndex);
         setLab(next);
       }
     },
@@ -878,7 +1093,8 @@ export default function LabyrinthGame() {
       const dy = releaseY - d.startY;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 15) return; // too short a drag
-      handleCatapultLaunch(dx, dy, dist);
+      // Launch opposite to pull direction (slingshot: pull back → launch forward)
+      handleCatapultLaunch(-dx, -dy, dist);
     };
     const onPointerCancel = () => {
       catapultDragRef.current = null;
@@ -1041,6 +1257,8 @@ export default function LabyrinthGame() {
             Moves: {diceResult !== null ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}` : "—/—"}
           </span>
           <span style={headerStatDivider}>|</span>
+          <span style={headerStatItemStyle}>Round: {(lab.round ?? 0) + 1}/{MAX_ROUNDS}</span>
+          <span style={headerStatDivider}>|</span>
           <span style={headerStatItemStyle}>Total: {totalMoves}</span>
           <span style={headerStatDivider}>|</span>
           <span style={headerStatItemStyle}>
@@ -1077,6 +1295,16 @@ export default function LabyrinthGame() {
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
         <aside style={statsPanelStyle}>
           <div style={{ fontSize: "0.9rem", fontWeight: "bold", color: "#00ff88", marginBottom: 4 }}>Players</div>
+          {eventLog.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: "0.7rem", fontWeight: "bold", color: "#888", marginBottom: 4 }}>Events</div>
+              <div style={{ maxHeight: 80, overflowY: "auto", fontSize: "0.7rem", color: "#aaa" }}>
+                {eventLog.slice().reverse().map((ev, i) => (
+                  <div key={i} style={{ marginBottom: 2 }}>{ev.description}</div>
+                ))}
+              </div>
+            </div>
+          )}
           {lab.players.map((p, i) => (
             <div
               key={i}
@@ -1096,6 +1324,12 @@ export default function LabyrinthGame() {
               </div>
               <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
                 Moves: {playerMoves[i] ?? 0}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
+                HP: {p?.hp ?? 3}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
+                Artifacts: {p?.artifacts ?? 0}/3
               </div>
               <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
                 Diamonds: {p?.diamonds ?? 0}
@@ -1119,6 +1353,26 @@ export default function LabyrinthGame() {
         </div>
       )}
 
+      {combatState && (
+        <div style={eliminatedOverlayStyle}>
+          <div style={{ ...eliminatedBannerStyle, borderColor: "#ffcc00", background: "rgba(0,0,0,0.9)" }}>
+            <span style={{ color: "#ffcc00" }}>⚔️ Combat vs {getMonsterName(combatState.monsterType)}! Roll to attack</span>
+          </div>
+        </div>
+      )}
+      {combatResult && (
+        <div style={eliminatedOverlayStyle}>
+          <div style={{
+            ...eliminatedBannerStyle,
+            borderColor: combatResult.won ? "#00ff88" : "#ff4444",
+            background: "rgba(0,0,0,0.9)",
+          }}>
+            <span style={{ color: combatResult.won ? "#00ff88" : "#ff6666" }}>
+              {combatResult.won ? "✓ Monster defeated!" : `✗ -${combatResult.damage} HP`}
+            </span>
+          </div>
+        </div>
+      )}
       {eliminatedByMonster && (
         <div style={eliminatedOverlayStyle}>
           <div style={eliminatedBannerStyle}>
@@ -1302,7 +1556,7 @@ export default function LabyrinthGame() {
                 const markerStretchStyle: React.CSSProperties = isCatapultStretch && catapultDragOffset
                   ? {
                       transform: `scale(${1 + stretchX}, ${1 + stretchY})`,
-                      transformOrigin: `${catapultDragOffset.dx >= 0 ? "right" : "left"} ${catapultDragOffset.dy >= 0 ? "bottom" : "top"}`,
+                      transformOrigin: `${catapultDragOffset.dx >= 0 ? "left" : "right"} ${catapultDragOffset.dy >= 0 ? "top" : "bottom"}`,
                     }
                   : {};
                 const playerMarker = (
@@ -1335,22 +1589,19 @@ export default function LabyrinthGame() {
                       <span style={{ color: "#00ff88" }}>{movesLeft}</span>
                       {canJumpUp && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J↑{cp.jumps ?? 0}</span>}
                     </span>
-                    {(canMoveDown || canJumpDown) && (
+                    {canJumpDown && (
                       <span style={{ ...dirHintStyle, bottom: -dirOffset, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
-                        {canMoveDown && <span style={{ color: "#00ff88" }}>↓</span>}
-                        {canJumpDown && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J↓{cp.jumps ?? 0}</span>}
+                        <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J↓{cp.jumps ?? 0}</span>
                       </span>
                     )}
-                    {(canMoveLeft || canJumpLeft) && (
+                    {canJumpLeft && (
                       <span style={{ ...dirHintStyle, left: -dirOffset, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 4 }}>
-                        {canMoveLeft && <span style={{ color: "#00ff88" }}>←</span>}
-                        {canJumpLeft && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J←{cp.jumps ?? 0}</span>}
+                        <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J←{cp.jumps ?? 0}</span>
                       </span>
                     )}
-                    {(canMoveRight || canJumpRight) && (
+                    {canJumpRight && (
                       <span style={{ ...dirHintStyle, right: -dirOffset, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "row", alignItems: "center", gap: 4 }}>
-                        {canMoveRight && <span style={{ color: "#00ff88" }}>→</span>}
-                        {canJumpRight && <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J→{cp.jumps ?? 0}</span>}
+                        <span style={{ color: "#66aaff", fontSize: "0.65rem" }}>J→{cp.jumps ?? 0}</span>
                       </span>
                     )}
                   </>
@@ -1373,6 +1624,22 @@ export default function LabyrinthGame() {
               } else if (isMultiplierCell(lab.grid[y][x])) {
                 content = `×${lab.grid[y][x]}`;
                 cellClass += " path multiplier mult-x" + lab.grid[y][x];
+              } else if (isArtifactCell(lab.grid[y][x])) {
+                const art = lab.grid[y][x];
+                content = (
+                  <span style={{ fontSize: "1.1rem" }} title={art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : "Reveal"}>
+                    {art === ARTIFACT_DICE ? "🎲" : art === ARTIFACT_SHIELD ? "🛡" : art === ARTIFACT_TELEPORT_CELL ? "🌀" : "👁"}
+                  </span>
+                );
+                cellClass += " path artifact";
+              } else if (isTrapCell(lab.grid[y][x])) {
+                const trap = lab.grid[y][x];
+                content = (
+                  <span style={{ fontSize: "1rem" }} title={trap === TRAP_LOSE_TURN ? "Lose turn" : trap === TRAP_HARM ? "Harm" : trap === TRAP_TELEPORT ? "Teleport" : "Slow"}>
+                    {trap === TRAP_LOSE_TURN ? "⏸" : trap === TRAP_HARM ? "⚠" : trap === TRAP_TELEPORT ? "🌀" : "🐌"}
+                  </span>
+                );
+                cellClass += " path trap";
               } else if (isBombCell(lab.grid[y][x])) {
                 content = (
                   <span style={{ fontSize: "1.1rem" }} title="Bomb pickup">
@@ -1459,6 +1726,16 @@ export default function LabyrinthGame() {
               if (cellClass.includes("shield")) {
                 cellBg.background = "#1e2e1e";
                 cellBg.color = "#44ff88";
+                cellBg.fontWeight = "bold";
+              }
+              if (cellClass.includes("artifact")) {
+                cellBg.background = "#1e2e2e";
+                cellBg.color = "#aa66ff";
+                cellBg.fontWeight = "bold";
+              }
+              if (cellClass.includes("trap")) {
+                cellBg.background = "#2e2e1e";
+                cellBg.color = "#ffaa00";
                 cellBg.fontWeight = "bold";
               }
               if (cellClass.includes("bomb")) {
@@ -1588,7 +1865,8 @@ export default function LabyrinthGame() {
           const dy = catapultDragOffset.dy;
           const strength = Math.sqrt(dx * dx + dy * dy);
           if (strength < 1) return null;
-          const traj = lab.getCatapultTrajectory(catapultPicker.from[0], catapultPicker.from[1], dx, dy, strength, false);
+          // Preview launch direction (opposite to pull)
+          const traj = lab.getCatapultTrajectory(catapultPicker.from[0], catapultPicker.from[1], -dx, -dy, strength, false);
           if (!traj) return null;
           const cs = CELL_SIZE * mazeZoom;
           const pathD = traj.arcPoints.map(([px, py], i) => `${i === 0 ? "M" : "L"} ${px * cs} ${py * cs}`).join(" ");
@@ -1662,8 +1940,7 @@ export default function LabyrinthGame() {
           background: "#1a1a24",
           padding: "0.5rem",
           borderRadius: 8,
-          border: "2px solid #00ff88",
-          boxShadow: "0 0 20px rgba(0,255,136,0.4)",
+          border: "1px solid #333",
         }}
       >
         <div
@@ -1727,12 +2004,12 @@ export default function LabyrinthGame() {
           </div>
         </div>
         <div style={{ ...controlsSectionStyle, borderColor: "#66aaff", background: (cp?.jumps ?? 0) > 0 ? "#1e2e3e22" : undefined }}>
-          <div style={{ ...controlsSectionLabelStyle, color: "#66aaff" }}>Jump {(cp?.jumps ?? 0) > 0 && `×${cp?.jumps ?? 0}`} <span style={{ fontSize: "0.65rem", color: "#888", fontWeight: "normal" }}>(Shift+Arrow)</span></div>
+          <div style={{ ...controlsSectionLabelStyle, color: "#66aaff" }}>Jump {(cp?.jumps ?? 0) > 0 && `×${cp?.jumps ?? 0}`} <span style={{ fontSize: "0.65rem", color: "#888", fontWeight: "normal" }}>(Arrow/WASD)</span></div>
           <div className="jump-buttons" style={{ ...moveButtonsStyle, display: "grid", gridTemplateColumns: "repeat(3, 2.5rem)", gridTemplateRows: "repeat(3, 2.5rem)", gap: 2, alignSelf: "center", padding: 4, borderRadius: 8, border: "2px solid #66aaff" }}>
-            <button onClick={() => doMove(0, -1, true)} disabled={!canJumpUp} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 1 }} title="Jump up (Shift+↑)">J↑</button>
-            <button onClick={() => doMove(-1, 0, true)} disabled={!canJumpLeft} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 1, gridRow: 2 }} title="Jump left (Shift+←)">J←</button>
-            <button onClick={() => doMove(1, 0, true)} disabled={!canJumpRight} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 3, gridRow: 2 }} title="Jump right (Shift+→)">J→</button>
-            <button onClick={() => doMove(0, 1, true)} disabled={!canJumpDown} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 3 }} title="Jump down (Shift+↓)">J↓</button>
+            <button onClick={() => doMove(0, -1, true)} disabled={!canJumpUp} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 1 }} title="Jump up">J↑</button>
+            <button onClick={() => doMove(-1, 0, true)} disabled={!canJumpLeft} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 1, gridRow: 2 }} title="Jump left">J←</button>
+            <button onClick={() => doMove(1, 0, true)} disabled={!canJumpRight} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 3, gridRow: 2 }} title="Jump right">J→</button>
+            <button onClick={() => doMove(0, 1, true)} disabled={!canJumpDown} style={{ ...moveButtonStyle, ...jumpButtonStyle, gridColumn: 2, gridRow: 3 }} title="Jump down">J↓</button>
           </div>
         </div>
         <div style={{ ...controlsSectionStyle, borderColor: "#ff8844", background: (cp?.bombs ?? 0) > 0 ? "#2e1e1e22" : undefined }}>

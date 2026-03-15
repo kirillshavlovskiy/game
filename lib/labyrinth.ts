@@ -12,13 +12,33 @@ export const JUMP = "J";
 export const SHIELD = "H";
 export const BOMB = "B";
 
-export type MonsterType = "V" | "Z" | "S" | "G" | "K"; // Vampire, Zombie, Spider, Ghost, Skeleton
+/** Trap cell types (H is shield, so harm uses !) */
+export const TRAP_LOSE_TURN = "T";
+export const TRAP_HARM = "!";
+export const TRAP_TELEPORT = "P";
+export const TRAP_SLOW = "Q"; // Q for slow (S conflicts with Start display)
+
+/** Artifact cell types (A1-A4) */
+export const ARTIFACT_DICE = "A1";
+export const ARTIFACT_SHIELD = "A2";
+export const ARTIFACT_TELEPORT = "A3";
+export const ARTIFACT_REVEAL = "A4";
+
+export const MAX_ROUNDS = 15;
+export const DEFAULT_PLAYER_HP = 3;
+
+export type MonsterType = "V" | "Z" | "S" | "G" | "K"; // Vampire/Dracula, Zombie, Spider, Ghost, Skeleton
 
 export interface Monster {
   x: number;
   y: number;
   type: MonsterType;
   patrolArea: [number, number][];
+  visionRadius?: number;
+  attack?: number;
+  defense?: number;
+  spawnX?: number;
+  spawnY?: number;
 }
 
 export function isMonsterType(type: string): type is MonsterType {
@@ -26,7 +46,19 @@ export function isMonsterType(type: string): type is MonsterType {
 }
 
 export function getMonsterName(type: MonsterType): string {
-  return type === "V" ? "Vampire" : type === "Z" ? "Zombie" : type === "S" ? "Spider" : type === "G" ? "Ghost" : "Skeleton";
+  return type === "V" ? "Dracula" : type === "Z" ? "Zombie" : type === "S" ? "Spider" : type === "G" ? "Ghost" : "Skeleton";
+}
+
+export function getMonsterDefense(type: MonsterType): number {
+  return type === "V" ? 5 : type === "Z" ? 4 : type === "G" || type === "K" ? 3 : 2;
+}
+
+export function isTrapCell(cell: string): boolean {
+  return cell === TRAP_LOSE_TURN || cell === TRAP_HARM || cell === TRAP_TELEPORT || cell === TRAP_SLOW;
+}
+
+export function isArtifactCell(cell: string): boolean {
+  return cell === ARTIFACT_DICE || cell === ARTIFACT_SHIELD || cell === ARTIFACT_TELEPORT || cell === ARTIFACT_REVEAL;
 }
 
 export function isMultiplierCell(cell: string): cell is "2" | "3" | "4" {
@@ -86,11 +118,24 @@ export class Labyrinth {
   numPlayers: number;
   monsterDensity: number;
   grid: string[][];
-  players: Array<{ x: number; y: number; jumps: number; diamonds: number; shield: number; bombs: number }>;
+  players: Array<{
+    x: number;
+    y: number;
+    jumps: number;
+    diamonds: number;
+    shield: number;
+    bombs: number;
+    hp: number;
+    artifacts: number;
+    diceBonus?: number; // +1 to next roll from A1
+    hasTeleportArtifact?: boolean; // A3
+  }>;
   goalX: number;
   goalY: number;
   monsters: Monster[] = [];
   eliminatedPlayers: Set<number> = new Set();
+  round: number = 0;
+  currentRound: number = 0;
   /** Hidden cells revealed when players collect diamonds. Key: "x,y", Value: cell type (M, J, 2, 3, 4, H) */
   hiddenCells: Map<string, string> = new Map();
   /** Spider web decoration positions [x,y] for visual effect */
@@ -113,9 +158,41 @@ export class Labyrinth {
     this.numPlayers = numPlayers;
     this.monsterDensity = Math.min(4, Math.max(1, monsterDensity));
     this.grid = [];
-    this.players = Array.from({ length: numPlayers }, () => ({ x: 0, y: 0, jumps: 0, diamonds: 0, shield: 0, bombs: 0 }));
+    const spawns = this._getCornerSpawns();
+    this.players = Array.from({ length: numPlayers }, (_, i) => ({
+      x: spawns[i]?.[0] ?? 0,
+      y: spawns[i]?.[1] ?? 0,
+      jumps: 0,
+      diamonds: 0,
+      shield: 0,
+      bombs: 0,
+      hp: DEFAULT_PLAYER_HP,
+      artifacts: 0,
+      diceBonus: 0,
+      hasTeleportArtifact: false,
+    }));
     this.goalX = width - 1;
     this.goalY = height - 1;
+  }
+
+  /** Get spawn positions for players: corners for 3-4, scaled to map size. For 5+ adds edge midpoints. */
+  private _getCornerSpawns(): [number, number][] {
+    const w = this.width - 1;
+    const h = this.height - 1;
+    const mw = Math.floor(w / 2);
+    const mh = Math.floor(h / 2);
+    const positions: [number, number][] = [
+      [0, 0],
+      [w, 0],
+      [0, h],
+      [w, h],
+      [mw, 0],
+      [mw, h],
+      [0, mh],
+      [w, mh],
+      [mw, mh],
+    ];
+    return positions.slice(0, Math.min(this.numPlayers, positions.length));
   }
 
   get playerX(): number {
@@ -260,6 +337,22 @@ export class Labyrinth {
     const diamondCells = this._pickSpread(rest3, diamondCount);
     const rest3b = rest3.filter((c) => !diamondCells.some((d) => d[0] === c[0] && d[1] === c[1]));
     const bombCells = this._pickSpread(rest3b, bombCount);
+    const rest3c = rest3b.filter((c) => !bombCells.some((b) => b[0] === c[0] && b[1] === c[1]));
+    const trapCount = Math.max(2, Math.min(8, Math.floor(pathCells.length * 0.03)));
+    const trapCells = this._pickSpread(rest3c, trapCount);
+    const trapTypes = [TRAP_LOSE_TURN, TRAP_HARM, TRAP_TELEPORT, TRAP_SLOW];
+    for (let i = 0; i < trapCells.length; i++) {
+      const [x, y] = trapCells[i];
+      this.grid[y][x] = trapTypes[i % 4];
+    }
+    const rest3d = rest3c.filter((c) => !trapCells.some((t) => t[0] === c[0] && t[1] === c[1]));
+    const artifactCount = 4;
+    const artifactCells = this._pickSpread(rest3d, Math.min(artifactCount, rest3d.length));
+    const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL];
+    for (let i = 0; i < artifactCells.length; i++) {
+      const [x, y] = artifactCells[i];
+      this.grid[y][x] = artifactTypes[i % 4];
+    }
 
     for (let i = 0; i < multCells.length; i++) {
       const [x, y] = multCells[i];
@@ -275,7 +368,7 @@ export class Labyrinth {
     for (const [x, y] of bombCells) this.grid[y][x] = BOMB;
     // Add hidden cells (revealed when diamonds collected): magic, jump, multipliers, shield
     const hiddenCount = Math.max(4, Math.min(12, Math.floor(pathCells.length * 0.06)));
-    const rest4 = rest3b.filter((c) => !bombCells.some((b) => b[0] === c[0] && b[1] === c[1]));
+    const rest4 = rest3d.filter((c) => !artifactCells.some((a) => a[0] === c[0] && a[1] === c[1]));
     const hiddenCellCoords = this._pickSpread(rest4, hiddenCount);
     const hiddenTypes: string[] = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, MULT_X2, MULT_X3, SHIELD, SHIELD];
     for (let i = 0; i < hiddenCellCoords.length; i++) {
@@ -283,6 +376,7 @@ export class Labyrinth {
       this.hiddenCells.set(`${x},${y}`, hiddenTypes[i % hiddenTypes.length]);
       // Grid stays PATH until revealed
     }
+    const spawnPositions = this._getCornerSpawns();
     const excludeFromMonsters: [number, number][] = [
       ...multCells,
       ...magicCells,
@@ -290,7 +384,10 @@ export class Labyrinth {
       ...jumpCells,
       ...diamondCells,
       ...bombCells,
+      ...trapCells,
+      ...artifactCells,
       ...hiddenCellCoords,
+      ...spawnPositions,
     ];
     this._addMonsters(excludeFromMonsters);
     this._addSpiderWebs(rest4.length > 0 ? rest4 : rest3b);
@@ -382,47 +479,87 @@ export class Labyrinth {
             x, y,
             type: types[(this.monsters.length) % 5],
             patrolArea,
+            visionRadius: 3,
+            spawnX: x,
+            spawnY: y,
           });
         }
       }
     }
   }
 
-  /** Optional swapHint: when a player just moved from (prevX, prevY) to the monster's cell, force monster to move to prev so they pass. */
-  moveMonsters(swapHint?: { prevX: number; prevY: number; playerIndex: number }): void {
+  /** Move monsters using vision/chase/attack AI. */
+  moveMonsters(): void {
     for (const m of this.monsters) {
-      // Ghosts move through walls; other monsters need walkable cells
-      const canPhase = m.type === "G";
-      const adjacent: [number, number][] = [];
-      for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
-        const nx = m.x + dx;
-        const ny = m.y + dy;
-        if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
-          if (canPhase || isWalkable(this.grid[ny][nx])) {
-            adjacent.push([nx, ny]);
-          }
-        }
-      }
-      if (adjacent.length === 0) continue;
-      let next: [number, number];
-      if (swapHint && this.players[swapHint.playerIndex]) {
-        const p = this.players[swapHint.playerIndex];
-        if (p && p.x === m.x && p.y === m.y) {
-          const prevCell = adjacent.find(([px, py]) => px === swapHint!.prevX && py === swapHint!.prevY);
-          if (prevCell) {
-            next = prevCell;
-          } else {
-            next = adjacent[Math.floor(Math.random() * adjacent.length)];
-          }
-        } else {
-          next = adjacent[Math.floor(Math.random() * adjacent.length)];
-        }
-      } else {
-        next = adjacent[Math.floor(Math.random() * adjacent.length)];
-      }
-      m.x = next[0];
-      m.y = next[1];
+      const [nx, ny] = this._getMonsterNextPosition(m);
+      m.x = nx;
+      m.y = ny;
     }
+  }
+
+  private _getMonsterNextPosition(m: Monster): [number, number] {
+    const canPhase = m.type === "G";
+    const vision = m.visionRadius ?? 3;
+    const nearest = this._findNearestPlayer(m);
+    if (nearest) {
+      const { dist: d } = nearest;
+      if (d <= 1) {
+        const p = this.players[nearest.playerIndex];
+        if (p) return [p.x, p.y];
+      }
+      if (d <= vision) {
+        const next = this._pathfindToward(m.x, m.y, this.players[nearest.playerIndex].x, this.players[nearest.playerIndex].y, canPhase);
+        if (next) return next;
+      }
+    }
+    const adjacent: [number, number][] = [];
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+      const nx = m.x + dx;
+      const ny = m.y + dy;
+      if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
+        if (canPhase || isWalkable(this.grid[ny][nx])) adjacent.push([nx, ny]);
+      }
+    }
+    if (adjacent.length === 0) return [m.x, m.y];
+    return adjacent[Math.floor(Math.random() * adjacent.length)];
+  }
+
+  private _manhattanDist(x1: number, y1: number, x2: number, y2: number): number {
+    return Math.abs(x1 - x2) + Math.abs(y1 - y2);
+  }
+
+  private _findNearestPlayer(m: Monster): { playerIndex: number; dist: number } | null {
+    let nearest: { playerIndex: number; dist: number } | null = null;
+    for (let i = 0; i < this.players.length; i++) {
+      if (this.eliminatedPlayers.has(i)) continue;
+      const p = this.players[i];
+      if (!p) continue;
+      const d = this._manhattanDist(m.x, m.y, p.x, p.y);
+      if (!nearest || d < nearest.dist) nearest = { playerIndex: i, dist: d };
+    }
+    return nearest;
+  }
+
+  private _pathfindToward(fromX: number, fromY: number, toX: number, toY: number, canPhase: boolean): [number, number] | null {
+    const adjacent: [number, number][] = [];
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+      const nx = fromX + dx;
+      const ny = fromY + dy;
+      if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
+        if (canPhase || isWalkable(this.grid[ny][nx])) adjacent.push([nx, ny]);
+      }
+    }
+    if (adjacent.length === 0) return null;
+    let best = adjacent[0];
+    let bestD = this._manhattanDist(best[0], best[1], toX, toY);
+    for (const n of adjacent) {
+      const d = this._manhattanDist(n[0], n[1], toX, toY);
+      if (d < bestD) {
+        bestD = d;
+        best = n;
+      }
+    }
+    return best;
   }
 
   /** Check monster collision. Pass activePlayerIndex to only check the player whose turn it is (inactive players are protected). */
@@ -498,17 +635,33 @@ export class Labyrinth {
   generate(): void {
     this.monsters = [];
     this.eliminatedPlayers = new Set();
+    this.round = 0;
+    this.currentRound = 0;
     this._initGrid();
     this._carvePath(1, 1);
     this._ensureGoalReachable();
     this._addExtraPaths();
     this._addSpecialCells();
+    // Ensure all corner/edge spawn cells are path
     this.grid[0][0] = PATH;
     this.grid[this.height - 1][this.width - 1] = PATH;
     if (this.height > 1) this.grid[1][0] = PATH;
     if (this.width > 1) this.grid[0][1] = PATH;
     if (this.height > 1) this.grid[this.height - 2][this.width - 1] = PATH;
     if (this.width > 1) this.grid[this.height - 1][this.width - 2] = PATH;
+    if (this.width > 1) this.grid[0][this.width - 1] = PATH;
+    if (this.height > 1) this.grid[this.height - 1][0] = PATH;
+    // Reset player positions to spawns
+    const spawns = this._getCornerSpawns();
+    this.players = this.players.map((p, i) => ({
+      ...p,
+      x: spawns[i]?.[0] ?? p.x,
+      y: spawns[i]?.[1] ?? p.y,
+      hp: DEFAULT_PLAYER_HP,
+      artifacts: 0,
+      diceBonus: 0,
+      hasTeleportArtifact: false,
+    }));
   }
 
   loadGrid(grid: string[][]): boolean {
@@ -528,13 +681,18 @@ export class Labyrinth {
     if (this.width > 1) this.grid[0][1] = PATH;
     if (this.height > 1) this.grid[this.height - 2][this.width - 1] = PATH;
     if (this.width > 1) this.grid[this.height - 1][this.width - 2] = PATH;
-    this.players = Array.from({ length: this.numPlayers }, () => ({
-      x: 0,
-      y: 0,
+    const spawns = this._getCornerSpawns();
+    this.players = Array.from({ length: this.numPlayers }, (_, i) => ({
+      x: spawns[i]?.[0] ?? 0,
+      y: spawns[i]?.[1] ?? 0,
       jumps: 0,
       diamonds: 0,
       shield: 0,
       bombs: 0,
+      hp: DEFAULT_PLAYER_HP,
+      artifacts: 0,
+      diceBonus: 0,
+      hasTeleportArtifact: false,
     }));
     this.monsters = [];
     this.eliminatedPlayers = new Set();
@@ -561,6 +719,13 @@ export class Labyrinth {
     for (let i = 0; i < webCount && pathCells.length > 0; i++) {
       const idx = Math.floor(Math.random() * pathCells.length);
       this.webPositions.push(pathCells.splice(idx, 1)[0]);
+    }
+    const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL];
+    const artifactCount = Math.min(4, pathCells.length);
+    for (let i = 0; i < artifactCount && pathCells.length > 0; i++) {
+      const idx = Math.floor(Math.random() * pathCells.length);
+      const [x, y] = pathCells.splice(idx, 1)[0];
+      this.grid[y][x] = artifactTypes[i % 4];
     }
     return true;
   }
@@ -646,6 +811,16 @@ export class Labyrinth {
     const options = this.getTeleportOptions(playerIndex, 20);
     if (options.length === 0) return null;
     return options[Math.floor(Math.random() * options.length)];
+  }
+
+  /** Get a random path cell (for trap teleport). */
+  getRandomPathCell(): [number, number] | null {
+    const cells: [number, number][] = [];
+    for (let y = 0; y < this.height; y++)
+      for (let x = 0; x < this.width; x++)
+        if (isWalkable(this.grid[y][x])) cells.push([x, y]);
+    if (cells.length === 0) return null;
+    return cells[Math.floor(Math.random() * cells.length)];
   }
 
   teleportToCell(playerIndex: number, destX: number, destY: number): boolean {
@@ -795,6 +970,33 @@ export class Labyrinth {
   isGoalReached(playerIndex = 0): boolean {
     const p = this.players[playerIndex];
     return p && p.x === this.goalX && p.y === this.goalY;
+  }
+
+  /** Movement cost for tile at (x,y). Web = 2, normal = 1. */
+  getTileMoveCost(x: number, y: number): number {
+    if (this.webPositions.some(([wx, wy]) => wx === x && wy === y)) return 2;
+    return 1;
+  }
+
+  /** Check if player has 3+ artifacts and is at exit (win condition). */
+  hasWonByArtifactsAndExit(playerIndex: number): boolean {
+    const p = this.players[playerIndex];
+    return !!p && p.artifacts >= 3 && p.x === this.goalX && p.y === this.goalY;
+  }
+
+  /** Get player with most artifacts (for round-15 tiebreaker). */
+  getPlayerWithMostArtifacts(): number | null {
+    let best = -1;
+    let bestCount = -1;
+    for (let i = 0; i < this.players.length; i++) {
+      if (this.eliminatedPlayers.has(i)) continue;
+      const a = this.players[i]?.artifacts ?? 0;
+      if (a > bestCount) {
+        bestCount = a;
+        best = i;
+      }
+    }
+    return best >= 0 ? best : null;
   }
 
   getJumpTargets(playerIndex = 0): Array<{ x: number; y: number; dx: number; dy: number }> {
