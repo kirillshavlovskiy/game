@@ -892,7 +892,7 @@ export default function LabyrinthGame() {
         }
         setLab(next);
         const hadCollision = !!collision;
-        if (movesLeft === 1 && winner === null && !hadCollision) {
+        if (movesLeftRef.current <= 0 && winnerRef.current === null && !hadCollision) {
           const cp = next.players[currentPlayer];
           const cell = cp && next.grid[cp.y]?.[cp.x];
           if (cell && isMultiplierCell(cell) && diceResult !== null) {
@@ -907,16 +907,20 @@ export default function LabyrinthGame() {
             }
           } else {
             movesLeftRef.current = 0;
-            let nextP = (currentPlayer + 1) % lab.numPlayers;
-            while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
-              nextP = (nextP + 1) % lab.numPlayers;
+            setMovesLeft(0);
+            const onCatapult = cell && isCatapultCell(cell);
+            if (!onCatapult) {
+              let nextP = (currentPlayer + 1) % lab.numPlayers;
+              while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
+                nextP = (nextP + 1) % lab.numPlayers;
+              }
+              const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
+              const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+              const roundComplete = living.length <= 1 || nextP === firstLiving;
+              setCurrentPlayer(nextP);
+              setDiceResult(null);
+              if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
             }
-            const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
-            const firstLiving = living.length > 0 ? Math.min(...living) : -1;
-            const roundComplete = living.length <= 1 || nextP === firstLiving;
-            setCurrentPlayer(nextP);
-            setDiceResult(null);
-            if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
           }
         }
       }

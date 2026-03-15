@@ -175,24 +175,9 @@ export class Labyrinth {
     this.goalY = height - 1;
   }
 
-  /** Get spawn positions for players: corners for 3-4, scaled to map size. For 5+ adds edge midpoints. */
+  /** Get spawn positions for players: all start at (0,0). */
   private _getCornerSpawns(): [number, number][] {
-    const w = this.width - 1;
-    const h = this.height - 1;
-    const mw = Math.floor(w / 2);
-    const mh = Math.floor(h / 2);
-    const positions: [number, number][] = [
-      [0, 0],
-      [w, 0],
-      [0, h],
-      [w, h],
-      [mw, 0],
-      [mw, h],
-      [0, mh],
-      [w, mh],
-      [mw, mh],
-    ];
-    return positions.slice(0, Math.min(this.numPlayers, positions.length));
+    return Array.from({ length: this.numPlayers }, () => [0, 0]);
   }
 
   get playerX(): number {
@@ -682,6 +667,8 @@ export class Labyrinth {
     if (this.width > 1) this.grid[0][1] = PATH;
     if (this.height > 1) this.grid[this.height - 2][this.width - 1] = PATH;
     if (this.width > 1) this.grid[this.height - 1][this.width - 2] = PATH;
+    if (this.width > 1) this.grid[0][this.width - 1] = PATH;
+    if (this.height > 1) this.grid[this.height - 1][0] = PATH;
     const spawns = this._getCornerSpawns();
     this.players = Array.from({ length: this.numPlayers }, (_, i) => ({
       x: spawns[i]?.[0] ?? 0,
