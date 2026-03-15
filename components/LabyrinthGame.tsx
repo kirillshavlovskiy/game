@@ -24,7 +24,7 @@ import {
 
 const CELL_SIZE = 44;
 
-/** Launch = opposite of pull. drag = center−pointer, so launch follows drag. Returns [dx, dy] in {-1,0,1}. */
+/** Launch follows drag direction. drag = pointer−center. Returns [dx, dy] in {-1,0,1}. */
 function getLaunchDirection(dragX: number, dragY: number): [number, number] {
   if (Math.abs(dragX) < 1 && Math.abs(dragY) < 1) return [0, 0];
   const angle = Math.atan2(dragY, dragX);
@@ -883,8 +883,8 @@ export default function LabyrinthGame() {
       if (!d) return;
       const releaseX = e.clientX;
       const releaseY = e.clientY;
-      const dx = d.startX - releaseX;
-      const dy = d.startY - releaseY;
+      const dx = releaseX - d.startX;
+      const dy = releaseY - d.startY;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 15) return; // too short a drag
       const [launchDx, launchDy] = getLaunchDirection(dx, dy);
@@ -1543,8 +1543,8 @@ export default function LabyrinthGame() {
                   onPointerMove={isCatapultSourceCell ? (e) => {
                     const d = catapultDragRef.current;
                     if (!d) return;
-                    const dx = d.startX - e.clientX;
-                    const dy = d.startY - e.clientY;
+                    const dx = e.clientX - d.startX;
+                    const dy = e.clientY - d.startY;
                     setCatapultDragOffset({ dx, dy });
                   } : undefined}
                 >

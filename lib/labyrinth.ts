@@ -700,10 +700,10 @@ export class Labyrinth {
     const norm = Math.sqrt(ndx * ndx + ndy * ndy);
     const scaleX = ndx / norm;
     const scaleY = ndy / norm;
-    const maxDist = Math.max(this.width, this.height) * 0.8;
-    const strengthScale = 0.2;
+    const maxDist = Math.max(this.width, this.height) * 0.4;
+    const strengthScale = 0.12;
     const baseDist = Math.min(maxDist, Math.max(2, strength * strengthScale));
-    const dist = useRandom ? baseDist * (0.85 + Math.random() * 0.3) : baseDist;
+    const dist = useRandom ? baseDist * (0.5 + Math.random() * 0.8) : baseDist * 0.9;
     const destXClamped = Math.max(0, Math.min(this.width - 1, Math.round(fromX + scaleX * dist)));
     const destYClamped = Math.max(0, Math.min(this.height - 1, Math.round(fromY + scaleY * dist)));
     const perp1 = ndx !== 0 ? [-ndy, ndx] : [ndx, -ndy];
@@ -723,7 +723,7 @@ export class Labyrinth {
     let landX = destXClamped;
     let landY = destYClamped;
     const candidates: [number, number][] = [];
-    const r = 2;
+    const r = useRandom ? 4 : 2;
     for (let oy = -r; oy <= r; oy++) {
       for (let ox = -r; ox <= r; ox++) {
         const cx = destXClamped + ox;
