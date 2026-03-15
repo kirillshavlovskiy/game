@@ -879,7 +879,6 @@ export default function LabyrinthGame() {
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 15) return; // too short a drag
       handleCatapultLaunch(dx, dy, dist);
-      }
     };
     const onPointerCancel = () => {
       catapultDragRef.current = null;
