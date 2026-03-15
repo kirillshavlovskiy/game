@@ -142,8 +142,8 @@ export class Labyrinth {
   hiddenCells: Map<string, string> = new Map();
   /** Spider web decoration positions [x,y] for visual effect */
   webPositions: [number, number][] = [];
-  /** Fog/darkness zone cells (key "x,y") - cleared only when player has torch from hidden gem */
-  fogZones: Set<string> = new Set();
+  /** Fog/darkness zones: key "x,y" -> intensity 0-1 (1=center/darkest, 0=edge). Expanded areas around centers. */
+  fogZones: Map<string, number> = new Map();
   /** Bomb cells collected by player: key "x,y" -> Set of player indices who collected from that cell */
   bombCollectedBy: Map<string, Set<number>> = new Map();
   /** Magic cells used for teleport by player: key "x,y" -> Set of player indices who teleported from that cell */
@@ -373,12 +373,25 @@ export class Labyrinth {
       this.hiddenCells.set(`${x},${y}`, hiddenTypes[i % hiddenTypes.length]);
       // Grid stays PATH until revealed
     }
-    // Fog/darkness zones: selected path areas cleared only with torch (hidden gem)
+    // Fog/darkness zones: expand areas around center cells, intensity falls off with distance (0=transparent, 1=opaque)
     const rest5 = rest4.filter((c) => !hiddenCellCoords.some((h) => h[0] === c[0] && h[1] === c[1]));
-    const fogCount = Math.round(Math.max(2, Math.min(14, Math.floor(pathCells.length * 0.05 * obstacleMult))));
+    const fogCount = Math.round(Math.max(2, Math.min(10, Math.floor(pathCells.length * 0.04 * obstacleMult))));
     const fogCells = this._pickSpread(rest5.length > 0 ? rest5 : rest4, fogCount);
-    for (const [x, y] of fogCells) {
-      this.fogZones.add(`${x},${y}`);
+    const FOG_RADIUS = 3; // cells from center; larger area per fog zone
+    for (const [cx, cy] of fogCells) {
+      for (let dy = -FOG_RADIUS; dy <= FOG_RADIUS; dy++) {
+        for (let dx = -FOG_RADIUS; dx <= FOG_RADIUS; dx++) {
+          const x = cx + dx;
+          const y = cy + dy;
+          if (x < 0 || x >= this.width || y < 0 || y >= this.height) continue;
+          if (!isWalkable(this.grid[y][x])) continue;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const intensity = Math.max(0, 1 - dist / (FOG_RADIUS + 0.5));
+          const key = `${x},${y}`;
+          const existing = this.fogZones.get(key) ?? 0;
+          this.fogZones.set(key, Math.max(existing, intensity));
+        }
+      }
     }
     const spawnPositions = this._getCornerSpawns();
     const excludeFromMonsters: [number, number][] = [
@@ -710,7 +723,7 @@ export class Labyrinth {
     this.eliminatedPlayers = new Set();
     this.hiddenCells = new Map();
     this.webPositions = [];
-    this.fogZones = new Set();
+    this.fogZones = new Map();
     this.bombCollectedBy = new Map();
     this.teleportUsedFrom = new Map();
     this._addMonsters([]);
@@ -733,11 +746,24 @@ export class Labyrinth {
       const idx = Math.floor(Math.random() * pathCells.length);
       this.webPositions.push(pathCells.splice(idx, 1)[0]);
     }
-    const fogCount = Math.min(8, Math.floor(pathCells.length / 4));
+    const fogCount = Math.min(6, Math.floor(pathCells.length / 5));
+    const FOG_RADIUS = 3;
     for (let i = 0; i < fogCount && pathCells.length > 0; i++) {
       const idx = Math.floor(Math.random() * pathCells.length);
-      const [x, y] = pathCells.splice(idx, 1)[0];
-      this.fogZones.add(`${x},${y}`);
+      const [cx, cy] = pathCells.splice(idx, 1)[0];
+      for (let dy = -FOG_RADIUS; dy <= FOG_RADIUS; dy++) {
+        for (let dx = -FOG_RADIUS; dx <= FOG_RADIUS; dx++) {
+          const x = cx + dx;
+          const y = cy + dy;
+          if (x < 0 || x >= this.width || y < 0 || y >= this.height) continue;
+          if (!isWalkable(this.grid[y][x])) continue;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const intensity = Math.max(0, 1 - dist / (FOG_RADIUS + 0.5));
+          const key = `${x},${y}`;
+          const existing = this.fogZones.get(key) ?? 0;
+          this.fogZones.set(key, Math.max(existing, intensity));
+        }
+      }
     }
     const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL];
     const artifactCount = Math.min(4, pathCells.length);

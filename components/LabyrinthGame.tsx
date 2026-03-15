@@ -502,7 +502,7 @@ export default function LabyrinthGame() {
         }));
         next.hiddenCells = new Map(prev.hiddenCells);
         next.webPositions = [...(prev.webPositions || [])];
-        next.fogZones = new Set(prev.fogZones || []);
+        next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.goalX = prev.goalX;
@@ -581,7 +581,7 @@ export default function LabyrinthGame() {
         next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
         next.hiddenCells = new Map(prev.hiddenCells);
         next.webPositions = [...(prev.webPositions || [])];
-        next.fogZones = new Set(prev.fogZones || []);
+        next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         return next;
@@ -624,7 +624,7 @@ export default function LabyrinthGame() {
         next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
         next.hiddenCells = new Map(prev.hiddenCells);
         next.webPositions = [...(prev.webPositions || [])];
-        next.fogZones = new Set(prev.fogZones || []);
+        next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.goalX = prev.goalX;
@@ -640,7 +640,7 @@ export default function LabyrinthGame() {
       next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
       next.hiddenCells = new Map(prev.hiddenCells);
       next.webPositions = [...(prev.webPositions || [])];
-      next.fogZones = new Set(prev.fogZones || []);
+      next.fogZones = new Map(prev.fogZones || new Map());
       next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.goalX = prev.goalX;
@@ -680,7 +680,7 @@ export default function LabyrinthGame() {
     next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
     next.hiddenCells = new Map(lab.hiddenCells);
     next.webPositions = [...(lab.webPositions || [])];
-    next.fogZones = new Set(lab.fogZones || []);
+    next.fogZones = new Map(lab.fogZones || new Map());
     next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
     next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
     next.goalX = lab.goalX;
@@ -742,7 +742,7 @@ export default function LabyrinthGame() {
       }));
       next.hiddenCells = new Map(lab.hiddenCells);
       next.webPositions = [...(lab.webPositions || [])];
-      next.fogZones = new Set(lab.fogZones || []);
+      next.fogZones = new Map(lab.fogZones || new Map());
       next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.goalX = lab.goalX;
@@ -984,7 +984,7 @@ export default function LabyrinthGame() {
         next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
         next.hiddenCells = new Map(prev.hiddenCells);
         next.webPositions = [...(prev.webPositions || [])];
-        next.fogZones = new Set(prev.fogZones || []);
+        next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.moveMonsters();
@@ -1078,7 +1078,7 @@ export default function LabyrinthGame() {
       next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
       next.hiddenCells = new Map(lab.hiddenCells);
       next.webPositions = [...(lab.webPositions || [])];
-      next.fogZones = new Set(lab.fogZones || []);
+      next.fogZones = new Map(lab.fogZones || new Map());
       next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.goalX = lab.goalX;
@@ -1155,7 +1155,7 @@ export default function LabyrinthGame() {
       next.players = lab.players.map((pl) => ({ ...pl, jumps: pl.jumps ?? 0, diamonds: pl.diamonds ?? 0, shield: pl.shield ?? 0, bombs: pl.bombs ?? 0 }));
       next.hiddenCells = new Map(lab.hiddenCells);
       next.webPositions = [...(lab.webPositions || [])];
-      next.fogZones = new Set(lab.fogZones || []);
+      next.fogZones = new Map(lab.fogZones || new Map());
       next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.goalX = lab.goalX;
@@ -2007,9 +2007,25 @@ export default function LabyrinthGame() {
                     setCatapultDragOffset({ dx, dy });
                   } : undefined}
                 >
-                  {lab.fogZones?.has(`${x},${y}`) && !lab.players.some((pl) => pl.hasTorch) && (
-                    <div className="cell-fog" style={{ position: "absolute", inset: 0, zIndex: 2, pointerEvents: "none" }} />
-                  )}
+                  {(() => {
+                    const fogIntensity = lab.fogZones?.get(`${x},${y}`);
+                    const hasTorch = lab.players.some((pl) => pl.hasTorch);
+                    if (fogIntensity == null || fogIntensity <= 0 || hasTorch) return null;
+                    const baseOpacity = 0.08 + fogIntensity * 0.92;
+                    return (
+                      <div
+                        className="cell-fog"
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          zIndex: 2,
+                          pointerEvents: "none",
+                          background: `radial-gradient(ellipse 90% 90% at 50% 50%, rgba(6,6,14,${baseOpacity * 0.2}) 0%, rgba(4,4,10,${baseOpacity * 0.6}) 50%, rgba(2,2,8,${baseOpacity}) 100%)`,
+                          boxShadow: `inset 0 0 ${8 + fogIntensity * 24}px rgba(0,0,0,${baseOpacity * 0.7})`,
+                        }}
+                      />
+                    );
+                  })()}
                   {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && (
                     <div className="spider-web" style={{ position: "absolute", inset: 0, zIndex: 0 }} />
                   )}
