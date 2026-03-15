@@ -305,14 +305,20 @@ export class Labyrinth {
           pathCells.push([x, y]);
     shuffle(pathCells);
 
+    // Inverse difficulty: easy = more helpers, hard = fewer helpers. Traps/obstacles scale up with difficulty.
+    const d = this.monsterDensity; // 1=easy, 4=extreme
+    const helperMult = 1.6 - 0.3 * d; // easy 1.3, normal 1.0, hard 0.7, extreme 0.4
+    const trapMult = 0.6 + 0.25 * d;  // easy 0.85, normal 1.1, hard 1.35, extreme 1.6
+    const obstacleMult = 0.7 + 0.2 * d; // webs, fog: more for harder
+
     const mults: ("2" | "3" | "4")[] = ["2", "3", "4"];
-    const multCount = Math.max(6, Math.min(15, Math.floor(pathCells.length * 0.12)));
-    const magicCount = Math.max(6, Math.min(25, Math.floor(pathCells.length * 0.07)));
-    const catapultCount = Math.max(3, Math.min(8, Math.floor(pathCells.length * 0.04)));
-    const jumpCount = Math.max(3, Math.min(8, Math.floor(pathCells.length * 0.04)));
-    const diamondCount = Math.max(this.numPlayers * 2, Math.min(this.numPlayers * 4, Math.floor(pathCells.length * 0.08)));
+    const multCount = Math.round(Math.max(4, Math.min(18, Math.floor(pathCells.length * 0.12 * helperMult))));
+    const magicCount = Math.round(Math.max(4, Math.min(28, Math.floor(pathCells.length * 0.07 * helperMult))));
+    const catapultCount = Math.round(Math.max(2, Math.min(10, Math.floor(pathCells.length * 0.04 * helperMult))));
+    const jumpCount = Math.round(Math.max(2, Math.min(10, Math.floor(pathCells.length * 0.04 * helperMult))));
+    const diamondCount = Math.round(Math.max(this.numPlayers * 2, Math.min(this.numPlayers * 5, Math.floor(pathCells.length * 0.08 * helperMult))));
     const blocks10x10 = (this.width / 10) * (this.height / 10);
-    const bombCount = Math.max(1, Math.min(16, Math.floor(blocks10x10)));
+    const bombCount = Math.round(Math.max(1, Math.min(18, Math.floor(blocks10x10 * helperMult))));
 
     const total = multCount + magicCount + catapultCount + jumpCount + diamondCount + bombCount;
     if (total > pathCells.length) return;
@@ -329,7 +335,7 @@ export class Labyrinth {
     const rest3b = rest3.filter((c) => !diamondCells.some((d) => d[0] === c[0] && d[1] === c[1]));
     const bombCells = this._pickSpread(rest3b, bombCount);
     const rest3c = rest3b.filter((c) => !bombCells.some((b) => b[0] === c[0] && b[1] === c[1]));
-    const trapCount = Math.max(2, Math.min(8, Math.floor(pathCells.length * 0.03)));
+    const trapCount = Math.round(Math.max(1, Math.min(10, Math.floor(pathCells.length * 0.03 * trapMult))));
     const trapCells = this._pickSpread(rest3c, trapCount);
     const trapTypes = [TRAP_LOSE_TURN, TRAP_HARM, TRAP_TELEPORT, TRAP_SLOW];
     for (let i = 0; i < trapCells.length; i++) {
@@ -337,7 +343,7 @@ export class Labyrinth {
       this.grid[y][x] = trapTypes[i % 4];
     }
     const rest3d = rest3c.filter((c) => !trapCells.some((t) => t[0] === c[0] && t[1] === c[1]));
-    const artifactCount = 4;
+    const artifactCount = Math.round(Math.max(3, Math.min(6, 4 * helperMult)));
     const artifactCells = this._pickSpread(rest3d, Math.min(artifactCount, rest3d.length));
     const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL];
     for (let i = 0; i < artifactCells.length; i++) {
@@ -358,7 +364,7 @@ export class Labyrinth {
     }
     for (const [x, y] of bombCells) this.grid[y][x] = BOMB;
     // Add hidden cells (revealed when diamonds collected): magic, jump, multipliers, shield
-    const hiddenCount = Math.max(4, Math.min(12, Math.floor(pathCells.length * 0.06)));
+    const hiddenCount = Math.round(Math.max(2, Math.min(14, Math.floor(pathCells.length * 0.06 * helperMult))));
     const rest4 = rest3d.filter((c) => !artifactCells.some((a) => a[0] === c[0] && a[1] === c[1]));
     const hiddenCellCoords = this._pickSpread(rest4, hiddenCount);
     const hiddenTypes: string[] = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, MULT_X2, MULT_X3, SHIELD, SHIELD];
@@ -369,7 +375,7 @@ export class Labyrinth {
     }
     // Fog/darkness zones: selected path areas cleared only with torch (hidden gem)
     const rest5 = rest4.filter((c) => !hiddenCellCoords.some((h) => h[0] === c[0] && h[1] === c[1]));
-    const fogCount = Math.max(4, Math.min(12, Math.floor(pathCells.length * 0.05)));
+    const fogCount = Math.round(Math.max(2, Math.min(14, Math.floor(pathCells.length * 0.05 * obstacleMult))));
     const fogCells = this._pickSpread(rest5.length > 0 ? rest5 : rest4, fogCount);
     for (const [x, y] of fogCells) {
       this.fogZones.add(`${x},${y}`);
@@ -392,7 +398,8 @@ export class Labyrinth {
   }
 
   private _addSpiderWebs(pathCells: [number, number][]): void {
-    const webCount = Math.max(3, Math.min(15, Math.floor(pathCells.length * 0.04)));
+    const obstacleMult = 0.7 + 0.2 * this.monsterDensity;
+    const webCount = Math.round(Math.max(2, Math.min(18, Math.floor(pathCells.length * 0.04 * obstacleMult))));
     const shuffled = shuffle([...pathCells]);
     for (let i = 0; i < webCount && i < shuffled.length; i++) {
       this.webPositions.push(shuffled[i]);

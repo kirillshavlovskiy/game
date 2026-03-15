@@ -237,6 +237,7 @@ export default function LabyrinthGame() {
     }
   }, [lab, combatState]);
 
+  // Focus/scroll to current player marker only when turn changes to another player (not on every move)
   useEffect(() => {
     if (winner !== null || !lab || lab.eliminatedPlayers.has(currentPlayer)) return;
     const el = currentPlayerCellRef.current;
@@ -246,7 +247,7 @@ export default function LabyrinthGame() {
       });
       return () => cancelAnimationFrame(id);
     }
-  }, [currentPlayer, lab, winner]);
+  }, [currentPlayer, winner]);
 
   useEffect(() => {
     setPlayerNames((prev) => {
@@ -724,8 +725,9 @@ export default function LabyrinthGame() {
       const destY = jumpOnly ? p.y + 2 * dy : p.y + dy;
       const tileCost = lab.getTileMoveCost(destX, destY);
       const isWebCell = lab.webPositions?.some(([wx, wy]) => wx === destX && wy === destY);
-      if (movesLeftRef.current < tileCost) return;
-      movesLeftRef.current -= tileCost;
+      if (movesLeftRef.current < 1) return;
+      const costToPay = Math.min(movesLeftRef.current, tileCost);
+      movesLeftRef.current -= costToPay;
       setBonusAdded(null);
       setJumpAdded(null);
       if (isWebCell) setWebSlowed(true);
@@ -752,7 +754,7 @@ export default function LabyrinthGame() {
       next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
       const moveSucceeded = next.movePlayer(dx, dy, currentPlayer, jumpOnly);
       if (!moveSucceeded) {
-        movesLeftRef.current += tileCost;
+        movesLeftRef.current += costToPay;
         return;
       }
       {
