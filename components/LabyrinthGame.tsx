@@ -24,7 +24,7 @@ import {
 
 const CELL_SIZE = 44;
 
-/** Launch direction = opposite of pull. drag = center−pointer, so launch follows drag. Returns [dx, dy] in {-1,0,1}. */
+/** Launch direction = pull direction. Pass -drag (pointer−center) since drag = center−pointer. Returns [dx, dy] in {-1,0,1}. */
 function getLaunchDirection(dragX: number, dragY: number): [number, number] {
   if (Math.abs(dragX) < 1 && Math.abs(dragY) < 1) return [0, 0];
   const angle = Math.atan2(dragY, dragX);
@@ -46,7 +46,7 @@ function getParabolicArcPath(from: [number, number], to: [number, number], cellS
   const perp1 = [-ndy, ndx];
   const perp2 = [ndy, -ndx];
   const [perpX, perpY] = perp1[1] < 0 ? perp1 : perp2;
-  const arcHeight = dist * 0.35;
+  const arcHeight = dist * 0.12;
   const pts: string[] = [];
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
@@ -887,7 +887,7 @@ export default function LabyrinthGame() {
       const dy = d.startY - releaseY;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 15) return; // too short a drag
-      const [launchDx, launchDy] = getLaunchDirection(dx, dy);
+      const [launchDx, launchDy] = getLaunchDirection(-dx, -dy);
       if (launchDx !== 0 || launchDy !== 0) {
         handleCatapultLaunch(launchDx, launchDy, dist);
       }
@@ -1599,7 +1599,7 @@ export default function LabyrinthGame() {
           const dx = catapultDragOffset.dx;
           const dy = catapultDragOffset.dy;
           const strength = Math.sqrt(dx * dx + dy * dy);
-          const [launchDx, launchDy] = getLaunchDirection(dx, dy);
+          const [launchDx, launchDy] = getLaunchDirection(-dx, -dy);
           if (launchDx === 0 && launchDy === 0) return null;
           const traj = lab.getCatapultTrajectory(catapultPicker.from[0], catapultPicker.from[1], launchDx, launchDy, strength, false);
           if (!traj) return null;

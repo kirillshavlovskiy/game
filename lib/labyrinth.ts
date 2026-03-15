@@ -711,7 +711,7 @@ export class Labyrinth {
     const perp = perp1[1] < 0 ? perp1 : perp2;
     const perpX = perp[0];
     const perpY = perp[1];
-    const arcHeight = dist * 0.35;
+    const arcHeight = dist * 0.12;
     const arcPoints: [number, number][] = [];
     const steps = 16;
     for (let i = 0; i <= steps; i++) {
