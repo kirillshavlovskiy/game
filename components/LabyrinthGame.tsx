@@ -30,6 +30,7 @@ import {
   ARTIFACT_TELEPORT as ARTIFACT_TELEPORT_CELL,
   ARTIFACT_REVEAL,
   type MonsterType,
+  DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
 import { resolveCombat } from "@/lib/combatSystem";
 import { drawEvent, applyEvent, type GameEvent } from "@/lib/eventDeck";
@@ -143,6 +144,7 @@ export default function LabyrinthGame() {
   const [jumpAdded, setJumpAdded] = useState<number | null>(null);
   const [shieldAbsorbed, setShieldAbsorbed] = useState<boolean | null>(null);
   const [shieldGained, setShieldGained] = useState<boolean | null>(null);
+  const [harmTaken, setHarmTaken] = useState<boolean | null>(null);
   const [bombGained, setBombGained] = useState<boolean | null>(null);
   const [hiddenGemTeleport, setHiddenGemTeleport] = useState<boolean | null>(null);
   const [cellsRevealed, setCellsRevealed] = useState<number | null>(null);
@@ -220,6 +222,15 @@ export default function LabyrinthGame() {
   useEffect(() => {
     combatStateRef.current = combatState;
   }, [combatState]);
+
+  // Cancel combat if monster was cleared (e.g. by bomb) before player rolled
+  useEffect(() => {
+    if (!combatState || !lab) return;
+    const collision = lab.checkMonsterCollision(combatState.playerIndex);
+    if (!collision) {
+      setCombatState(null);
+    }
+  }, [lab, combatState]);
 
   useEffect(() => {
     if (winner !== null || !lab || lab.eliminatedPlayers.has(currentPlayer)) return;
@@ -304,6 +315,12 @@ export default function LabyrinthGame() {
   }, [shieldGained]);
 
   useEffect(() => {
+    if (harmTaken === null) return;
+    const t = setTimeout(() => setHarmTaken(null), 1500);
+    return () => clearTimeout(t);
+  }, [harmTaken]);
+
+  useEffect(() => {
     if (bombGained === null) return;
     const t = setTimeout(() => setBombGained(null), 1500);
     return () => clearTimeout(t);
@@ -353,6 +370,7 @@ export default function LabyrinthGame() {
     setJumpAdded(null);
     setShieldAbsorbed(null);
     setShieldGained(null);
+    setHarmTaken(null);
     setBombGained(null);
     setHiddenGemTeleport(null);
     setCellsRevealed(null);
@@ -627,7 +645,9 @@ export default function LabyrinthGame() {
   const handleUseBomb = useCallback(() => {
     if (!lab || winner !== null || lab.eliminatedPlayers.has(currentPlayer)) return;
     const cp = lab.players[currentPlayer];
-    if (!cp || (cp.bombs ?? 0) <= 0 || movesLeftRef.current <= 0) return;
+    const inCombat = !!combatStateRef.current;
+    if (!cp || (cp.bombs ?? 0) <= 0) return;
+    if (!inCombat && movesLeftRef.current <= 0) return;
     const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
     next.grid = lab.grid.map((r) => [...r]);
     next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
@@ -643,14 +663,16 @@ export default function LabyrinthGame() {
     if (!result.used) return;
     setBombExplosion({ x: cp.x, y: cp.y });
     setLab(next);
-    movesLeftRef.current--;
-    setMovesLeft((m) => Math.max(0, m - 1));
-    setTotalMoves((t) => t + 1);
-    setPlayerMoves((prev) => {
-      const arr = [...prev];
-      if (currentPlayer < arr.length) arr[currentPlayer] = (arr[currentPlayer] ?? 0) + 1;
-      return arr;
-    });
+    if (!inCombat) {
+      movesLeftRef.current--;
+      setMovesLeft((m) => Math.max(0, m - 1));
+      setTotalMoves((t) => t + 1);
+      setPlayerMoves((prev) => {
+        const arr = [...prev];
+        if (currentPlayer < arr.length) arr[currentPlayer] = (arr[currentPlayer] ?? 0) + 1;
+        return arr;
+      });
+    }
     setTimeout(() => setBombExplosion(null), 600);
   }, [lab, winner, currentPlayer]);
 
@@ -719,7 +741,8 @@ export default function LabyrinthGame() {
           setJumpAnimation({ playerIndex: currentPlayer, x: p.x, y: p.y });
         }
         if (p) {
-          const cell = next.grid[p.y]?.[p.x];
+          const cell = next.getCellAt(p.x, p.y);
+          if (cell && next.hiddenCells.has(`${p.x},${p.y}`)) next.revealCellAt(p.x, p.y);
           if (cell && isTrapCell(cell)) {
             if (cell === TRAP_LOSE_TURN) {
               movesLeftRef.current = 0;
@@ -735,6 +758,7 @@ export default function LabyrinthGame() {
               if (usedShield) setShieldAbsorbed(true);
               else {
                 p.hp = (p.hp ?? 3) - 1;
+                setHarmTaken(true);
                 if (p.hp <= 0) {
                   next.eliminatedPlayers.add(currentPlayer);
                   setEliminatedByMonster({ playerIndex: currentPlayer, monsterType: "Z" });
@@ -976,7 +1000,7 @@ export default function LabyrinthGame() {
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.moveMonsters();
-        const collision = next.checkMonsterCollision();
+        const collision = next.checkMonsterCollision(currentPlayerRef.current);
         if (collision) {
           setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType, monsterIndex: collision.monsterIndex });
         }
@@ -1348,8 +1372,19 @@ export default function LabyrinthGame() {
               <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
                 Moves: {playerMoves[i] ?? 0}
               </div>
-              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
-                HP: {p?.hp ?? 3}
+              <div style={{ fontSize: "0.75rem", color: "#aaa", marginBottom: 2 }}>
+                HP: {p?.hp ?? 3}/{DEFAULT_PLAYER_HP}
+              </div>
+              <div style={{ height: 6, background: "#333", borderRadius: 3, overflow: "hidden" }}>
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${Math.max(0, Math.min(100, ((p?.hp ?? 3) / DEFAULT_PLAYER_HP) * 100))}%`,
+                    background: (p?.hp ?? 3) <= 1 ? "#ff4444" : (p?.hp ?? 3) <= 2 ? "#ffaa00" : "#00ff88",
+                    borderRadius: 3,
+                    transition: "width 0.3s ease",
+                  }}
+                />
               </div>
               <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
                 Artifacts: {p?.artifacts ?? 0}/3
@@ -1407,7 +1442,7 @@ export default function LabyrinthGame() {
         </div>
       )}
 
-      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || bombGained !== null || hiddenGemTeleport !== null || cellsRevealed !== null) && (
+      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || harmTaken !== null || bombGained !== null || hiddenGemTeleport !== null || cellsRevealed !== null) && (
         <div style={effectToastStyle} className="effect-toast">
           {bonusAdded !== null && diceResult !== null && (
             <span style={{ color: "#ffcc00" }}>×{bonusAdded / diceResult} moves!</span>
@@ -1419,6 +1454,9 @@ export default function LabyrinthGame() {
           )}
           {shieldAbsorbed !== null && (
             <span style={{ color: "#44ff88", marginLeft: 12 }}>🛡 Shield absorbed attack!</span>
+          )}
+          {harmTaken !== null && (
+            <span style={{ color: "#ff4444", fontWeight: "bold" }}>⚠ -1 HP (trap)</span>
           )}
           {shieldGained !== null && (
             <span style={{ color: "#44ff88", marginLeft: 12 }}>🛡 +1 Shield!</span>
@@ -1644,40 +1682,42 @@ export default function LabyrinthGame() {
               } else if (x === 0 && y === 0 && !playerCells["0,0"]) {
                 content = "S";
                 cellClass += " start";
-              } else if (isMultiplierCell(lab.grid[y][x])) {
-                content = `×${lab.grid[y][x]}`;
-                cellClass += " path multiplier mult-x" + lab.grid[y][x];
-              } else if (isArtifactCell(lab.grid[y][x])) {
-                const art = lab.grid[y][x];
+              } else {
+              const cellType = lab.getCellAt(x, y);
+              if (isMultiplierCell(cellType)) {
+                content = `×${cellType}`;
+                cellClass += " path multiplier mult-x" + cellType;
+              } else if (isArtifactCell(cellType)) {
+                const art = cellType;
                 content = (
                   <span style={{ fontSize: "1.1rem" }} title={art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : "Reveal"}>
                     {art === ARTIFACT_DICE ? "🎲" : art === ARTIFACT_SHIELD ? "🛡" : art === ARTIFACT_TELEPORT_CELL ? "🌀" : "👁"}
                   </span>
                 );
                 cellClass += " path artifact";
-              } else if (isTrapCell(lab.grid[y][x])) {
-                const trap = lab.grid[y][x];
+              } else if (isTrapCell(cellType)) {
+                const trap = cellType;
                 content = (
-                  <span style={{ fontSize: "1rem" }} title={trap === TRAP_LOSE_TURN ? "Lose turn" : trap === TRAP_HARM ? "Harm" : trap === TRAP_TELEPORT ? "Teleport" : "Slow"}>
+                  <span style={{ fontSize: "1rem" }} title={trap === TRAP_LOSE_TURN ? "Lose turn" : trap === TRAP_HARM ? "Harm: -1 HP (shield blocks)" : trap === TRAP_TELEPORT ? "Teleport" : "Slow"}>
                     {trap === TRAP_LOSE_TURN ? "⏸" : trap === TRAP_HARM ? "⚠" : trap === TRAP_TELEPORT ? "🌀" : "🐌"}
                   </span>
                 );
                 cellClass += " path trap";
-              } else if (isBombCell(lab.grid[y][x])) {
+              } else if (isBombCell(cellType)) {
                 content = (
                   <span style={{ fontSize: "1.1rem" }} title="Bomb pickup">
                     💣
                   </span>
                 );
                 cellClass += " path bomb";
-              } else if ((showSecretCells || isTeleportOption) && isMagicCell(lab.grid[y][x])) {
+              } else if ((showSecretCells || isTeleportOption) && isMagicCell(cellType)) {
                 content = (
                   <span className="hole-cell" style={{ fontSize: "1.1rem" }} title="Teleport hole">
                     ○
                   </span>
                 );
                 cellClass += " path magic hole";
-              } else if (showSecretCells && isCatapultCell(lab.grid[y][x])) {
+              } else if (showSecretCells && isCatapultCell(cellType)) {
                 content = (
                   <span style={{ fontSize: "1.2rem", display: "inline-flex", alignItems: "center", justifyContent: "center" }} title="Slingshot">
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1688,21 +1728,22 @@ export default function LabyrinthGame() {
                   </span>
                 );
                 cellClass += " path catapult";
-              } else if (showSecretCells && isJumpCell(lab.grid[y][x])) {
+              } else if (showSecretCells && isJumpCell(cellType)) {
                 content = "J";
                 cellClass += " path jump";
-              } else if (showSecretCells && isShieldCell(lab.grid[y][x])) {
+              } else if (showSecretCells && isShieldCell(cellType)) {
                 content = "🛡";
                 cellClass += " path shield";
-              } else if (showSecretCells && isDiamondCell(lab.grid[y][x])) {
-                const owner = getCollectibleOwner(lab.grid[y][x]);
+              } else if (showSecretCells && isDiamondCell(cellType)) {
+                const owner = getCollectibleOwner(cellType);
                 content = "💎";
                 cellClass += " path collectible";
                 if (owner !== null) cellClass += " collectible-p" + owner;
                 if (owner === currentPlayer) cellClass += " collectible-mine";
               } else {
-                cellClass += lab.grid[y][x] === "#" ? " wall" : " path";
-                if (lab.grid[y][x] === "#") content = null;
+                cellClass += cellType === "#" ? " wall" : " path";
+                if (cellType === "#") content = null;
+              }
               }
 
               const cellBg: React.CSSProperties = {};
@@ -1801,6 +1842,7 @@ export default function LabyrinthGame() {
                   key={`${x}-${y}`}
                   ref={isCurrentPlayerCell ? (el) => { currentPlayerCellRef.current = el; } : undefined}
                   className={cellClass}
+                  title={lab.webPositions?.some(([wx, wy]) => wx === x && wy === y) ? "Spider web: costs 2 moves to cross" : undefined}
                   style={{
                     ...cellStyle,
                     ...cellBg,
@@ -1836,7 +1878,10 @@ export default function LabyrinthGame() {
                     setCatapultDragOffset({ dx, dy });
                   } : undefined}
                 >
-                  {content}
+                  {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && (
+                    <div className="spider-web" style={{ position: "absolute", inset: 0, zIndex: 0 }} />
+                  )}
+                  <span style={{ position: "relative", zIndex: 1 }}>{content}</span>
                   {jumpTarget && (
                     <button
                       onClick={(e) => {
@@ -1848,9 +1893,6 @@ export default function LabyrinthGame() {
                     >
                       J
                     </button>
-                  )}
-                  {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && (
-                    <div className="spider-web" style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
                   )}
                   {bombExplosion && Math.abs(x - bombExplosion.x) <= 1 && Math.abs(y - bombExplosion.y) <= 1 && (
                     <div className="bomb-explosion" style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
@@ -1888,8 +1930,10 @@ export default function LabyrinthGame() {
           const dy = catapultDragOffset.dy;
           const strength = Math.sqrt(dx * dx + dy * dy);
           if (strength < 1) return null;
-          // Preview launch direction (opposite to pull)
-          const traj = lab.getCatapultTrajectory(catapultPicker.from[0], catapultPicker.from[1], -dx, -dy, strength, false);
+          const p = lab.players[catapultPicker.playerIndex];
+          if (!p) return null;
+          // Preview from current player position, launch direction opposite to pull, strength = drag distance
+          const traj = lab.getCatapultTrajectory(p.x, p.y, -dx, -dy, strength, false);
           if (!traj) return null;
           const cs = CELL_SIZE * mazeZoom;
           const pathD = traj.arcPoints.map(([px, py], i) => `${i === 0 ? "M" : "L"} ${px * cs} ${py * cs}`).join(" ");
@@ -2039,9 +2083,9 @@ export default function LabyrinthGame() {
           <div style={{ ...controlsSectionLabelStyle, color: "#ff8844" }}>Bomb {(cp?.bombs ?? 0) > 0 && `×${cp?.bombs ?? 0}`}</div>
           <button
             onClick={handleUseBomb}
-            disabled={!cp || (cp?.bombs ?? 0) <= 0 || moveDisabled}
+            disabled={!cp || (cp?.bombs ?? 0) <= 0 || (moveDisabled && !combatState)}
             style={{ ...buttonStyle, width: "100%", background: (cp?.bombs ?? 0) > 0 ? "#ff8844" : "#444", color: "#fff" }}
-            title="Explode 3×3 area (uses 1 move)"
+            title={combatState ? "Explode 3×3 to clear monster (no move cost)" : "Explode 3×3 area (uses 1 move)"}
           >
             💣 Use Bomb
           </button>

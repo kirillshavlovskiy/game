@@ -115,13 +115,14 @@ button {
   color: #5a5a7a !important;
 }
 
-/* Spider web effect - decorative overlay on corridor cells */
+/* Spider web effect - decorative overlay on corridor cells (costs 2 moves) */
 .spider-web {
   background: 
-    radial-gradient(ellipse 60% 60% at 50% 50%, transparent 40%, rgba(180,180,200,0.15) 70%, transparent 100%),
-    linear-gradient(135deg, rgba(200,200,220,0.12) 0%, transparent 50%, rgba(200,200,220,0.08) 100%),
-    linear-gradient(45deg, transparent 0%, rgba(220,220,240,0.1) 50%, transparent 100%);
-  opacity: 0.7;
+    radial-gradient(ellipse 60% 60% at 50% 50%, transparent 30%, rgba(180,180,200,0.25) 60%, transparent 100%),
+    linear-gradient(135deg, rgba(200,200,220,0.2) 0%, transparent 50%, rgba(200,200,220,0.15) 100%),
+    linear-gradient(45deg, transparent 0%, rgba(220,220,240,0.18) 50%, transparent 100%);
+  opacity: 0.9;
+  pointer-events: none;
 }
 
 .spider-web::before {

@@ -718,6 +718,24 @@ export class Labyrinth {
     return true;
   }
 
+  /** Get effective cell type at (x,y): hidden cell if present, else grid. */
+  getCellAt(x: number, y: number): string {
+    const key = `${x},${y}`;
+    const hidden = this.hiddenCells.get(key);
+    if (hidden) return hidden;
+    return this.grid[y]?.[x] ?? WALL;
+  }
+
+  /** Reveal a hidden cell at (x,y) - move from hiddenCells to grid. Returns true if revealed. */
+  revealCellAt(x: number, y: number): boolean {
+    const key = `${x},${y}`;
+    const type = this.hiddenCells.get(key);
+    if (!type || this.grid[y]?.[x] !== PATH) return false;
+    this.grid[y][x] = type;
+    this.hiddenCells.delete(key);
+    return true;
+  }
+
   canMove(x: number, y: number): boolean {
     return (
       x >= 0 &&
@@ -872,7 +890,7 @@ export class Labyrinth {
     const maxDist = Math.max(this.width, this.height) * 0.4;
     const strengthScale = 0.12;
     const baseDist = Math.min(maxDist, Math.max(2, strength * strengthScale));
-    const dist = useRandom ? baseDist * (0.5 + Math.random() * 0.8) : baseDist * 0.9;
+    const dist = useRandom ? baseDist * (0.9 + Math.random() * 0.15) : baseDist * 0.9;
     const destXClamped = Math.max(0, Math.min(this.width - 1, Math.round(fromX + scaleX * dist)));
     const destYClamped = Math.max(0, Math.min(this.height - 1, Math.round(fromY + scaleY * dist)));
     const perp1 = [-scaleY, scaleX];
