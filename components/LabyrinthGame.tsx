@@ -737,6 +737,7 @@ export default function LabyrinthGame() {
         const p = next.players[currentPlayer];
         const prevX = lab.players[currentPlayer]?.x ?? 0;
         const prevY = lab.players[currentPlayer]?.y ?? 0;
+        let teleportedThisMove = false;
         if (jumpOnly && p) {
           setJumpAnimation({ playerIndex: currentPlayer, x: p.x, y: p.y });
         }
@@ -780,6 +781,19 @@ export default function LabyrinthGame() {
                 p.x = dest[0];
                 p.y = dest[1];
                 setTeleportAnimation({ from: [fromX, fromY], to: dest, playerIndex: currentPlayer });
+                movesLeftRef.current = 0;
+                setMovesLeft(0);
+                setDiceResult(null);
+                teleportedThisMove = true;
+                let nextP = (currentPlayer + 1) % lab.numPlayers;
+                while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
+                  nextP = (nextP + 1) % lab.numPlayers;
+                }
+                const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
+                const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+                const roundComplete = living.length <= 1 || nextP === firstLiving;
+                setCurrentPlayer(nextP);
+                if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
               }
             }
           }
@@ -930,9 +944,9 @@ export default function LabyrinthGame() {
         }
         setLab(next);
         const hadCollision = !!collision;
-        if (movesLeftRef.current <= 0 && winnerRef.current === null && !hadCollision) {
+        if (movesLeftRef.current <= 0 && winnerRef.current === null && !hadCollision && !teleportedThisMove) {
           const cp = next.players[currentPlayer];
-          const cell = cp && next.grid[cp.y]?.[cp.x];
+          const cell = cp && next.getCellAt(cp.x, cp.y);
           if (cell && isMultiplierCell(cell) && diceResult !== null) {
             const mult = getMultiplierValue(cell);
             const bonus = diceResult * mult;
