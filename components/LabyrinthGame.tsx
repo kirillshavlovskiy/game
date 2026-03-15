@@ -473,6 +473,20 @@ export default function LabyrinthGame() {
         const monsterIdx = combat.monsterIndex;
         if (result.won && monsterIdx >= 0 && monsterIdx < next.monsters.length) {
           next.monsters.splice(monsterIdx, 1);
+          if (pi === currentPlayerRef.current) {
+            movesLeftRef.current = 0;
+            setMovesLeft(0);
+            setDiceResult(null);
+            let nextP = (pi + 1) % next.numPlayers;
+            while (next.eliminatedPlayers.has(nextP) && nextP !== pi) {
+              nextP = (nextP + 1) % next.numPlayers;
+            }
+            const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
+            const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+            const roundComplete = living.length <= 1 || nextP === firstLiving;
+            setCurrentPlayer(nextP);
+            if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
+          }
         } else if (!result.won && p) {
           const usedShield = next.tryConsumeShield(pi);
           if (usedShield) {
