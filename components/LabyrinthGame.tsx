@@ -1663,8 +1663,8 @@ export default function LabyrinthGame() {
           background: "#1a1a24",
           padding: "0.5rem",
           borderRadius: 8,
-          border: "1px solid #333",
-          boxShadow: "0 0 20px rgba(0,255,136,0.1)",
+          border: "2px solid #00ff88",
+          boxShadow: "0 0 20px rgba(0,255,136,0.4)",
         }}
       >
         <div

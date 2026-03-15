@@ -364,9 +364,15 @@ export class Labyrinth {
     const isSmallMap = this.width * this.height <= 400;
     const baseDist = this.monsterDensity >= 4 ? 2 : this.monsterDensity >= 3 ? 3 : 4;
     const MIN_MONSTER_DIST = isSmallMap ? Math.max(1, baseDist - 1) : baseDist;
+    const MONSTER_EXCLUDE_RADIUS = 3;
+    const nearStart = (ax: number, ay: number) => Math.abs(ax) + Math.abs(ay) <= MONSTER_EXCLUDE_RADIUS;
+    const nearGoal = (ax: number, ay: number) => Math.abs(ax - this.goalX) + Math.abs(ay - this.goalY) <= MONSTER_EXCLUDE_RADIUS;
+    const magicCells = this.getMagicCellPositions();
+    const nearMagic = (ax: number, ay: number) => magicCells.some(([mx, my]) => Math.abs(ax - mx) + Math.abs(ay - my) <= MONSTER_EXCLUDE_RADIUS);
     const chosen: [number, number][] = [];
     for (const [x, y] of intersections) {
       if (this.monsters.length >= targetMonsters) break;
+      if (nearStart(x, y) || nearGoal(x, y) || nearMagic(x, y)) continue;
       const farEnough = chosen.every(([cx, cy]) => Math.abs(x - cx) + Math.abs(y - cy) >= MIN_MONSTER_DIST);
       if (farEnough) {
         const patrolArea = this._getPatrolArea(x, y, 28);
