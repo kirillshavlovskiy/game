@@ -694,20 +694,20 @@ export class Labyrinth {
     strength: number,
     useRandom = false
   ): { arcPoints: [number, number][]; destX: number; destY: number } | null {
-    const ndx = Math.sign(dx);
-    const ndy = Math.sign(dy);
-    if (ndx === 0 && ndy === 0) return null;
-    const norm = Math.sqrt(ndx * ndx + ndy * ndy);
-    const scaleX = ndx / norm;
-    const scaleY = ndy / norm;
+    const norm = Math.sqrt(dx * dx + dy * dy);
+    if (norm < 0.01) return null;
+    const scaleX = dx / norm;
+    const scaleY = dy / norm;
+    const ndx = Math.sign(dx) || 0;
+    const ndy = Math.sign(dy) || 0;
     const maxDist = Math.max(this.width, this.height) * 0.4;
     const strengthScale = 0.12;
     const baseDist = Math.min(maxDist, Math.max(2, strength * strengthScale));
     const dist = useRandom ? baseDist * (0.5 + Math.random() * 0.8) : baseDist * 0.9;
     const destXClamped = Math.max(0, Math.min(this.width - 1, Math.round(fromX + scaleX * dist)));
     const destYClamped = Math.max(0, Math.min(this.height - 1, Math.round(fromY + scaleY * dist)));
-    const perp1 = ndx !== 0 ? [-ndy, ndx] : [ndx, -ndy];
-    const perp2 = ndx !== 0 ? [ndy, -ndx] : [-ndx, ndy];
+    const perp1 = [-scaleY, scaleX];
+    const perp2 = [scaleY, -scaleX];
     const perp = perp1[1] < 0 ? perp1 : perp2;
     const perpX = perp[0];
     const perpY = perp[1];
@@ -746,7 +746,8 @@ export class Labyrinth {
       let x = fromX;
       let y = fromY;
       let lastPath: { x: number; y: number } | null = null;
-      const stepCount = Math.ceil(dist / norm) + 2;
+      const stepSize = Math.sqrt(ndx * ndx + ndy * ndy) || 1;
+      const stepCount = Math.ceil(dist / stepSize) + 2;
       for (let i = 0; i < stepCount; i++) {
         const nx = x + ndx;
         const ny = y + ndy;
