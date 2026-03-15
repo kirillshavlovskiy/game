@@ -685,10 +685,9 @@ export default function LabyrinthGame() {
         }
         setLab(next);
         const hadCollision = !!collision;
-        const cp = next.players[currentPlayer];
-        const cell = cp ? next.grid[cp.y]?.[cp.x] : null;
-        const landedOnCatapult = cell && isCatapultCell(cell);
-        if (movesLeft === 1 && winner === null && !hadCollision && !landedOnCatapult) {
+        if (movesLeft === 1 && winner === null && !hadCollision) {
+          const cp = next.players[currentPlayer];
+          const cell = cp && next.grid[cp.y]?.[cp.x];
           if (cell && isMultiplierCell(cell) && diceResult !== null) {
             const mult = getMultiplierValue(cell);
             const bonus = diceResult * mult;
@@ -880,6 +879,7 @@ export default function LabyrinthGame() {
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 15) return; // too short a drag
       handleCatapultLaunch(dx, dy, dist);
+      }
     };
     const onPointerCancel = () => {
       catapultDragRef.current = null;
