@@ -325,8 +325,14 @@ export class Labyrinth {
     const diamondCount = Math.round(Math.max(this.numPlayers * 2, Math.min(this.numPlayers * 6, Math.floor(pathCells.length * 0.1 * helperMult))));
     const blocks10x10 = (this.width / 10) * (this.height / 10);
     const bombCount = Math.round(Math.max(1, Math.min(14, Math.floor(blocks10x10 * 1.2 * helperMult))));
+    const trapCount = Math.round(Math.max(1, Math.min(10, Math.floor(pathCells.length * 0.03 * trapMult))));
+    const minArtifacts = this.numPlayers * 3; // each player needs 3 to win
+    const artifactCount = Math.round(Math.max(minArtifacts, Math.min(minArtifacts + 6, Math.floor(12 * helperMult))));
+    const hiddenCount = Math.round(Math.max(2, Math.min(12, Math.floor(pathCells.length * 0.05 * helperMult))));
+    const fogCount = Math.round(Math.max(2, Math.min(10, Math.floor(pathCells.length * 0.04 * obstacleMult))));
 
-    const total = multCount + magicCount + catapultCount + jumpCount + diamondCount + bombCount;
+    const total = multCount + magicCount + catapultCount + jumpCount + diamondCount + bombCount
+      + trapCount + artifactCount + hiddenCount + fogCount;
     if (total > pathCells.length) return;
 
     const multCells = this._pickSpread(pathCells, multCount);
@@ -341,7 +347,6 @@ export class Labyrinth {
     const rest3b = rest3.filter((c) => !diamondCells.some((d) => d[0] === c[0] && d[1] === c[1]));
     const bombCells = this._pickSpread(rest3b, bombCount);
     const rest3c = rest3b.filter((c) => !bombCells.some((b) => b[0] === c[0] && b[1] === c[1]));
-    const trapCount = Math.round(Math.max(1, Math.min(10, Math.floor(pathCells.length * 0.03 * trapMult))));
     const trapCells = this._pickSpread(rest3c, trapCount);
     const trapTypes = [TRAP_LOSE_TURN, TRAP_HARM, TRAP_TELEPORT, TRAP_SLOW];
     for (let i = 0; i < trapCells.length; i++) {
@@ -349,8 +354,6 @@ export class Labyrinth {
       this.grid[y][x] = trapTypes[i % 4];
     }
     const rest3d = rest3c.filter((c) => !trapCells.some((t) => t[0] === c[0] && t[1] === c[1]));
-    const minArtifacts = this.numPlayers * 3; // each player needs 3 to win
-    const artifactCount = Math.round(Math.max(minArtifacts, Math.min(minArtifacts + 6, Math.floor(12 * helperMult))));
     const artifactCells = this._pickSpread(rest3d, Math.min(artifactCount, rest3d.length));
     const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL];
     for (let i = 0; i < artifactCells.length; i++) {
@@ -371,7 +374,6 @@ export class Labyrinth {
     }
     for (const [x, y] of bombCells) this.grid[y][x] = BOMB;
     // Add hidden cells (revealed when diamonds collected): magic, jump, multipliers, shield
-    const hiddenCount = Math.round(Math.max(2, Math.min(12, Math.floor(pathCells.length * 0.05 * helperMult))));
     const rest4 = rest3d.filter((c) => !artifactCells.some((a) => a[0] === c[0] && a[1] === c[1]));
     const hiddenCellCoords = this._pickSpread(rest4, hiddenCount);
     const hiddenTypes: string[] = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, MULT_X2, MULT_X3, SHIELD, SHIELD];
@@ -382,7 +384,6 @@ export class Labyrinth {
     }
     // Fog/darkness zones: expand areas around center cells, intensity falls off with distance (0=transparent, 1=opaque)
     const rest5 = rest4.filter((c) => !hiddenCellCoords.some((h) => h[0] === c[0] && h[1] === c[1]));
-    const fogCount = Math.round(Math.max(2, Math.min(10, Math.floor(pathCells.length * 0.04 * obstacleMult))));
     const fogCells = this._pickSpread(rest5.length > 0 ? rest5 : rest4, fogCount);
     const FOG_RADIUS = 3; // cells from center; larger area per fog zone
     for (const [cx, cy] of fogCells) {
