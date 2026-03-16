@@ -148,6 +148,10 @@ export class Labyrinth {
   bombCollectedBy: Map<string, Set<number>> = new Map();
   /** Magic cells used for teleport by player: key "x,y" -> Set of player indices who teleported from that cell */
   teleportUsedFrom: Map<string, Set<number>> = new Map();
+  /** Magic cells teleported TO by player: key "x,y" -> Set of player indices (prevents back-and-forth) */
+  teleportUsedTo: Map<string, Set<number>> = new Map();
+  /** Catapult cells used by player: key "x,y" -> Set of player indices (one use per player per cell) */
+  catapultUsedFrom: Map<string, Set<number>> = new Map();
   /** Cells any player has ever visited - fog clears in these areas */
   visitedCells: Set<string> = new Set();
 
@@ -731,6 +735,8 @@ export class Labyrinth {
     this.fogZones = new Map();
     this.bombCollectedBy = new Map();
     this.teleportUsedFrom = new Map();
+    this.teleportUsedTo = new Map();
+    this.catapultUsedFrom = new Map();
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
@@ -872,7 +878,13 @@ export class Labyrinth {
     const magicCells: [number, number][] = [];
     for (let y = 0; y < this.height; y++)
       for (let x = 0; x < this.width; x++)
-        if (this.grid[y][x] === MAGIC && (x !== p.x || y !== p.y) && dist(x, y) <= effectiveMaxDist)
+        if (
+          this.grid[y][x] === MAGIC &&
+          (x !== p.x || y !== p.y) &&
+          dist(x, y) <= effectiveMaxDist &&
+          !this.hasUsedTeleportFrom(playerIndex, x, y) &&
+          !this.hasTeleportedTo(playerIndex, x, y)
+        )
           magicCells.push([x, y]);
     if (magicCells.length === 0) return [];
     const sorted = [...magicCells].sort((a, b) => dist(a[0], a[1]) - dist(b[0], b[1]));
@@ -903,7 +915,38 @@ export class Labyrinth {
     p.x = destX;
     p.y = destY;
     this.recordVisited(destX, destY);
+    this.recordTeleportUsedTo(playerIndex, destX, destY);
     return true;
+  }
+
+  hasTeleportedTo(playerIndex: number, x: number, y: number): boolean {
+    const key = `${x},${y}`;
+    return this.teleportUsedTo.get(key)?.has(playerIndex) ?? false;
+  }
+
+  recordTeleportUsedTo(playerIndex: number, x: number, y: number): void {
+    const key = `${x},${y}`;
+    let set = this.teleportUsedTo.get(key);
+    if (!set) {
+      set = new Set();
+      this.teleportUsedTo.set(key, set);
+    }
+    set.add(playerIndex);
+  }
+
+  hasUsedCatapultFrom(playerIndex: number, x: number, y: number): boolean {
+    const key = `${x},${y}`;
+    return this.catapultUsedFrom.get(key)?.has(playerIndex) ?? false;
+  }
+
+  recordCatapultUsedFrom(playerIndex: number, x: number, y: number): void {
+    const key = `${x},${y}`;
+    let set = this.catapultUsedFrom.get(key);
+    if (!set) {
+      set = new Set();
+      this.catapultUsedFrom.set(key, set);
+    }
+    set.add(playerIndex);
   }
 
   hasCollectedBombFrom(playerIndex: number, x: number, y: number): boolean {

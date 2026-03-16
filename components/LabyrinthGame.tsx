@@ -573,6 +573,8 @@ export default function LabyrinthGame() {
         next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.teleportUsedTo = new Map([...(prev.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.catapultUsedFrom = new Map([...(prev.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.visitedCells = new Set(prev.visitedCells || []);
         next.goalX = prev.goalX;
         next.goalY = prev.goalY;
@@ -658,6 +660,8 @@ export default function LabyrinthGame() {
         next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.teleportUsedTo = new Map([...(prev.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.catapultUsedFrom = new Map([...(prev.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.visitedCells = new Set(prev.visitedCells || []);
         return next;
       });
@@ -702,6 +706,8 @@ export default function LabyrinthGame() {
         next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.teleportUsedTo = new Map([...(prev.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.catapultUsedFrom = new Map([...(prev.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.visitedCells = new Set(prev.visitedCells || []);
         next.goalX = prev.goalX;
         next.goalY = prev.goalY;
@@ -719,6 +725,8 @@ export default function LabyrinthGame() {
       next.fogZones = new Map(prev.fogZones || new Map());
       next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.teleportUsedTo = new Map([...(prev.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.catapultUsedFrom = new Map([...(prev.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.visitedCells = new Set(prev.visitedCells || []);
       next.goalX = prev.goalX;
       next.goalY = prev.goalY;
@@ -761,6 +769,8 @@ export default function LabyrinthGame() {
     next.fogZones = new Map(lab.fogZones || new Map());
     next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
     next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+    next.teleportUsedTo = new Map([...(lab.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+    next.catapultUsedFrom = new Map([...(lab.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
     next.visitedCells = new Set(lab.visitedCells || []);
     next.goalX = lab.goalX;
     next.goalY = lab.goalY;
@@ -824,6 +834,8 @@ export default function LabyrinthGame() {
       next.fogZones = new Map(lab.fogZones || new Map());
       next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.teleportUsedTo = new Map([...(lab.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.catapultUsedFrom = new Map([...(lab.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.visitedCells = new Set(lab.visitedCells || []);
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
@@ -967,7 +979,7 @@ export default function LabyrinthGame() {
               if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
             }
           }
-          if (cell && isCatapultCell(cell)) {
+          if (cell && isCatapultCell(cell) && !next.hasUsedCatapultFrom(currentPlayer, p.x, p.y)) {
             setCatapultPicker({ playerIndex: currentPlayer, from: [p.x, p.y] });
             setCatapultMode(true);
           }
@@ -1089,6 +1101,8 @@ export default function LabyrinthGame() {
         next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.teleportUsedTo = new Map([...(prev.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.catapultUsedFrom = new Map([...(prev.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.visitedCells = new Set(prev.visitedCells || []);
         next.moveMonsters();
         const collision = next.checkMonsterCollision(currentPlayerRef.current);
@@ -1187,6 +1201,8 @@ export default function LabyrinthGame() {
       next.fogZones = new Map(lab.fogZones || new Map());
       next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.teleportUsedTo = new Map([...(lab.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.catapultUsedFrom = new Map([...(lab.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.visitedCells = new Set(lab.visitedCells || []);
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
@@ -1194,6 +1210,7 @@ export default function LabyrinthGame() {
       next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
       const result = next.catapultLaunch(playerIndex, dx, dy, strength);
       if (result) {
+        next.recordCatapultUsedFrom(playerIndex, from[0], from[1]);
         setCatapultAnimation({ from, to: [result.destX, result.destY], playerIndex });
         setTeleportPicker(null);
         setCatapultPicker(null);
@@ -1265,6 +1282,8 @@ export default function LabyrinthGame() {
       next.fogZones = new Map(lab.fogZones || new Map());
       next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.teleportUsedTo = new Map([...(lab.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.catapultUsedFrom = new Map([...(lab.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.visitedCells = new Set(lab.visitedCells || []);
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
@@ -2053,18 +2072,20 @@ export default function LabyrinthGame() {
                 }
                 cellClass += " path bomb";
               } else if ((showSecretCells || isTeleportOption) && isMagicCell(cellType)) {
+                const magicUsed = lab.hasUsedTeleportFrom(currentPlayer, x, y);
                 if (!wouldHaveFog) {
                   content = (
-                    <span className="hole-cell" style={{ fontSize: "1.1rem" }} title="Teleport: pick destination">
+                    <span className="hole-cell" style={{ fontSize: "1.1rem", opacity: magicUsed ? 0.4 : 1 }} title={magicUsed ? "Teleport used" : "Teleport: pick destination"}>
                       🌀
                     </span>
                   );
                 }
-                cellClass += " path magic hole";
+                cellClass += " path magic hole" + (magicUsed ? " artifact-inactive" : "");
               } else if (showSecretCells && isCatapultCell(cellType)) {
+                const catapultUsed = lab.hasUsedCatapultFrom(currentPlayer, x, y);
                 if (!wouldHaveFog) {
                   content = (
-                    <span style={{ fontSize: "1.2rem", display: "inline-flex", alignItems: "center", justifyContent: "center" }} title="Slingshot">
+                    <span style={{ fontSize: "1.2rem", display: "inline-flex", alignItems: "center", justifyContent: "center", opacity: catapultUsed ? 0.4 : 1 }} title={catapultUsed ? "Catapult used" : "Slingshot"}>
                       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M5 4v4a7 7 0 0 0 14 0V4" />
                         <path d="M5 8h14" />
@@ -2073,7 +2094,7 @@ export default function LabyrinthGame() {
                     </span>
                   );
                 }
-                cellClass += " path catapult";
+                cellClass += " path catapult" + (catapultUsed ? " artifact-inactive" : "");
               } else if (showSecretCells && isJumpCell(cellType)) {
                 if (!wouldHaveFog) content = "J";
                 cellClass += " path jump";
@@ -2092,64 +2113,55 @@ export default function LabyrinthGame() {
               }
               }
 
-              const cellBg: React.CSSProperties = {};
+              const cellBg: React.CSSProperties = { background: "transparent" };
               if (cellClass.includes("wall")) {
-                cellBg.background = "#2a2a35";
                 cellBg.color = "#555";
               } else if (cellClass.includes("path")) {
-                cellBg.background = "#1e1e28";
                 cellBg.color = "#333";
               }
               if (cellClass.includes("start")) {
-                cellBg.background = "#1e2e24";
                 cellBg.color = "#00ff88";
               }
               if (cellClass.includes("goal")) {
-                cellBg.background = "#2e1e1e";
                 cellBg.color = "#ff4444";
               }
               if (cellClass.includes("multiplier")) {
-                cellBg.background = "transparent";
                 cellBg.color = "#ffcc00";
                 cellBg.fontWeight = "bold";
                 cellBg.fontSize = "0.85rem";
               }
               if (cellClass.includes("magic")) {
-                cellBg.background = "#1e1e2e";
-                cellBg.color = "#aa66ff";
+                cellBg.color = cellClass.includes("artifact-inactive") ? "#555" : "#aa66ff";
                 cellBg.fontWeight = "bold";
-                if (isTeleportOption) {
+                if (isTeleportOption && !cellClass.includes("artifact-inactive")) {
                   cellBg.boxShadow = "inset 0 0 12px #aa66ff66, 0 0 8px #aa66ff";
                   cellBg.border = "2px solid #aa66ff";
                 }
               }
+              if (cellClass.includes("catapult") && cellClass.includes("artifact-inactive")) {
+                cellBg.color = "#444";
+              }
               if (cellClass.includes("catapult")) {
-                cellBg.background = "#2e2e1e";
                 cellBg.color = "#ffcc00";
                 cellBg.fontWeight = "bold";
               }
               if (cellClass.includes("jump")) {
-                cellBg.background = "#1e2e2e";
                 cellBg.color = "#66aaff";
                 cellBg.fontWeight = "bold";
               }
               if (cellClass.includes("shield")) {
-                cellBg.background = "#1e2e1e";
                 cellBg.color = "#44ff88";
                 cellBg.fontWeight = "bold";
               }
               if (cellClass.includes("artifact")) {
-                cellBg.background = "#1e2e2e";
                 cellBg.color = "#aa66ff";
                 cellBg.fontWeight = "bold";
               }
               if (cellClass.includes("trap")) {
-                cellBg.background = "#2e2e1e";
                 cellBg.color = "#ffaa00";
                 cellBg.fontWeight = "bold";
               }
               if (cellClass.includes("bomb")) {
-                cellBg.background = "#2e1e1e";
                 cellBg.color = "#ff8844";
                 cellBg.fontWeight = "bold";
               }
@@ -2161,12 +2173,10 @@ export default function LabyrinthGame() {
                 cellBg.fontWeight = "bold";
                 cellBg.fontSize = "1rem";
                 if (owner !== null) {
-                  cellBg.background = `${c}22`;
                   cellBg.boxShadow = `inset 0 0 8px ${c}44`;
                 }
               }
               if (cellClass.includes("monster")) {
-                cellBg.background = "#2e1e1e";
                 cellBg.color = "#ff6666";
                 cellBg.zIndex = 5;
               }
@@ -2226,8 +2236,34 @@ export default function LabyrinthGame() {
                     setCatapultDragOffset({ dx, dy });
                   } : undefined}
                 >
-                  {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && (
-                    <div className="spider-web" style={{ position: "absolute", inset: 0, zIndex: 0 }} />
+                  {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && !wouldHaveFog && (
+                    <div className="spider-web" style={{ position: "absolute", inset: 0, zIndex: 0 }}>
+                      <svg viewBox="0 0 44 44" preserveAspectRatio="xMidYMid slice">
+                        <defs>
+                          <linearGradient id={`web-strand-${x}-${y}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stopColor="rgba(240,245,255,0.7)" />
+                            <stop offset="100%" stopColor="rgba(200,210,230,0.5)" />
+                          </linearGradient>
+                        </defs>
+                        <g stroke={`url(#web-strand-${x}-${y})`} strokeWidth="0.35" fill="none" strokeLinecap="round">
+                          {/* Radial threads (spokes) */}
+                          {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => {
+                            const rad = (deg * Math.PI) / 180;
+                            const ex = 22 + 22 * Math.cos(rad);
+                            const ey = 22 + 22 * Math.sin(rad);
+                            return <line key={deg} x1={22} y1={22} x2={ex} y2={ey} />;
+                          })}
+                          {/* Concentric capture spiral (orb web style) */}
+                          <circle cx={22} cy={22} r={6} strokeWidth="0.3" opacity="0.9" />
+                          <circle cx={22} cy={22} r={12} strokeWidth="0.28" opacity="0.85" />
+                          <circle cx={22} cy={22} r={18} strokeWidth="0.25" opacity="0.8" />
+                          <circle cx={22} cy={22} r={24} strokeWidth="0.22" opacity="0.75" />
+                          <circle cx={22} cy={22} r={30} strokeWidth="0.2" opacity="0.7" />
+                          {/* Center hub */}
+                          <circle cx={22} cy={22} r={1.2} fill="rgba(230,235,250,0.6)" stroke="none" />
+                        </g>
+                      </svg>
+                    </div>
                   )}
                   <span style={{ position: "relative", zIndex: 1 }}>{content}</span>
                   {jumpTarget && (

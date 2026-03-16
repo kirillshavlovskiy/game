@@ -120,24 +120,16 @@ button {
   color: #5a5a7a !important;
 }
 
-/* Spider web effect - decorative overlay on corridor cells (costs 3 moves) */
+/* Spider web - orb web with radial threads and concentric capture spiral */
 .spider-web {
-  background: 
-    radial-gradient(ellipse 60% 60% at 50% 50%, transparent 30%, rgba(180,180,200,0.25) 60%, transparent 100%),
-    linear-gradient(135deg, rgba(200,200,220,0.2) 0%, transparent 50%, rgba(200,200,220,0.15) 100%),
-    linear-gradient(45deg, transparent 0%, rgba(220,220,240,0.18) 50%, transparent 100%);
-  opacity: 0.9;
   pointer-events: none;
+  overflow: visible;
 }
 
-.spider-web::before {
-  content: "";
-  position: absolute;
-  inset: 2px;
-  background: 
-    repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(200,200,220,0.06) 3px, rgba(200,200,220,0.06) 4px),
-    repeating-linear-gradient(90deg, transparent, transparent 3px, rgba(200,200,220,0.06) 3px, rgba(200,200,220,0.06) 4px);
-  mask: radial-gradient(ellipse 80% 80% at 50% 50%, black 20%, transparent 70%);
+.spider-web svg {
+  width: 100%;
+  height: 100%;
+  opacity: 0.85;
 }
 
 /* Bomb explosion - flash overlay on 3×3 blast zone */
