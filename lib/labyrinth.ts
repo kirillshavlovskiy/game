@@ -307,7 +307,7 @@ export class Labyrinth {
 
     // Inverse difficulty: easy = more helpers, hard = fewer helpers. Traps/obstacles scale up with difficulty.
     const d = this.monsterDensity; // 1=easy, 4=extreme
-    const helperMult = Math.max(0.2, 1.5 - 0.45 * d); // easy 1.05, normal 0.6, hard 0.15, extreme 0.2
+    const helperMult = Math.max(0.15, 1.5 - 0.45 * d); // easy 1.05, normal 0.6, hard 0.15, extreme 0.15
     const trapMult = 0.6 + 0.25 * d;  // easy 0.85, normal 1.1, hard 1.35, extreme 1.6
     const obstacleMult = 0.7 + 0.2 * d; // webs, fog: more for harder
 
