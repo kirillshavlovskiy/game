@@ -1185,21 +1185,22 @@ export class Labyrinth {
     return 1;
   }
 
-  /** Check if player has 3+ artifacts and is at exit (win condition). */
-  hasWonByArtifactsAndExit(playerIndex: number): boolean {
-    const p = this.players[playerIndex];
-    return !!p && p.artifacts >= 3 && p.x === this.goalX && p.y === this.goalY;
+  /** Win condition: first player to reach the goal wins. */
+  hasWon(playerIndex: number): boolean {
+    return this.isGoalReached(playerIndex);
   }
 
-  /** Get player with most artifacts (for round-15 tiebreaker). */
-  getPlayerWithMostArtifacts(): number | null {
+  /** Round-15 tiebreaker: player closest to goal (by Manhattan distance). */
+  getPlayerClosestToGoal(): number | null {
     let best = -1;
-    let bestCount = -1;
+    let bestDist = Infinity;
     for (let i = 0; i < this.players.length; i++) {
       if (this.eliminatedPlayers.has(i)) continue;
-      const a = this.players[i]?.artifacts ?? 0;
-      if (a > bestCount) {
-        bestCount = a;
+      const p = this.players[i];
+      if (!p) continue;
+      const dist = Math.abs(p.x - this.goalX) + Math.abs(p.y - this.goalY);
+      if (dist < bestDist) {
+        bestDist = dist;
         best = i;
       }
     }

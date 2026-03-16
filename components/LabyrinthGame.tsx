@@ -887,8 +887,8 @@ export default function LabyrinthGame() {
       if (!prev || winnerRef.current !== null) return prev;
       const newRound = (prev.round ?? 0) + 1;
       if (newRound >= MAX_ROUNDS) {
-        const winnerByArtifacts = prev.getPlayerWithMostArtifacts();
-        if (winnerByArtifacts !== null) setTimeout(() => setWinner(winnerByArtifacts), 0);
+        const winnerClosest = prev.getPlayerClosestToGoal();
+        if (winnerClosest !== null) setTimeout(() => setWinner(winnerClosest), 0);
       }
       if (Math.random() < 0.35) {
         const ev = drawEvent();
@@ -1231,7 +1231,7 @@ export default function LabyrinthGame() {
           setLab(next);
           return;
         }
-        if (next.hasWonByArtifactsAndExit(currentPlayer)) {
+        if (next.hasWon(currentPlayer)) {
           setWinner(currentPlayer);
         }
         setLab(next);
@@ -1443,7 +1443,7 @@ export default function LabyrinthGame() {
             setEliminatedByMonster({ playerIndex: collision.playerIndex, monsterType: collision.monsterType });
           }
         }
-        if (next.hasWonByArtifactsAndExit(playerIndex)) setWinner(playerIndex);
+        if (next.hasWon(playerIndex)) setWinner(playerIndex);
         setLab(next);
       }
     },
