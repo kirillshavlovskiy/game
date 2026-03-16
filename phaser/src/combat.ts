@@ -22,7 +22,7 @@ export type MonsterReward =
   | { type: 'shield'; amount: number }
   | { type: 'attackBonus'; amount: number };
 
-function getMonsterDefense(type: MonsterType): number {
+export function getMonsterDefense(type: MonsterType): number {
   return type === 'V' ? 5 : type === 'Z' || type === 'K' ? 4 : 3;
 }
 
