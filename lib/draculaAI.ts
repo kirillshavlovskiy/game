@@ -232,7 +232,8 @@ export function applyDraculaAttack(
   eliminated: Set<number>
 ): number | null {
   const targetIdx = dracula.targetPlayerIndex;
-  if (targetIdx === null || eliminated.has(targetIdx)) return null;
+  if (targetIdx == null) return null;
+  if (eliminated.has(targetIdx)) return null;
   const target = players[targetIdx];
   if (!target) return null;
   const dist = manhattan(dracula.x, dracula.y, target.x, target.y);
