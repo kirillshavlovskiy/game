@@ -38,6 +38,25 @@ import { drawEvent, applyEvent, type GameEvent } from "@/lib/eventDeck";
 
 const CELL_SIZE = 44;
 
+/**
+ * MOVE POLICY — how moves are consumed/kept per action:
+ *
+ * NORMAL MOVE: Pay getTileMoveCost (1=path, 2=TRAP_SLOW, 3=web). Turn continues if moves left.
+ * COMBAT (player lands on monster): Move cost paid. Combat resolves. Win → turn ends. Lose+shield → keep moves. Lose+no shield → turn ends if eliminated.
+ * COMBAT (monster lands on player): No move cost. Same resolution.
+ * BOMB (normal): Costs 1 move. Turn continues.
+ * BOMB (in combat): Free (clears monster). Turn continues.
+ * MAGIC CELL / TRAP TELEPORT: Turn ends (moves zeroed).
+ * TELEPORT PICKER (gem/artifact): Turn ends when destination chosen.
+ * TRAP_LOSE_TURN: Turn ends immediately.
+ * TRAP_HARM: No move cost. Turn continues (unless killed).
+ * CATAPULT: Landing costs 1 move. Launch refunds 1 (net: catapult use is free).
+ */
+
+function getMonsterIcon(type: MonsterType): string {
+  return type === "V" ? "🧛" : type === "Z" ? "🧟" : type === "G" ? "👻" : type === "K" ? "💀" : "🕷";
+}
+
 function getParabolicArcPath(from: [number, number], to: [number, number], cellSize: number, steps = 16): string {
   const fx = (from[0] + 0.5) * cellSize;
   const fy = (from[1] + 0.5) * cellSize;
@@ -187,6 +206,10 @@ export default function LabyrinthGame() {
     monsterIndex: number;
   } | null>(null);
   const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; shieldAbsorbed?: boolean }) | null>(null);
+  const [collisionEffect, setCollisionEffect] = useState<{ x: number; y: number } | null>(null);
+  const [turnChangeEffect, setTurnChangeEffect] = useState<number | null>(null);
+  const [combatUseShield, setCombatUseShield] = useState(true);
+  const [combatUseDiceBonus, setCombatUseDiceBonus] = useState(true);
   const [eventLog, setEventLog] = useState<GameEvent[]>([]);
   const [mazeZoom, setMazeZoom] = useState(1);
   const [gameStarted, setGameStarted] = useState(false);
@@ -199,6 +222,8 @@ export default function LabyrinthGame() {
   const movesLeftRef = useRef(0);
   const winnerRef = useRef(winner);
   const combatStateRef = useRef(combatState);
+  const combatUseShieldRef = useRef(true);
+  const combatUseDiceBonusRef = useRef(true);
   const currentPlayerRef = useRef(currentPlayer);
   const teleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hiddenGemTeleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -227,6 +252,12 @@ export default function LabyrinthGame() {
   useEffect(() => {
     combatStateRef.current = combatState;
   }, [combatState]);
+  useEffect(() => {
+    combatUseShieldRef.current = combatUseShield;
+  }, [combatUseShield]);
+  useEffect(() => {
+    combatUseDiceBonusRef.current = combatUseDiceBonus;
+  }, [combatUseDiceBonus]);
 
   // Cancel combat if monster was cleared (e.g. by bomb) before player rolled
   useEffect(() => {
@@ -234,8 +265,25 @@ export default function LabyrinthGame() {
     const collision = lab.checkMonsterCollision(combatState.playerIndex);
     if (!collision) {
       setCombatState(null);
+      setCombatUseShield(true);
+      setCombatUseDiceBonus(true);
     }
   }, [lab, combatState]);
+
+  // Init combat options when combat starts (default: use if available)
+  const prevCombatKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!combatState || !lab) {
+      prevCombatKeyRef.current = null;
+      return;
+    }
+    const key = `${combatState.playerIndex}-${combatState.monsterIndex}`;
+    if (prevCombatKeyRef.current === key) return;
+    prevCombatKeyRef.current = key;
+    const p = lab.players[combatState.playerIndex];
+    setCombatUseShield((p?.shield ?? 0) > 0);
+    setCombatUseDiceBonus((p?.diceBonus ?? 0) > 0);
+  }, [combatState, lab]);
 
   // Focus/scroll to current player marker only when turn changes to another player (not on every move)
   useEffect(() => {
@@ -351,6 +399,18 @@ export default function LabyrinthGame() {
   }, [webSlowed]);
 
   useEffect(() => {
+    if (!collisionEffect) return;
+    const t = setTimeout(() => setCollisionEffect(null), 600);
+    return () => clearTimeout(t);
+  }, [collisionEffect]);
+
+  useEffect(() => {
+    if (turnChangeEffect === null) return;
+    const t = setTimeout(() => setTurnChangeEffect(null), 1800);
+    return () => clearTimeout(t);
+  }, [turnChangeEffect]);
+
+  useEffect(() => {
     if (torchGained === null) return;
     const t = setTimeout(() => setTorchGained(null), 1500);
     return () => clearTimeout(t);
@@ -405,6 +465,8 @@ export default function LabyrinthGame() {
     setBombExplosion(null);
     setCombatState(null);
     setCombatResult(null);
+    setCollisionEffect(null);
+    setTurnChangeEffect(null);
     setEventLog([]);
   }, [getDimensions, numPlayers, difficulty]);
 
@@ -482,16 +544,21 @@ export default function LabyrinthGame() {
   const handleRollComplete = useCallback((value: number) => {
     const combat = combatStateRef.current;
     if (combat) {
-      // Combat roll: resolve and update state
+      // Combat roll: resolve and update state (manual dice - no auto-roll)
       const attackBonus = Math.floor((movesLeftRef.current ?? 0) / 2);
-      const result = resolveCombat(value, attackBonus, combat.monsterType);
+      const p = lab?.players[combat.playerIndex];
+      const diceBonus = p?.diceBonus ?? 0;
+      const useDiceBonus = combatUseDiceBonusRef.current && diceBonus > 0;
+      const effectiveRoll = value + (useDiceBonus ? 1 : 0);
+      const result = resolveCombat(effectiveRoll, attackBonus, combat.monsterType);
       setCombatResult({ ...result, monsterType: combat.monsterType });
       setRolling(false);
       setLab((prev) => {
         if (!prev || winnerRef.current !== null) return prev;
         const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((r) => [...r]);
-        next.players = prev.players.map((p) => ({
+        const useDiceBonusInCombat = combatUseDiceBonusRef.current && (prev.players[combat.playerIndex]?.diceBonus ?? 0) > 0;
+        next.players = prev.players.map((p, i) => ({
           ...p,
           jumps: p.jumps ?? 0,
           diamonds: p.diamonds ?? 0,
@@ -499,12 +566,14 @@ export default function LabyrinthGame() {
           bombs: p.bombs ?? 0,
           hp: p.hp ?? 3,
           artifacts: p.artifacts ?? 0,
+          diceBonus: i === combat.playerIndex && useDiceBonusInCombat ? Math.max(0, (p.diceBonus ?? 0) - 1) : (p.diceBonus ?? 0),
         }));
         next.hiddenCells = new Map(prev.hiddenCells);
         next.webPositions = [...(prev.webPositions || [])];
         next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.visitedCells = new Set(prev.visitedCells || []);
         next.goalX = prev.goalX;
         next.goalY = prev.goalY;
         next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
@@ -525,11 +594,13 @@ export default function LabyrinthGame() {
             const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
             const firstLiving = living.length > 0 ? Math.min(...living) : -1;
             const roundComplete = living.length <= 1 || nextP === firstLiving;
+            setTurnChangeEffect(nextP);
             setCurrentPlayer(nextP);
             if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
           }
         } else if (!result.won && p) {
-          const usedShield = next.tryConsumeShield(pi);
+          const useShield = combatUseShieldRef.current;
+          const usedShield = useShield ? next.tryConsumeShield(pi) : false;
           if (usedShield) {
             setShieldAbsorbed(true);
             setCombatResult((prev) => (prev ? { ...prev, shieldAbsorbed: true } : null));
@@ -547,6 +618,7 @@ export default function LabyrinthGame() {
                 while (next.eliminatedPlayers.has(nextP) && nextP !== pi) {
                   nextP = (nextP + 1) % next.numPlayers;
                 }
+                setTurnChangeEffect(nextP);
                 setCurrentPlayer(nextP);
               }
             }
@@ -555,6 +627,8 @@ export default function LabyrinthGame() {
         return next;
       });
       setCombatState(null);
+      setCombatUseShield(true);
+      setCombatUseDiceBonus(true);
       setTimeout(() => setCombatResult(null), 2000);
       return;
     }
@@ -584,6 +658,7 @@ export default function LabyrinthGame() {
         next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.visitedCells = new Set(prev.visitedCells || []);
         return next;
       });
     }
@@ -627,6 +702,7 @@ export default function LabyrinthGame() {
         next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.visitedCells = new Set(prev.visitedCells || []);
         next.goalX = prev.goalX;
         next.goalY = prev.goalY;
         next.round = newRound;
@@ -643,6 +719,7 @@ export default function LabyrinthGame() {
       next.fogZones = new Map(prev.fogZones || new Map());
       next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.visitedCells = new Set(prev.visitedCells || []);
       next.goalX = prev.goalX;
       next.goalY = prev.goalY;
       next.round = newRound;
@@ -659,6 +736,7 @@ export default function LabyrinthGame() {
     const living = [...Array(lab.numPlayers).keys()].filter((i) => !lab.eliminatedPlayers.has(i));
     const firstLiving = living.length > 0 ? Math.min(...living) : -1;
     const roundComplete = living.length <= 1 || nextP === firstLiving;
+    setTurnChangeEffect(nextP);
     setCurrentPlayer(nextP);
     movesLeftRef.current = 0;
     setMovesLeft(0);
@@ -683,6 +761,7 @@ export default function LabyrinthGame() {
     next.fogZones = new Map(lab.fogZones || new Map());
     next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
     next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+    next.visitedCells = new Set(lab.visitedCells || []);
     next.goalX = lab.goalX;
     next.goalY = lab.goalY;
     next.monsters = lab.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
@@ -745,6 +824,7 @@ export default function LabyrinthGame() {
       next.fogZones = new Map(lab.fogZones || new Map());
       next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.visitedCells = new Set(lab.visitedCells || []);
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
       next.monsters = lab.monsters.map((m) => ({
@@ -786,6 +866,7 @@ export default function LabyrinthGame() {
               while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
                 nextP = (nextP + 1) % lab.numPlayers;
               }
+              setTurnChangeEffect(nextP);
               setCurrentPlayer(nextP);
             } else if (cell === TRAP_HARM) {
               const usedShield = next.tryConsumeShield(currentPlayer);
@@ -804,6 +885,7 @@ export default function LabyrinthGame() {
                   while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
                     nextP = (nextP + 1) % lab.numPlayers;
                   }
+                  setTurnChangeEffect(nextP);
                   setCurrentPlayer(nextP);
                 }
               }
@@ -813,6 +895,7 @@ export default function LabyrinthGame() {
                 const [fromX, fromY] = [p.x, p.y];
                 p.x = dest[0];
                 p.y = dest[1];
+                next.recordVisited(dest[0], dest[1]);
                 setTeleportAnimation({ from: [fromX, fromY], to: dest, playerIndex: currentPlayer });
                 movesLeftRef.current = 0;
                 setMovesLeft(0);
@@ -865,6 +948,7 @@ export default function LabyrinthGame() {
               const [fromX, fromY] = [p.x, p.y];
               p.x = dest[0];
               p.y = dest[1];
+              next.recordVisited(dest[0], dest[1]);
               next.recordTeleportUsedFrom(currentPlayer, fromX, fromY);
               setTeleportAnimation({ from: [fromX, fromY], to: dest, playerIndex: currentPlayer });
               movesLeftRef.current = 0;
@@ -878,6 +962,7 @@ export default function LabyrinthGame() {
               const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
               const firstLiving = living.length > 0 ? Math.min(...living) : -1;
               const roundComplete = living.length <= 1 || nextP === firstLiving;
+              setTurnChangeEffect(nextP);
               setCurrentPlayer(nextP);
               if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
             }
@@ -922,6 +1007,8 @@ export default function LabyrinthGame() {
         // Combat: when player lands on monster, enter combat mode (roll to resolve)
         const collision = next.checkMonsterCollision(currentPlayer);
         if (collision) {
+          const p = next.players[collision.playerIndex];
+          setCollisionEffect(p ? { x: p.x, y: p.y } : null);
           setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType, monsterIndex: collision.monsterIndex });
           setLab(next);
           return;
@@ -956,6 +1043,7 @@ export default function LabyrinthGame() {
               const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
               const firstLiving = living.length > 0 ? Math.min(...living) : -1;
               const roundComplete = living.length <= 1 || nextP === firstLiving;
+              setTurnChangeEffect(nextP);
               setCurrentPlayer(nextP);
               setDiceResult(null);
               if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
@@ -1001,9 +1089,12 @@ export default function LabyrinthGame() {
         next.fogZones = new Map(prev.fogZones || new Map());
         next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.visitedCells = new Set(prev.visitedCells || []);
         next.moveMonsters();
         const collision = next.checkMonsterCollision(currentPlayerRef.current);
         if (collision) {
+          const p = next.players[collision.playerIndex];
+          setCollisionEffect(p ? { x: p.x, y: p.y } : null);
           setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType, monsterIndex: collision.monsterIndex });
         }
         return next;
@@ -1019,6 +1110,7 @@ export default function LabyrinthGame() {
       while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
         nextP = (nextP + 1) % lab.numPlayers;
       }
+      setTurnChangeEffect(nextP);
       setCurrentPlayer(nextP);
       return;
     }
@@ -1095,6 +1187,7 @@ export default function LabyrinthGame() {
       next.fogZones = new Map(lab.fogZones || new Map());
       next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.visitedCells = new Set(lab.visitedCells || []);
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
       next.monsters = lab.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
@@ -1172,6 +1265,7 @@ export default function LabyrinthGame() {
       next.fogZones = new Map(lab.fogZones || new Map());
       next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
       next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.visitedCells = new Set(lab.visitedCells || []);
       next.goalX = lab.goalX;
       next.goalY = lab.goalY;
       next.monsters = lab.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
@@ -1190,6 +1284,7 @@ export default function LabyrinthGame() {
         const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
         const firstLiving = living.length > 0 ? Math.min(...living) : -1;
         const roundComplete = living.length <= 1 || nextP === firstLiving;
+        setTurnChangeEffect(nextP);
         setCurrentPlayer(nextP);
         if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
         setLab(next);
@@ -1482,10 +1577,31 @@ export default function LabyrinthGame() {
         </div>
       )}
 
+      {turnChangeEffect !== null && lab && !lab.eliminatedPlayers.has(turnChangeEffect) && (
+        <div style={{ ...eliminatedOverlayStyle, pointerEvents: "none", zIndex: 450 }}>
+          <div
+            className="turn-change-banner"
+            style={{
+              ...eliminatedBannerStyle,
+              borderColor: PLAYER_COLORS[turnChangeEffect] ?? "#00ff88",
+              background: "rgba(0,0,0,0.92)",
+              color: PLAYER_COLORS[turnChangeEffect] ?? "#00ff88",
+              boxShadow: `0 0 30px ${(PLAYER_COLORS[turnChangeEffect] ?? "#00ff88")}88`,
+              fontSize: "1.2rem",
+              fontWeight: "bold",
+            }}
+          >
+            <span style={{ fontSize: "1.5rem" }}>●</span>
+            <span>{playerNames[turnChangeEffect] ?? `Player ${turnChangeEffect + 1}`}&apos;s turn!</span>
+          </div>
+        </div>
+      )}
+
       {(combatState || combatResult) && (
         <div style={combatModalOverlayStyle}>
           <div style={combatModalStyle} onClick={(e) => e.stopPropagation()}>
             <h2 style={combatModalTitleStyle}>
+              <span style={{ marginRight: 8 }}>{combatState ? getMonsterIcon(combatState.monsterType) : combatResult?.monsterType ? getMonsterIcon(combatResult.monsterType) : "👹"}</span>
               ⚔️ Combat vs {combatState ? getMonsterName(combatState.monsterType) : combatResult?.monsterType ? getMonsterName(combatResult.monsterType) : "Monster"}
             </h2>
             {combatResult ? (
@@ -1500,7 +1616,7 @@ export default function LabyrinthGame() {
                     fontSize: "1.3rem",
                     fontWeight: "bold",
                   }}>
-                    {combatResult.won ? "✓ Monster defeated!" : combatResult.shieldAbsorbed ? "🛡 Shield absorbed!" : `✗ -${combatResult.damage} HP`}
+                    {combatResult.won ? "You are lucky! Monster defeated!" : combatResult.shieldAbsorbed ? "🛡 Shield absorbed!" : `✗ -${combatResult.damage} HP`}
                   </span>
                 </div>
                 <div style={combatStatsStyle}>
@@ -1512,6 +1628,24 @@ export default function LabyrinthGame() {
               </div>
             ) : combatState ? (
               <div style={combatRollSectionStyle}>
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 12,
+                  marginBottom: 12,
+                  padding: "12px 20px",
+                  background: "linear-gradient(135deg, rgba(80,20,20,0.6) 0%, rgba(40,10,10,0.8) 100%)",
+                  borderRadius: 12,
+                  border: "2px solid #ff6666",
+                  boxShadow: "inset 0 0 20px rgba(255,80,80,0.2)",
+                }}>
+                  <span style={{ fontSize: "3.5rem", lineHeight: 1 }} title={getMonsterName(combatState.monsterType)}>
+                    {getMonsterIcon(combatState.monsterType)}
+                  </span>
+                  <span style={{ color: "#ff9999", fontSize: "1rem" }}>vs</span>
+                  <span style={{ color: "#ffcc00", fontSize: "1.1rem", fontWeight: "bold" }}>{getMonsterName(combatState.monsterType)}</span>
+                </div>
                 <div style={combatMonsterInfoStyle}>
                   Defense: <strong>{getMonsterDefense(combatState.monsterType)}</strong>
                   {lab?.players[combatState.playerIndex] && (
@@ -1520,32 +1654,85 @@ export default function LabyrinthGame() {
                     </span>
                   )}
                 </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", marginBottom: 14, padding: "10px 12px", background: "rgba(0,0,0,0.4)", borderRadius: 8, border: "1px solid #333" }}>
+                  <div style={{ color: "#ffcc00", fontSize: "0.85rem", fontWeight: "bold", marginBottom: 4 }}>Skills & Artifacts</div>
+                  {lab && (lab.players[combatState.playerIndex]?.shield ?? 0) > 0 && (
+                    <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", color: "#ccc", fontSize: "0.95rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={combatUseShield}
+                        onChange={(e) => setCombatUseShield(e.target.checked)}
+                        style={{ width: 20, height: 20, accentColor: "#44ff88" }}
+                      />
+                      <span>🛡 Shield — block damage if I lose</span>
+                    </label>
+                  )}
+                  {lab && (lab.players[combatState.playerIndex]?.diceBonus ?? 0) > 0 && (
+                    <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", color: "#ccc", fontSize: "0.95rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={combatUseDiceBonus}
+                        onChange={(e) => setCombatUseDiceBonus(e.target.checked)}
+                        style={{ width: 20, height: 20, accentColor: "#ffcc00" }}
+                      />
+                      <span>🎲 Power — +1 to attack roll</span>
+                    </label>
+                  )}
+                  {lab && (lab.players[combatState.playerIndex]?.shield ?? 0) <= 0 && (lab.players[combatState.playerIndex]?.diceBonus ?? 0) <= 0 && (
+                    <span style={{ color: "#666", fontSize: "0.85rem" }}>No artifacts available</span>
+                  )}
+                </div>
+                <div style={{ color: "#888", fontSize: "0.85rem", marginBottom: 8 }}>Roll dice when ready (manual)</div>
                 <div
                   className="combat-dice"
-                  onClick={() => !rolling && combatDiceRef.current?.roll()}
+                  onClick={() => !rolling && (combatDiceRef.current?.roll() ?? (() => { const v = Math.floor(Math.random() * 6) + 1; handleRollComplete(v); })())}
                   style={{
                     cursor: rolling ? "default" : "pointer",
                     width: DICE_PANEL_WIDTH,
                     minWidth: DICE_PANEL_WIDTH,
-                    height: 140,
-                    background: "#0d0d12",
+                    height: 160,
+                    background: "linear-gradient(145deg, #1a1a24 0%, #0d0d12 100%)",
                     borderRadius: 12,
                     overflow: "hidden",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
+                    border: "2px solid #ffcc00",
+                    boxShadow: "inset 0 0 30px rgba(255,204,0,0.1)",
+                    position: "relative",
                   }}
                 >
-                  <Dice3D
-                    ref={combatDiceRef}
-                    onRollComplete={handleRollComplete}
-                    disabled={rolling}
-                  />
+                  {/* Fallback hint (behind 3D dice - visible when canvas hasn't loaded) */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      pointerEvents: "none",
+                      color: "#ffcc00",
+                      opacity: 0.8,
+                      zIndex: 0,
+                    }}
+                  >
+                    <span style={{ fontSize: "2.5rem", marginBottom: 4 }}>🎲</span>
+                    <span style={{ fontSize: "0.8rem", fontWeight: "bold" }}>Click to roll</span>
+                  </div>
+                  <div style={{ position: "relative", zIndex: 1, width: "100%", height: "100%", minHeight: 120 }}>
+                    <Dice3D
+                      ref={combatDiceRef}
+                      onRollComplete={handleRollComplete}
+                      disabled={rolling}
+                    />
+                  </div>
                 </div>
+                <div style={{ fontSize: "0.8rem", color: "#888", marginTop: 6 }}>Click dice area or button below to roll</div>
                 <button
                   onClick={() => !rolling && combatDiceRef.current?.roll()}
                   disabled={rolling}
-                  style={{ ...buttonStyle, marginTop: 12, background: "#ffcc00", color: "#111" }}
+                  style={{ ...buttonStyle, marginTop: 8, background: "#ffcc00", color: "#111" }}
                 >
                   {rolling ? "Rolling..." : "Roll to attack"}
                 </button>
@@ -1718,7 +1905,15 @@ export default function LabyrinthGame() {
               let content: React.ReactNode = null;
               let cellClass = "cell";
 
-              const monsterIcon = monster ? (
+              const fogIntensity = lab.fogZones?.get(`${x},${y}`);
+              const hasTorch = lab.players.some((pl) => pl.hasTorch);
+              const isVisited = lab.visitedCells?.has(`${x},${y}`);
+              const isPlayerCell = lab.players.some((pl, i) => !lab.eliminatedPlayers?.has(i) && pl.x === x && pl.y === y);
+              const isWallCell = lab.getCellAt(x, y) === "#";
+              const adjacentFog = isWallCell && !hasTorch && !isVisited && !isPlayerCell && [[x-1,y],[x+1,y],[x,y-1],[x,y+1]].some(([nx,ny]) => (lab.fogZones?.get(`${nx},${ny}`) ?? 0) > 0 && !lab.visitedCells?.has(`${nx},${ny}`));
+              const wouldHaveFog = !(hasTorch || isVisited || isPlayerCell) && (isWallCell ? adjacentFog : (fogIntensity ?? 0) > 0);
+
+              const monsterIcon = monster && !wouldHaveFog ? (
                 <span key="m" className="monster-icon" style={{ fontSize: "1.4rem", lineHeight: 1 }} title={getMonsterName(monster.type)}>
                   {monster.type === "V" ? "🧛" : monster.type === "Z" ? "🧟" : monster.type === "G" ? "👻" : monster.type === "K" ? "💀" : "🕷"}
                 </span>
@@ -1816,70 +2011,78 @@ export default function LabyrinthGame() {
               if (isMultiplierCell(cellType)) {
                 const isRevealed = isMultiplierCell(lab.grid[y]?.[x]);
                 const isHidden = lab.hiddenCells.has(`${x},${y}`);
-                if (isRevealed || (isHidden && showSecretCells)) {
+                if ((isRevealed || (isHidden && showSecretCells)) && !wouldHaveFog) {
                   content = `×${cellType}`;
-                  cellClass += " path multiplier mult-x" + cellType;
-                } else {
-                  cellClass += " path";
                 }
+                cellClass += (isRevealed || (isHidden && showSecretCells)) ? " path multiplier mult-x" + cellType : " path";
               } else if (isArtifactCell(cellType)) {
-                const art = cellType;
-                content = (
-                  <span style={{ fontSize: "1.1rem" }} title={art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : "Reveal"}>
-                    {art === ARTIFACT_DICE ? "🎲" : art === ARTIFACT_SHIELD ? "🛡" : art === ARTIFACT_TELEPORT_CELL ? "🌀" : "👁"}
-                  </span>
-                );
+                if (!wouldHaveFog) {
+                  const art = cellType;
+                  content = (
+                    <span style={{ fontSize: "1.1rem" }} title={art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : "Reveal"}>
+                      {art === ARTIFACT_DICE ? "🎲" : art === ARTIFACT_SHIELD ? "🛡" : art === ARTIFACT_TELEPORT_CELL ? "🌀" : "👁"}
+                    </span>
+                  );
+                }
                 cellClass += " path artifact";
               } else if (isTrapCell(cellType)) {
-                const trap = cellType;
-                content = (
-                  <span style={{ fontSize: "1rem", display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={trap === TRAP_LOSE_TURN ? "Lose turn" : trap === TRAP_HARM ? "Harm: -1 HP (shield blocks)" : trap === TRAP_TELEPORT ? "Teleport" : "Slow"}>
-                    {trap === TRAP_LOSE_TURN ? "⏸" : trap === TRAP_HARM ? (
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ff4444" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
-                        <circle cx="12" cy="9" r="5" />
-                        <path d="M7 14c-1.5 1.5-2 3.5-2 5h14c0-1.5-.5-3.5-2-5" />
-                        <circle cx="9" cy="8" r="1" fill="#ff4444" />
-                        <circle cx="15" cy="8" r="1" fill="#ff4444" />
-                        <path d="M10 12h4" />
-                      </svg>
-                    ) : trap === TRAP_TELEPORT ? "🌀" : "⏱"}
-                  </span>
-                );
+                if (!wouldHaveFog) {
+                  const trap = cellType;
+                  content = (
+                    <span style={{ fontSize: "1rem", display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={trap === TRAP_LOSE_TURN ? "Lose turn" : trap === TRAP_HARM ? "Harm: -1 HP (shield blocks)" : trap === TRAP_TELEPORT ? "Teleport" : "Slow"}>
+                      {trap === TRAP_LOSE_TURN ? "⏸" : trap === TRAP_HARM ? (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ff4444" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+                          <circle cx="12" cy="9" r="5" />
+                          <path d="M7 14c-1.5 1.5-2 3.5-2 5h14c0-1.5-.5-3.5-2-5" />
+                          <circle cx="9" cy="8" r="1" fill="#ff4444" />
+                          <circle cx="15" cy="8" r="1" fill="#ff4444" />
+                          <path d="M10 12h4" />
+                        </svg>
+                      ) : trap === TRAP_TELEPORT ? "🌀" : "⏱"}
+                    </span>
+                  );
+                }
                 cellClass += " path trap";
               } else if (isBombCell(cellType)) {
-                content = (
-                  <span style={{ fontSize: "1.1rem" }} title="Bomb pickup">
-                    💣
-                  </span>
-                );
+                if (!wouldHaveFog) {
+                  content = (
+                    <span style={{ fontSize: "1.1rem" }} title="Bomb pickup">
+                      💣
+                    </span>
+                  );
+                }
                 cellClass += " path bomb";
               } else if ((showSecretCells || isTeleportOption) && isMagicCell(cellType)) {
-                content = (
-                  <span className="hole-cell" style={{ fontSize: "1.1rem" }} title="Teleport: pick destination">
-                    🌀
-                  </span>
-                );
+                if (!wouldHaveFog) {
+                  content = (
+                    <span className="hole-cell" style={{ fontSize: "1.1rem" }} title="Teleport: pick destination">
+                      🌀
+                    </span>
+                  );
+                }
                 cellClass += " path magic hole";
               } else if (showSecretCells && isCatapultCell(cellType)) {
-                content = (
-                  <span style={{ fontSize: "1.2rem", display: "inline-flex", alignItems: "center", justifyContent: "center" }} title="Slingshot">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M5 4v4a7 7 0 0 0 14 0V4" />
-                      <path d="M5 8h14" />
-                      <ellipse cx="12" cy="14" rx="3" ry="2" fill="#ffcc0044" stroke="#ffcc00" />
-                    </svg>
-                  </span>
-                );
+                if (!wouldHaveFog) {
+                  content = (
+                    <span style={{ fontSize: "1.2rem", display: "inline-flex", alignItems: "center", justifyContent: "center" }} title="Slingshot">
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M5 4v4a7 7 0 0 0 14 0V4" />
+                        <path d="M5 8h14" />
+                        <ellipse cx="12" cy="14" rx="3" ry="2" fill="#ffcc0044" stroke="#ffcc00" />
+                      </svg>
+                    </span>
+                  );
+                }
                 cellClass += " path catapult";
               } else if (showSecretCells && isJumpCell(cellType)) {
-                content = "J";
+                if (!wouldHaveFog) content = "J";
                 cellClass += " path jump";
               } else if (showSecretCells && isShieldCell(cellType)) {
-                content = "🛡";
+                if (!wouldHaveFog) content = "🛡";
                 cellClass += " path shield";
               } else if (showSecretCells && isDiamondCell(cellType)) {
                 const owner = getCollectibleOwner(cellType);
-                content = "💎";
+                if (!wouldHaveFog) content = "💎";
                 cellClass += " path collectible";
                 if (owner !== null) cellClass += " collectible-p" + owner;
                 if (owner === currentPlayer) cellClass += " collectible-mine";
@@ -1980,6 +2183,8 @@ export default function LabyrinthGame() {
 
               const effectiveCellSize = CELL_SIZE * mazeZoom;
               const isCurrentPlayerCell = cp && x === cp.x && y === cp.y;
+              const isCollisionCell = collisionEffect && collisionEffect.x === x && collisionEffect.y === y;
+              if (isCollisionCell) cellClass += " cell-collision";
               return (
                 <div
                   key={`${x}-${y}`}
@@ -2021,25 +2226,6 @@ export default function LabyrinthGame() {
                     setCatapultDragOffset({ dx, dy });
                   } : undefined}
                 >
-                  {(() => {
-                    const fogIntensity = lab.fogZones?.get(`${x},${y}`);
-                    const hasTorch = lab.players.some((pl) => pl.hasTorch);
-                    if (fogIntensity == null || fogIntensity <= 0 || hasTorch) return null;
-                    const baseOpacity = 0.08 + fogIntensity * 0.92;
-                    return (
-                      <div
-                        className="cell-fog"
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          zIndex: 2,
-                          pointerEvents: "none",
-                          background: `radial-gradient(ellipse 90% 90% at 50% 50%, rgba(6,6,14,${baseOpacity * 0.2}) 0%, rgba(4,4,10,${baseOpacity * 0.6}) 50%, rgba(2,2,8,${baseOpacity}) 100%)`,
-                          boxShadow: `inset 0 0 ${8 + fogIntensity * 24}px rgba(0,0,0,${baseOpacity * 0.7})`,
-                        }}
-                      />
-                    );
-                  })()}
                   {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && (
                     <div className="spider-web" style={{ position: "absolute", inset: 0, zIndex: 0 }} />
                   )}
@@ -2082,6 +2268,24 @@ export default function LabyrinthGame() {
                       />
                     </div>
                   )}
+                  {(() => {
+                    const effectiveFog = wouldHaveFog ? (isWallCell ? (adjacentFog ? 1 : 0) : (fogIntensity ?? 0)) : 0;
+                    if (effectiveFog <= 0) return null;
+                    const baseOpacity = 0.08 + effectiveFog * 0.92;
+                    return (
+                      <div
+                        className="cell-fog"
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          zIndex: 50,
+                          pointerEvents: "none",
+                          background: `radial-gradient(ellipse 90% 90% at 50% 50%, rgba(6,6,14,${baseOpacity * 0.2}) 0%, rgba(4,4,10,${baseOpacity * 0.6}) 50%, rgba(2,2,8,${baseOpacity}) 100%)`,
+                          boxShadow: `inset 0 0 ${8 + effectiveFog * 24}px rgba(0,0,0,${baseOpacity * 0.7})`,
+                        }}
+                      />
+                    );
+                  })()}
                 </div>
               );
             })

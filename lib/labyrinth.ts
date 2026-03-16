@@ -148,6 +148,8 @@ export class Labyrinth {
   bombCollectedBy: Map<string, Set<number>> = new Map();
   /** Magic cells used for teleport by player: key "x,y" -> Set of player indices who teleported from that cell */
   teleportUsedFrom: Map<string, Set<number>> = new Map();
+  /** Cells any player has ever visited - fog clears in these areas */
+  visitedCells: Set<string> = new Set();
 
   constructor(
     width: number,
@@ -307,18 +309,18 @@ export class Labyrinth {
 
     // Inverse difficulty: easy = more helpers, hard = fewer helpers. Traps/obstacles scale up with difficulty.
     const d = this.monsterDensity; // 1=easy, 4=extreme
-    const helperMult = Math.max(0.15, 1.5 - 0.45 * d); // easy 1.05, normal 0.6, hard 0.15, extreme 0.15
+    const helperMult = Math.max(0.15, 1.2 - 0.5 * d); // easy 0.7, normal 0.2, hard 0.15, extreme 0.15
     const trapMult = 0.6 + 0.25 * d;  // easy 0.85, normal 1.1, hard 1.35, extreme 1.6
     const obstacleMult = 0.7 + 0.2 * d; // webs, fog: more for harder
 
     const mults: ("2" | "3" | "4")[] = ["2", "3", "4"];
-    const multCount = Math.round(Math.max(1, Math.min(18, Math.floor(pathCells.length * 0.12 * helperMult))));
-    const magicCount = Math.round(Math.max(1, Math.min(28, Math.floor(pathCells.length * 0.07 * helperMult))));
-    const catapultCount = Math.round(Math.max(0, Math.min(10, Math.floor(pathCells.length * 0.04 * helperMult))));
-    const jumpCount = Math.round(Math.max(0, Math.min(10, Math.floor(pathCells.length * 0.04 * helperMult))));
-    const diamondCount = Math.round(Math.max(this.numPlayers, Math.min(this.numPlayers * 5, Math.floor(pathCells.length * 0.08 * helperMult))));
+    const multCount = Math.round(Math.max(1, Math.min(8, Math.floor(pathCells.length * 0.05 * helperMult))));
+    const magicCount = Math.round(Math.max(0, Math.min(10, Math.floor(pathCells.length * 0.03 * helperMult))));
+    const catapultCount = Math.round(Math.max(0, Math.min(4, Math.floor(pathCells.length * 0.015 * helperMult))));
+    const jumpCount = Math.round(Math.max(0, Math.min(4, Math.floor(pathCells.length * 0.015 * helperMult))));
+    const diamondCount = Math.round(Math.max(this.numPlayers, Math.min(this.numPlayers * 3, Math.floor(pathCells.length * 0.04 * helperMult))));
     const blocks10x10 = (this.width / 10) * (this.height / 10);
-    const bombCount = Math.round(Math.max(0, Math.min(18, Math.floor(blocks10x10 * helperMult))));
+    const bombCount = Math.round(Math.max(0, Math.min(6, Math.floor(blocks10x10 * 0.5 * helperMult))));
 
     const total = multCount + magicCount + catapultCount + jumpCount + diamondCount + bombCount;
     if (total > pathCells.length) return;
@@ -343,7 +345,8 @@ export class Labyrinth {
       this.grid[y][x] = trapTypes[i % 4];
     }
     const rest3d = rest3c.filter((c) => !trapCells.some((t) => t[0] === c[0] && t[1] === c[1]));
-    const artifactCount = Math.round(Math.max(3, Math.min(6, Math.floor(5 * helperMult))));
+    const minArtifacts = this.numPlayers * 3; // each player needs 3 to win
+    const artifactCount = Math.round(Math.max(minArtifacts, Math.min(minArtifacts + 2, Math.floor(4 * helperMult))));
     const artifactCells = this._pickSpread(rest3d, Math.min(artifactCount, rest3d.length));
     const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL];
     for (let i = 0; i < artifactCells.length; i++) {
@@ -364,7 +367,7 @@ export class Labyrinth {
     }
     for (const [x, y] of bombCells) this.grid[y][x] = BOMB;
     // Add hidden cells (revealed when diamonds collected): magic, jump, multipliers, shield
-    const hiddenCount = Math.round(Math.max(0, Math.min(14, Math.floor(pathCells.length * 0.06 * helperMult))));
+    const hiddenCount = Math.round(Math.max(0, Math.min(6, Math.floor(pathCells.length * 0.025 * helperMult))));
     const rest4 = rest3d.filter((c) => !artifactCells.some((a) => a[0] === c[0] && a[1] === c[1]));
     const hiddenCellCoords = this._pickSpread(rest4, hiddenCount);
     const hiddenTypes: string[] = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, MULT_X2, MULT_X3, SHIELD, SHIELD];
@@ -683,6 +686,8 @@ export class Labyrinth {
       hasTeleportArtifact: false,
       hasTorch: false,
     }));
+    this.visitedCells = new Set();
+    for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
   }
 
   loadGrid(grid: string[][]): boolean {
@@ -726,6 +731,8 @@ export class Labyrinth {
     this.fogZones = new Map();
     this.bombCollectedBy = new Map();
     this.teleportUsedFrom = new Map();
+    this.visitedCells = new Set();
+    for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
     // Add hidden cells and spider webs from path cells for AI-loaded mazes
     const pathCells: [number, number][] = [];
@@ -838,6 +845,7 @@ export class Labyrinth {
     if (!jumpOnly && this.canMove(nx, ny)) {
       p.x = nx;
       p.y = ny;
+      this.recordVisited(nx, ny);
       return true;
     }
 
@@ -848,6 +856,7 @@ export class Labyrinth {
         p.x = jx;
         p.y = jy;
         p.jumps--;
+        this.recordVisited(jx, jy);
         return true;
       }
     }
@@ -893,6 +902,7 @@ export class Labyrinth {
     if (destX === p.x && destY === p.y) return false;
     p.x = destX;
     p.y = destY;
+    this.recordVisited(destX, destY);
     return true;
   }
 
@@ -924,6 +934,10 @@ export class Labyrinth {
       this.teleportUsedFrom.set(key, set);
     }
     set.add(playerIndex);
+  }
+
+  recordVisited(x: number, y: number): void {
+    this.visitedCells.add(`${x},${y}`);
   }
 
   /**
@@ -1019,6 +1033,7 @@ export class Labyrinth {
     if (!traj) return null;
     p.x = traj.destX;
     p.y = traj.destY;
+    this.recordVisited(traj.destX, traj.destY);
     return { destX: traj.destX, destY: traj.destY };
   }
 
@@ -1035,9 +1050,11 @@ export class Labyrinth {
     return p && p.x === this.goalX && p.y === this.goalY;
   }
 
-  /** Movement cost for tile at (x,y). Web = 3 (slows player), normal = 1. */
+  /** Movement cost for tile at (x,y). Web = 3, TRAP_SLOW = 2, normal = 1. */
   getTileMoveCost(x: number, y: number): number {
+    const cell = this.grid[y]?.[x];
     if (this.webPositions.some(([wx, wy]) => wx === x && wy === y)) return 3;
+    if (cell === TRAP_SLOW) return 2;
     return 1;
   }
 
