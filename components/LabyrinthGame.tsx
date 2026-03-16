@@ -34,7 +34,7 @@ import {
   type MonsterType,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
-import { resolveCombat, type CombatResult } from "@/lib/combatSystem";
+import { resolveCombat, getMonsterHint, type CombatResult } from "@/lib/combatSystem";
 import { drawEvent, applyEvent } from "@/lib/eventDeck";
 import { applyDraculaTeleport, applyDraculaAttack } from "@/lib/draculaAI";
 import { DRACULA_CONFIG } from "@/lib/labyrinth";
@@ -1288,8 +1288,9 @@ export default function LabyrinthGame() {
   useEffect(() => {
     if (!lab || winner !== null) return;
     const id = setInterval(() => {
+      if (combatStateRef.current) return;
       setLab((prev) => {
-        if (!prev || winnerRef.current !== null) return prev;
+        if (!prev || winnerRef.current !== null || combatStateRef.current) return prev;
         const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((r) => [...r]);
         next.players = prev.players.map((p) => ({
@@ -1333,7 +1334,7 @@ export default function LabyrinthGame() {
       });
     }, MONSTER_MOVE_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [lab?.width, lab?.height, lab?.numPlayers, winner]);
+  }, [lab?.width, lab?.height, lab?.numPlayers, winner, combatState]);
 
   useEffect(() => {
     if (!lab || winner !== null || combatState || movesLeft > 0 || rolling || catapultPicker || teleportPicker) return;
@@ -1849,7 +1850,7 @@ export default function LabyrinthGame() {
         </div>
       )}
 
-      {(combatState || combatResult) && (
+      {(combatState || combatResult) && (!combatState || combatState.playerIndex === currentPlayer) && (
         <div style={combatModalOverlayStyle}>
           <div style={combatModalStyle} onClick={(e) => e.stopPropagation()}>
             <h2 style={combatModalTitleStyle}>
@@ -1915,6 +1916,9 @@ export default function LabyrinthGame() {
                       (Attack +{lab.players[combatState.playerIndex]?.attackBonus ?? 0})
                     </span>
                   )}
+                </div>
+                <div style={{ color: "#ffcc00", fontSize: "0.85rem", marginBottom: 10, padding: "8px 12px", background: "rgba(255,204,0,0.08)", borderRadius: 8, border: "1px solid rgba(255,204,0,0.3)" }}>
+                  💡 {getMonsterHint(combatState.monsterType, lab?.monsters[combatState.monsterIndex]?.hasShield)}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", marginBottom: 14, padding: "10px 12px", background: "rgba(0,0,0,0.4)", borderRadius: 8, border: "1px solid #333" }}>
                   <div style={{ color: "#ffcc00", fontSize: "0.85rem", fontWeight: "bold", marginBottom: 4 }}>Skills & Artifacts</div>

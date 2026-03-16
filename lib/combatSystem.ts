@@ -23,6 +23,26 @@ export type MonsterReward =
   | { type: "shield"; amount: number }
   | { type: "attackBonus"; amount: number };
 
+/** Combat hints for each monster type */
+export function getMonsterHint(monsterType: MonsterType, skeletonHasShield?: boolean): string {
+  switch (monsterType) {
+    case "G":
+      return "👻 Ghost: 50% chance your attack misses!";
+    case "K":
+      return skeletonHasShield
+        ? "💀 Skeleton: First hit breaks shield, second hit wins."
+        : "💀 Skeleton: Shield broken — one more hit!";
+    case "Z":
+      return "🧟 Zombie: Hits hard (2 dmg) if you lose.";
+    case "V":
+      return "🧛 Dracula: High defense (5). Defeat for +1 attack.";
+    case "S":
+      return "🕷 Spider: Def 3. Win for +1 jump.";
+    default:
+      return "Roll dice + attack bonus ≥ defense to win.";
+  }
+}
+
 /** Get reward for defeating this monster type */
 export function getMonsterReward(monsterType: MonsterType): MonsterReward {
   switch (monsterType) {

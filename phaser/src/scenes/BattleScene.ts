@@ -4,6 +4,7 @@ import {
   rollD6,
   getMonsterName,
   getMonsterDefense,
+  getMonsterHint,
   type MonsterType,
   type CombatResult,
 } from '../combat';
@@ -98,6 +99,7 @@ export class BattleScene extends Phaser.Scene {
   private combatPanel!: Phaser.GameObjects.Container;
   private diceGraphics!: Phaser.GameObjects.Graphics;
   private monsterDefenseText!: Phaser.GameObjects.Text;
+  private combatHintText!: Phaser.GameObjects.Text;
 
   constructor() {
     super({ key: 'BattleScene' });
@@ -291,38 +293,47 @@ export class BattleScene extends Phaser.Scene {
 
   private createCombatPanel() {
     const panelBg = this.add.graphics();
-    const w = 280;
-    const h = 140;
+    const w = 320;
+    const h = 180;
     const x = this.scale.width / 2 - w / 2;
     const y = this.scale.height - h - 20;
 
     this.combatPanel = this.add.container(0, 0);
     this.combatPanel.add(panelBg);
-    panelBg.fillStyle(0x1a1a24, 0.95);
+    panelBg.fillStyle(0x1a1a24, 0.98);
     panelBg.fillRoundedRect(x, y, w, h, 12);
     panelBg.lineStyle(2, 0x00ff88, 0.8);
     panelBg.strokeRoundedRect(x, y, w, h, 12);
 
-    const title = this.add.text(this.scale.width / 2, y + 24, 'BATTLE', {
-      fontSize: '18px',
+    const title = this.add.text(this.scale.width / 2, y + 20, 'BATTLE — Roll to attack!', {
+      fontSize: '16px',
       color: '#00ff88',
       fontFamily: 'Courier New, monospace',
     }).setOrigin(0.5, 0);
     this.combatPanel.add(title);
 
-    const monsterName = this.add.text(this.scale.width / 2, y + 48, '', {
+    const monsterName = this.add.text(this.scale.width / 2, y + 44, '', {
       fontSize: '16px',
       color: '#ff6666',
       fontFamily: 'Courier New, monospace',
     }).setOrigin(0.5, 0);
     this.combatPanel.add(monsterName);
 
-    this.monsterDefenseText = this.add.text(this.scale.width / 2, y + 70, '', {
-      fontSize: '14px',
+    this.monsterDefenseText = this.add.text(this.scale.width / 2, y + 66, '', {
+      fontSize: '13px',
       color: '#c0c0c0',
       fontFamily: 'Courier New, monospace',
     }).setOrigin(0.5, 0);
     this.combatPanel.add(this.monsterDefenseText);
+
+    this.combatHintText = this.add.text(this.scale.width / 2, y + 92, '', {
+      fontSize: '12px',
+      color: '#ffcc00',
+      fontFamily: 'Courier New, monospace',
+      align: 'center',
+      wordWrap: { width: w - 24 },
+    }).setOrigin(0.5, 0);
+    this.combatPanel.add(this.combatHintText);
 
     this.combatPanel.setVisible(false);
   }
@@ -377,10 +388,11 @@ export class BattleScene extends Phaser.Scene {
     const def = getMonsterDefense(monster.type);
     const shieldNote = monster.type === 'K' && monster.hasShield ? ' (shield!)' : '';
     this.monsterDefenseText.setText(`Defense: ${def}${shieldNote} | Your Atk+: ${this.playerAttackBonus}`);
+    this.combatHintText.setText(getMonsterHint(monster.type, monster.hasShield));
 
     const title = this.combatPanel.getAt(1) as Phaser.GameObjects.Text;
     const nameEl = this.combatPanel.getAt(2) as Phaser.GameObjects.Text;
-    title.setText('BATTLE');
+    title.setText('BATTLE — Roll to attack!');
     nameEl.setText(getMonsterName(monster.type));
 
     this.combatPanel.setVisible(true);
@@ -455,6 +467,7 @@ export class BattleScene extends Phaser.Scene {
         } else if (result.monsterEffect === 'skeleton_shield') {
           monster.hasShield = false;
           this.monsterDefenseText.setText(`Defense: ${getMonsterDefense(monster.type)} | Your Atk+: ${this.playerAttackBonus}`);
+          this.combatHintText.setText(getMonsterHint(monster.type, false));
           this.combatText.setText('Shield broken! Roll again to finish it.');
           this.showFloatingDamage(cx, cy - 80, 'SHIELD!', '#8888ff');
           this.rollingDice = false;

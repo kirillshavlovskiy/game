@@ -45,6 +45,18 @@ export function getMonsterName(type: MonsterType): string {
   return type === 'V' ? 'Dracula' : type === 'Z' ? 'Zombie' : type === 'S' ? 'Spider' : type === 'G' ? 'Ghost' : 'Skeleton';
 }
 
+/** Combat hints for each monster type */
+export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
+  switch (type) {
+    case 'G': return '👻 Ghost: 50% chance your attack misses!';
+    case 'K': return hasShield ? '💀 Skeleton: First hit breaks shield, second hit wins.' : '💀 Skeleton: Shield broken — one more hit!';
+    case 'Z': return '🧟 Zombie: Hits hard (2 dmg) if you lose.';
+    case 'V': return '🧛 Dracula: High defense (5). Defeat for +1 attack.';
+    case 'S': return '🕷 Spider: Def 3. Win for +1 jump.';
+    default: return 'Roll dice + attack bonus ≥ defense to win.';
+  }
+}
+
 export function resolveCombat(
   playerRoll: number,
   attackBonus: number,
