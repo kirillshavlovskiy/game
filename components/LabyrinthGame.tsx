@@ -30,6 +30,7 @@ import {
   ARTIFACT_SHIELD,
   ARTIFACT_TELEPORT as ARTIFACT_TELEPORT_CELL,
   ARTIFACT_REVEAL,
+  ARTIFACT_HEALING,
   type MonsterType,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
@@ -164,6 +165,7 @@ export default function LabyrinthGame() {
   const [jumpAdded, setJumpAdded] = useState<number | null>(null);
   const [shieldAbsorbed, setShieldAbsorbed] = useState<boolean | null>(null);
   const [shieldGained, setShieldGained] = useState<boolean | null>(null);
+  const [healingGained, setHealingGained] = useState<boolean | null>(null);
   const [harmTaken, setHarmTaken] = useState<boolean | null>(null);
   const [bombGained, setBombGained] = useState<boolean | null>(null);
   const [hiddenGemTeleport, setHiddenGemTeleport] = useState<boolean | null>(null);
@@ -204,6 +206,8 @@ export default function LabyrinthGame() {
     playerIndex: number;
     monsterType: MonsterType;
     monsterIndex: number;
+    prevX?: number;
+    prevY?: number;
   } | null>(null);
   const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; shieldAbsorbed?: boolean }) | null>(null);
   const [collisionEffect, setCollisionEffect] = useState<{ x: number; y: number } | null>(null);
@@ -379,6 +383,12 @@ export default function LabyrinthGame() {
   }, [shieldGained]);
 
   useEffect(() => {
+    if (healingGained === null) return;
+    const t = setTimeout(() => setHealingGained(null), 1500);
+    return () => clearTimeout(t);
+  }, [healingGained]);
+
+  useEffect(() => {
     if (harmTaken === null) return;
     const t = setTimeout(() => setHarmTaken(null), 1500);
     return () => clearTimeout(t);
@@ -459,6 +469,7 @@ export default function LabyrinthGame() {
     setShieldAbsorbed(null);
     setWebSlowed(null);
     setShieldGained(null);
+    setHealingGained(null);
     setHarmTaken(null);
     setBombGained(null);
     setHiddenGemTeleport(null);
@@ -526,6 +537,7 @@ export default function LabyrinthGame() {
         setShieldAbsorbed(null);
         setWebSlowed(null);
         setShieldGained(null);
+        setHealingGained(null);
         setBombGained(null);
         setHiddenGemTeleport(null);
         setTorchGained(null);
@@ -553,13 +565,15 @@ export default function LabyrinthGame() {
   const handleRollComplete = useCallback((value: number) => {
     const combat = combatStateRef.current;
     if (combat) {
-      // Combat roll: resolve and update state (manual dice - no auto-roll)
-      const attackBonus = Math.floor((movesLeftRef.current ?? 0) / 2);
+      // Combat roll: resolve and update state (dice always rolled before fight)
       const p = lab?.players[combat.playerIndex];
+      const attackBonus = Math.min(1, p?.attackBonus ?? 0); // 0-1 from defeating Dracula
       const diceBonus = p?.diceBonus ?? 0;
       const useDiceBonus = combatUseDiceBonusRef.current && diceBonus > 0;
       const effectiveRoll = value + (useDiceBonus ? 1 : 0);
-      const result = resolveCombat(effectiveRoll, attackBonus, combat.monsterType);
+      const monster = lab?.monsters[combat.monsterIndex];
+      const skeletonHasShield = combat.monsterType === "K" && (monster?.hasShield ?? true);
+      const result = resolveCombat(effectiveRoll, attackBonus, combat.monsterType, skeletonHasShield);
       setCombatResult({ ...result, monsterType: combat.monsterType });
       setRolling(false);
       setLab((prev) => {
@@ -592,8 +606,52 @@ export default function LabyrinthGame() {
         const pi = combat.playerIndex;
         const p = next.players[pi];
         const monsterIdx = combat.monsterIndex;
-        if (result.won && monsterIdx >= 0 && monsterIdx < next.monsters.length) {
+        const m = monsterIdx >= 0 && monsterIdx < next.monsters.length ? next.monsters[monsterIdx] : null;
+
+        // Skeleton shield break: first hit removes shield, separate player and monster
+        if (result.monsterEffect === "skeleton_shield" && m) {
+          m.hasShield = false;
+          if (combat.prevX !== undefined && combat.prevY !== undefined && p) {
+            p.x = combat.prevX;
+            p.y = combat.prevY;
+          } else if (p) {
+            // Monster-initiated combat: push skeleton to adjacent cell
+            const dirs: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+            for (const [dx, dy] of dirs) {
+              const nx = m.x + dx;
+              const ny = m.y + dy;
+              if (nx >= 0 && nx < next.width && ny >= 0 && ny < next.height && next.grid[ny]?.[nx] === " ") {
+                m.x = nx;
+                m.y = ny;
+                break;
+              }
+            }
+          }
+          setCombatState(null);
+          setCombatUseShield(true);
+          setCombatUseDiceBonus(true);
+          setTimeout(() => setCombatResult(null), 2000);
+          return next;
+        }
+
+        if (result.won && monsterIdx >= 0 && monsterIdx < next.monsters.length && m) {
+          // Spider: web remains on tile when defeated
+          if (combat.monsterType === "S") {
+            const webKey = `${m.x},${m.y}`;
+            if (!next.webPositions.some(([wx, wy]) => wx === m.x && wy === m.y)) {
+              next.webPositions.push([m.x, m.y]);
+            }
+          }
           next.monsters.splice(monsterIdx, 1);
+          // Apply monster reward
+          if (p && result.reward) {
+            const r = result.reward;
+            if (r.type === "jump") p.jumps = (p.jumps ?? 0) + r.amount;
+            if (r.type === "movement") p.diceBonus = (p.diceBonus ?? 0) + r.amount; // +1 to next roll
+            if (r.type === "hp") p.hp = Math.min(DEFAULT_PLAYER_HP, (p.hp ?? 3) + r.amount);
+            if (r.type === "shield") p.shield = (p.shield ?? 0) + r.amount;
+            if (r.type === "attackBonus") p.attackBonus = Math.min(1, (p.attackBonus ?? 0) + r.amount);
+          }
           if (pi === currentPlayerRef.current) {
             movesLeftRef.current = 0;
             setMovesLeft(0);
@@ -617,10 +675,18 @@ export default function LabyrinthGame() {
             setCombatResult((prev) => (prev ? { ...prev, shieldAbsorbed: true } : null));
           } else {
             p.hp = (p.hp ?? 3) - result.damage;
+            if (combat.monsterType === "Z") p.loseNextMove = true; // Zombie slow: lose next movement point
             if (p.hp <= 0) {
-              next.eliminatedPlayers.add(pi);
-              if (next.eliminatedPlayers.size >= next.numPlayers) setWinner(-1);
-              setEliminatedByMonster({ playerIndex: pi, monsterType: combat.monsterType });
+              // Respawn at start, lose 1 artifact (instead of elimination)
+              p.x = 0;
+              p.y = 0;
+              p.hp = DEFAULT_PLAYER_HP;
+              if (p.artifacts > 0) {
+                p.artifacts--;
+                const ac = p.artifactsCollected ?? [];
+                if (ac.length > 0) p.artifactsCollected = ac.slice(0, -1);
+              }
+              setEliminatedByMonster({ playerIndex: pi, monsterType: combat.monsterType }); // Shows "respawned" message
               if (pi === currentPlayerRef.current) {
                 movesLeftRef.current = 0;
                 setMovesLeft(0);
@@ -631,6 +697,10 @@ export default function LabyrinthGame() {
                 }
                 setTurnChangeEffect(nextP);
                 setCurrentPlayer(nextP);
+                const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
+                const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+                const roundComplete = living.length <= 1 || nextP === firstLiving;
+                if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
               }
             }
           }
@@ -643,8 +713,34 @@ export default function LabyrinthGame() {
       setTimeout(() => setCombatResult(null), 2000);
       return;
     }
-    const bonus = lab?.players[currentPlayerRef.current]?.diceBonus ?? 0;
-    const totalValue = Math.min(6, value + bonus);
+    const p = lab?.players[currentPlayerRef.current];
+    const bonus = p?.diceBonus ?? 0;
+    let totalValue = Math.min(6, value + bonus);
+    if (p?.loseNextMove) {
+      totalValue = Math.max(1, totalValue - 1);
+      setLab((prev) => {
+        if (!prev) return prev;
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
+        next.grid = prev.grid.map((r) => [...r]);
+        next.players = prev.players.map((pl, i) => ({
+          ...pl,
+          loseNextMove: i === currentPlayerRef.current ? false : pl.loseNextMove ?? false,
+        }));
+        next.goalX = prev.goalX;
+        next.goalY = prev.goalY;
+        next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+        next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+        next.hiddenCells = new Map(prev.hiddenCells);
+        next.webPositions = [...(prev.webPositions || [])];
+        next.fogZones = new Map(prev.fogZones || new Map());
+        next.bombCollectedBy = new Map([...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.teleportUsedFrom = new Map([...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.teleportUsedTo = new Map([...(prev.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.catapultUsedFrom = new Map([...(prev.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next.visitedCells = new Set(prev.visitedCells || []);
+        return next;
+      });
+    }
     if (bonus > 0 && lab) {
       setLab((prev) => {
         if (!prev) return prev;
@@ -945,6 +1041,10 @@ export default function LabyrinthGame() {
               const revealed = next.revealHiddenCells(totalDiamonds);
               if (revealed > 0) setCellsRevealed(revealed);
             }
+            if (cell === ARTIFACT_HEALING) {
+              p.hp = Math.min(DEFAULT_PLAYER_HP, (p.hp ?? 3) + 1);
+              setHealingGained(true);
+            }
             next.grid[p.y][p.x] = PATH;
           }
           if (cell && isJumpCell(cell)) {
@@ -1024,12 +1124,18 @@ export default function LabyrinthGame() {
             }
           }
         }
-        // Combat: when player lands on monster, enter combat mode (roll to resolve)
+        // Combat: when player lands on monster, enter combat mode (roll dice to resolve)
         const collision = next.checkMonsterCollision(currentPlayer);
         if (collision) {
           const p = next.players[collision.playerIndex];
           setCollisionEffect(p ? { x: p.x, y: p.y } : null);
-          setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType, monsterIndex: collision.monsterIndex });
+          setCombatState({
+            playerIndex: collision.playerIndex,
+            monsterType: collision.monsterType,
+            monsterIndex: collision.monsterIndex,
+            prevX,
+            prevY,
+          });
           setLab(next);
           return;
         }
@@ -1584,8 +1690,8 @@ export default function LabyrinthGame() {
               {(p?.artifactsCollected?.length ?? 0) > 0 && (
                 <div style={{ fontSize: "0.7rem", color: "#888", marginTop: 2, display: "flex", flexWrap: "wrap", gap: 2 }}>
                   {(p?.artifactsCollected ?? []).map((a, i) => (
-                    <span key={i} title={a === ARTIFACT_DICE ? "+1 dice" : a === ARTIFACT_SHIELD ? "Shield" : a === ARTIFACT_TELEPORT_CELL ? "Teleport" : "Reveal"}>
-                      {a === ARTIFACT_DICE ? "🎲" : a === ARTIFACT_SHIELD ? "🛡" : a === ARTIFACT_TELEPORT_CELL ? "🌀" : "👁"}
+                    <span key={i} title={a === ARTIFACT_DICE ? "+1 dice" : a === ARTIFACT_SHIELD ? "Shield" : a === ARTIFACT_TELEPORT_CELL ? "Teleport" : a === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}>
+                      {a === ARTIFACT_DICE ? "🎲" : a === ARTIFACT_SHIELD ? "🛡" : a === ARTIFACT_TELEPORT_CELL ? "🌀" : a === ARTIFACT_HEALING ? "❤️" : "👁"}
                     </span>
                   ))}
                 </div>
@@ -1650,15 +1756,23 @@ export default function LabyrinthGame() {
               <div style={combatResultSectionStyle}>
                 <div style={{
                   ...combatResultBannerStyle,
-                  borderColor: combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
-                  background: combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)",
+                  borderColor: combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
+                  background: combatResult.monsterEffect === "skeleton_shield" ? "rgba(255,204,0,0.15)" : combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)",
                 }}>
                   <span style={{
-                    color: combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
+                    color: combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
                     fontSize: "1.3rem",
                     fontWeight: "bold",
                   }}>
-                    {combatResult.won ? "You are lucky! Monster defeated!" : combatResult.shieldAbsorbed ? "🛡 Shield absorbed!" : `✗ -${combatResult.damage} HP`}
+                    {combatResult.monsterEffect === "skeleton_shield"
+                      ? "💀 Shield broken! Try again next turn."
+                      : combatResult.won
+                        ? (combatResult.reward ? `WIN! +${combatResult.reward.type === "jump" ? "1 jump" : combatResult.reward.type === "hp" ? "1 HP" : combatResult.reward.type === "shield" ? "1 shield" : combatResult.reward.type === "attackBonus" ? "1 attack" : "1 move"}` : "You are lucky! Monster defeated!")
+                        : combatResult.shieldAbsorbed
+                          ? "🛡 Shield absorbed!"
+                          : combatResult.monsterEffect === "ghost_evade"
+                            ? "👻 Attack missed!"
+                            : `✗ -${combatResult.damage} HP`}
                   </span>
                 </div>
                 <div style={combatStatsStyle}>
@@ -1690,9 +1804,9 @@ export default function LabyrinthGame() {
                 </div>
                 <div style={combatMonsterInfoStyle}>
                   Defense: <strong>{getMonsterDefense(combatState.monsterType)}</strong>
-                  {lab?.players[combatState.playerIndex] && (
-                    <span style={{ marginLeft: 12, color: "#888" }}>
-                      (Attack bonus: +{Math.floor((movesLeftRef.current ?? 0) / 2)} from moves)
+                  {lab?.players[combatState.playerIndex] && (lab.players[combatState.playerIndex]?.attackBonus ?? 0) > 0 && (
+                    <span style={{ marginLeft: 12, color: "#ffcc00" }}>
+                      (Attack +{lab.players[combatState.playerIndex]?.attackBonus ?? 0})
                     </span>
                   )}
                 </div>
@@ -1788,19 +1902,19 @@ export default function LabyrinthGame() {
           <div style={eliminatedBannerStyle}>
             <span style={{ color: "#ff4444", fontSize: "1.5rem" }}>💀</span>
             <span>
-              {playerNames[eliminatedByMonster.playerIndex] ?? `Player ${eliminatedByMonster.playerIndex + 1}`} lost to {getMonsterName(eliminatedByMonster.monsterType)}!
+              {playerNames[eliminatedByMonster.playerIndex] ?? `Player ${eliminatedByMonster.playerIndex + 1}`} defeated by {getMonsterName(eliminatedByMonster.monsterType)}! Respawned at start (-1 artifact)
             </span>
           </div>
         </div>
       )}
 
-      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || harmTaken !== null || bombGained !== null || hiddenGemTeleport !== null || torchGained !== null || cellsRevealed !== null || webSlowed !== null) && (
+      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || healingGained !== null || harmTaken !== null || bombGained !== null || hiddenGemTeleport !== null || torchGained !== null || cellsRevealed !== null || webSlowed !== null) && (
         <div style={effectToastStyle} className="effect-toast">
           {bonusAdded !== null && diceResult !== null && (
             <span style={{ color: "#ffcc00" }}>×{bonusAdded / diceResult} moves!</span>
           )}
           {webSlowed !== null && (
-            <span style={{ color: "#aaaacc", marginLeft: bonusAdded ? 12 : 0 }}>🕸 Spider web: costs 3 moves</span>
+            <span style={{ color: "#aaaacc", marginLeft: bonusAdded ? 12 : 0 }}>🕸 Spider web: costs 2 moves</span>
           )}
           {jumpAdded !== null && (
             <span style={{ color: "#66aaff", marginLeft: bonusAdded ? 12 : 0 }}>
@@ -1815,6 +1929,9 @@ export default function LabyrinthGame() {
           )}
           {shieldGained !== null && (
             <span style={{ color: "#44ff88", marginLeft: 12 }}>🛡 +1 Shield!</span>
+          )}
+          {healingGained !== null && (
+            <span style={{ color: "#44ff88", marginLeft: 12 }}>❤️ +1 HP!</span>
           )}
           {bombGained !== null && (
             <span style={{ color: "#ff8844", marginLeft: 12 }}>💣 +1 Bomb!</span>
@@ -2061,8 +2178,8 @@ export default function LabyrinthGame() {
                 if (!wouldHaveFog) {
                   const art = cellType;
                   content = (
-                    <span style={{ fontSize: "1.1rem" }} title={art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : "Reveal"}>
-                      {art === ARTIFACT_DICE ? "🎲" : art === ARTIFACT_SHIELD ? "🛡" : art === ARTIFACT_TELEPORT_CELL ? "🌀" : "👁"}
+                    <span style={{ fontSize: "1.1rem" }} title={art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : art === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}>
+                      {art === ARTIFACT_DICE ? "🎲" : art === ARTIFACT_SHIELD ? "🛡" : art === ARTIFACT_TELEPORT_CELL ? "🌀" : art === ARTIFACT_HEALING ? "❤️" : "👁"}
                     </span>
                   );
                 }

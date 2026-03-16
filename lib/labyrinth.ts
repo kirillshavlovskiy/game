@@ -18,11 +18,12 @@ export const TRAP_HARM = "!";
 export const TRAP_TELEPORT = "P";
 export const TRAP_SLOW = "Q"; // Q for slow (S conflicts with Start display)
 
-/** Artifact cell types (A1-A4) */
+/** Artifact cell types (A1-A5) */
 export const ARTIFACT_DICE = "A1";
 export const ARTIFACT_SHIELD = "A2";
 export const ARTIFACT_TELEPORT = "A3";
 export const ARTIFACT_REVEAL = "A4";
+export const ARTIFACT_HEALING = "A5";
 
 export const MAX_ROUNDS = 15;
 export const DEFAULT_PLAYER_HP = 3;
@@ -39,6 +40,8 @@ export interface Monster {
   defense?: number;
   spawnX?: number;
   spawnY?: number;
+  /** Skeleton only: first hit removes shield, second kills */
+  hasShield?: boolean;
 }
 
 export function isMonsterType(type: string): type is MonsterType {
@@ -50,7 +53,11 @@ export function getMonsterName(type: MonsterType): string {
 }
 
 export function getMonsterDefense(type: MonsterType): number {
-  return type === "V" ? 5 : type === "Z" ? 4 : type === "G" || type === "K" ? 3 : 2;
+  return type === "V" ? 5 : type === "Z" || type === "K" ? 4 : 3; // Spider, Ghost = 3
+}
+
+export function getMonsterDamage(type: MonsterType): number {
+  return type === "V" || type === "Z" ? 2 : 1; // Dracula, Zombie = 2; Ghost, Skeleton, Spider = 1
 }
 
 export function isTrapCell(cell: string): boolean {
@@ -58,7 +65,7 @@ export function isTrapCell(cell: string): boolean {
 }
 
 export function isArtifactCell(cell: string): boolean {
-  return cell === ARTIFACT_DICE || cell === ARTIFACT_SHIELD || cell === ARTIFACT_TELEPORT || cell === ARTIFACT_REVEAL;
+  return cell === ARTIFACT_DICE || cell === ARTIFACT_SHIELD || cell === ARTIFACT_TELEPORT || cell === ARTIFACT_REVEAL || cell === ARTIFACT_HEALING;
 }
 
 export function isMultiplierCell(cell: string): cell is "2" | "3" | "4" {
@@ -129,8 +136,10 @@ export class Labyrinth {
     artifacts: number;
     artifactsCollected?: string[];
     diceBonus?: number; // +1 to next roll from A1
+    attackBonus?: number; // +1 attack from defeating Dracula
     hasTeleportArtifact?: boolean; // A3
     hasTorch?: boolean; // from hidden gem - clears fog zones
+    loseNextMove?: boolean; // Zombie won: lose 1 movement next turn
   }>;
   goalX: number;
   goalY: number;
@@ -355,10 +364,10 @@ export class Labyrinth {
     }
     const rest3d = rest3c.filter((c) => !trapCells.some((t) => t[0] === c[0] && t[1] === c[1]));
     const artifactCells = this._pickSpread(rest3d, Math.min(artifactCount, rest3d.length));
-    const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL];
+    const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL, ARTIFACT_HEALING];
     for (let i = 0; i < artifactCells.length; i++) {
       const [x, y] = artifactCells[i];
-      this.grid[y][x] = artifactTypes[i % 4];
+      this.grid[y][x] = artifactTypes[i % 5];
     }
 
     for (let i = 0; i < multCells.length; i++) {
@@ -501,13 +510,15 @@ export class Labyrinth {
         const patrolArea = this._getPatrolArea(x, y, 28);
         if (patrolArea.length >= 2) {
           chosen.push([x, y]);
+          const mType = types[(this.monsters.length) % 5];
           this.monsters.push({
             x, y,
-            type: types[(this.monsters.length) % 5],
+            type: mType,
             patrolArea,
             visionRadius: 3,
             spawnX: x,
             spawnY: y,
+            hasShield: mType === "K", // Skeleton: first hit removes shield
           });
         }
       }
@@ -788,12 +799,12 @@ export class Labyrinth {
         }
       }
     }
-    const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL];
-    const artifactCount = Math.min(4, pathCells.length);
+    const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL, ARTIFACT_HEALING];
+    const artifactCount = Math.min(5, pathCells.length);
     for (let i = 0; i < artifactCount && pathCells.length > 0; i++) {
       const idx = Math.floor(Math.random() * pathCells.length);
       const [x, y] = pathCells.splice(idx, 1)[0];
-      this.grid[y][x] = artifactTypes[i % 4];
+      this.grid[y][x] = artifactTypes[i % 5];
     }
     return true;
   }
@@ -1109,10 +1120,10 @@ export class Labyrinth {
     return p && p.x === this.goalX && p.y === this.goalY;
   }
 
-  /** Movement cost for tile at (x,y). Web = 3, TRAP_SLOW = 2, normal = 1. */
+  /** Movement cost for tile at (x,y). Web = 2, TRAP_SLOW = 2, normal = 1. */
   getTileMoveCost(x: number, y: number): number {
     const cell = this.grid[y]?.[x];
-    if (this.webPositions.some(([wx, wy]) => wx === x && wy === y)) return 3;
+    if (this.webPositions.some(([wx, wy]) => wx === x && wy === y)) return 2;
     if (cell === TRAP_SLOW) return 2;
     return 1;
   }
