@@ -129,7 +129,7 @@ export function updateDracula(
   reduceCooldowns(dracula);
 
   const targetIdx = dracula.targetPlayerIndex ?? findPriorityTarget(dracula, players, eliminated);
-  const target = targetIdx !== null && players[targetIdx] ? players[targetIdx] : null;
+  const target = targetIdx != null && players[targetIdx] ? players[targetIdx] : null;
 
   switch (dracula.draculaState ?? "idle") {
     case "idle": {
@@ -203,7 +203,7 @@ export function applyDraculaTeleport(
   height: number
 ): boolean {
   const targetIdx = dracula.targetPlayerIndex;
-  const target = targetIdx !== null && players[targetIdx] ? players[targetIdx] : null;
+  const target = targetIdx != null && players[targetIdx] ? players[targetIdx] : null;
   if (!target) {
     dracula.draculaState = "idle";
     dracula.targetPlayerIndex = null;
