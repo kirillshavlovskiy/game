@@ -9,26 +9,19 @@ function manhattan(x1: number, y1: number, x2: number, y2: number): number {
   return Math.abs(x1 - x2) + Math.abs(y1 - y2);
 }
 
-/** Find priority target: nearest player with most artifacts, else nearest visible. */
+/** Find target: only the active player (whose turn it is). Returns null if not in vision or eliminated. */
 export function findPriorityTarget(
   dracula: Monster,
   players: Array<{ x: number; y: number; artifacts?: number }>,
-  eliminated: Set<number>
+  eliminated: Set<number>,
+  activePlayerIndex: number
 ): number | null {
-  const vision = DRACULA_CONFIG.vision;
-  let best: { index: number; dist: number; artifacts: number } | null = null;
-  for (let i = 0; i < players.length; i++) {
-    if (eliminated.has(i)) continue;
-    const p = players[i];
-    if (!p) continue;
-    const d = manhattan(dracula.x, dracula.y, p.x, p.y);
-    if (d > vision) continue;
-    const artifacts = p.artifacts ?? 0;
-    if (!best || artifacts > best.artifacts || (artifacts === best.artifacts && d < best.dist)) {
-      best = { index: i, dist: d, artifacts };
-    }
-  }
-  return best?.index ?? null;
+  if (eliminated.has(activePlayerIndex)) return null;
+  const p = players[activePlayerIndex];
+  if (!p) return null;
+  const d = manhattan(dracula.x, dracula.y, p.x, p.y);
+  if (d > DRACULA_CONFIG.vision) return null;
+  return activePlayerIndex;
 }
 
 /** Move 1 tile toward target. Simple: reduce X, else Y. */
@@ -123,12 +116,16 @@ export function updateDracula(
   eliminated: Set<number>,
   grid: string[][],
   width: number,
-  height: number
+  height: number,
+  activePlayerIndex: number
 ): DraculaActionResult {
   const result: DraculaActionResult = {};
   reduceCooldowns(dracula);
 
-  const targetIdx = dracula.targetPlayerIndex ?? findPriorityTarget(dracula, players, eliminated);
+  if (dracula.targetPlayerIndex != null && dracula.targetPlayerIndex !== activePlayerIndex) {
+    dracula.targetPlayerIndex = null;
+  }
+  const targetIdx = dracula.targetPlayerIndex ?? findPriorityTarget(dracula, players, eliminated, activePlayerIndex);
   const target = targetIdx != null && players[targetIdx] ? players[targetIdx] : null;
 
   switch (dracula.draculaState ?? "idle") {

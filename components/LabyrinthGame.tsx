@@ -1323,7 +1323,7 @@ export default function LabyrinthGame() {
         next.teleportUsedTo = new Map([...(prev.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.catapultUsedFrom = new Map([...(prev.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.visitedCells = new Set(prev.visitedCells || []);
-        next.moveMonsters(scheduleDraculaAction);
+        next.moveMonsters(currentPlayerRef.current, scheduleDraculaAction);
         const collision = next.checkMonsterCollision(currentPlayerRef.current);
         if (collision) {
           const p = next.players[collision.playerIndex];

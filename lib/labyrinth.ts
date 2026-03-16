@@ -564,8 +564,8 @@ export class Labyrinth {
     }
   }
 
-  /** Move monsters using vision/chase/attack AI. For Dracula, uses state machine; scheduleDracula called when telegraph needed. */
-  moveMonsters(scheduleDracula?: (monsterIndex: number, action: "teleport" | "attack", delayMs: number) => void): void {
+  /** Move monsters using vision/chase/attack AI. Only targets activePlayerIndex (whose turn it is). */
+  moveMonsters(activePlayerIndex: number, scheduleDracula?: (monsterIndex: number, action: "teleport" | "attack", delayMs: number) => void): void {
     for (let mi = 0; mi < this.monsters.length; mi++) {
       const m = this.monsters[mi];
       if (m.type === "V") {
@@ -578,23 +578,24 @@ export class Labyrinth {
           this.eliminatedPlayers,
           this.grid,
           this.width,
-          this.height
+          this.height,
+          activePlayerIndex
         );
         if (result.scheduledAction && scheduleDracula) {
           scheduleDracula(mi, result.scheduledAction.type, result.scheduledAction.delayMs);
         }
       } else {
-        const [nx, ny] = this._getMonsterNextPosition(m);
+        const [nx, ny] = this._getMonsterNextPosition(m, activePlayerIndex);
         m.x = nx;
         m.y = ny;
       }
     }
   }
 
-  private _getMonsterNextPosition(m: Monster): [number, number] {
+  private _getMonsterNextPosition(m: Monster, activePlayerIndex: number): [number, number] {
     const canPhase = m.type === "G";
     const vision = m.visionRadius ?? 3;
-    const nearest = this._findNearestPlayer(m);
+    const nearest = this._findNearestPlayer(m, activePlayerIndex);
     if (nearest) {
       const { dist: d } = nearest;
       if (d <= 1) {
@@ -622,16 +623,12 @@ export class Labyrinth {
     return Math.abs(x1 - x2) + Math.abs(y1 - y2);
   }
 
-  private _findNearestPlayer(m: Monster): { playerIndex: number; dist: number } | null {
-    let nearest: { playerIndex: number; dist: number } | null = null;
-    for (let i = 0; i < this.players.length; i++) {
-      if (this.eliminatedPlayers.has(i)) continue;
-      const p = this.players[i];
-      if (!p) continue;
-      const d = this._manhattanDist(m.x, m.y, p.x, p.y);
-      if (!nearest || d < nearest.dist) nearest = { playerIndex: i, dist: d };
-    }
-    return nearest;
+  private _findNearestPlayer(m: Monster, activePlayerIndex: number): { playerIndex: number; dist: number } | null {
+    if (this.eliminatedPlayers.has(activePlayerIndex)) return null;
+    const p = this.players[activePlayerIndex];
+    if (!p) return null;
+    const d = this._manhattanDist(m.x, m.y, p.x, p.y);
+    return { playerIndex: activePlayerIndex, dist: d };
   }
 
   private _pathfindToward(fromX: number, fromY: number, toX: number, toY: number, canPhase: boolean): [number, number] | null {
