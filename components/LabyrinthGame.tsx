@@ -1155,28 +1155,36 @@ export default function LabyrinthGame() {
             setBombGained(true);
           }
           if (cell && isMagicCell(cell) && !next.hasUsedTeleportFrom(currentPlayer, p.x, p.y)) {
-            const dest = next.getRandomTeleportDestination(currentPlayer);
-            if (dest) {
-              const [fromX, fromY] = [p.x, p.y];
-              p.x = dest[0];
-              p.y = dest[1];
-              next.recordVisited(dest[0], dest[1]);
-              next.recordTeleportUsedFrom(currentPlayer, fromX, fromY);
-              setTeleportAnimation({ from: [fromX, fromY], to: dest, playerIndex: currentPlayer });
-              movesLeftRef.current = 0;
-              setMovesLeft(0);
-              setDiceResult(null);
-              teleportedThisMove = true;
-              let nextP = (currentPlayer + 1) % next.numPlayers;
-              while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
-                nextP = (nextP + 1) % next.numPlayers;
+            const options = next.getTeleportOptions(currentPlayer, 6);
+            if (options.length > 0) {
+              if (movesLeftRef.current <= 0) {
+                setTeleportPicker({ playerIndex: currentPlayer, from: [p.x, p.y], options, sourceType: "magic" });
+                teleportPickerSet = true;
+              } else {
+                const dest = next.getRandomTeleportDestination(currentPlayer);
+                if (dest) {
+                  const [fromX, fromY] = [p.x, p.y];
+                  p.x = dest[0];
+                  p.y = dest[1];
+                  next.recordVisited(dest[0], dest[1]);
+                  next.recordTeleportUsedFrom(currentPlayer, fromX, fromY);
+                  setTeleportAnimation({ from: [fromX, fromY], to: dest, playerIndex: currentPlayer });
+                  movesLeftRef.current = 0;
+                  setMovesLeft(0);
+                  setDiceResult(null);
+                  teleportedThisMove = true;
+                  let nextP = (currentPlayer + 1) % next.numPlayers;
+                  while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
+                    nextP = (nextP + 1) % next.numPlayers;
+                  }
+                  const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
+                  const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+                  const roundComplete = living.length <= 1 || nextP === firstLiving;
+                  setTurnChangeEffect(nextP);
+                  setCurrentPlayer(nextP);
+                  if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
+                }
               }
-              const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
-              const firstLiving = living.length > 0 ? Math.min(...living) : -1;
-              const roundComplete = living.length <= 1 || nextP === firstLiving;
-              setTurnChangeEffect(nextP);
-              setCurrentPlayer(nextP);
-              if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
             }
           }
           if (cell && isCatapultCell(cell) && !next.hasUsedCatapultFrom(currentPlayer, p.x, p.y)) {
