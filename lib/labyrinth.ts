@@ -313,18 +313,18 @@ export class Labyrinth {
 
     // Inverse difficulty: easy = more helpers, hard = fewer helpers. Traps/obstacles scale up with difficulty.
     const d = this.monsterDensity; // 1=easy, 4=extreme
-    const helperMult = Math.max(0.15, 1.2 - 0.5 * d); // easy 0.7, normal 0.2, hard 0.15, extreme 0.15
+    const helperMult = Math.max(0.2, 1.1 - 0.22 * d); // easy 0.88, normal 0.66, hard 0.44, extreme 0.2
     const trapMult = 0.6 + 0.25 * d;  // easy 0.85, normal 1.1, hard 1.35, extreme 1.6
     const obstacleMult = 0.7 + 0.2 * d; // webs, fog: more for harder
 
     const mults: ("2" | "3" | "4")[] = ["2", "3", "4"];
-    const multCount = Math.round(Math.max(1, Math.min(8, Math.floor(pathCells.length * 0.05 * helperMult))));
-    const magicCount = Math.round(Math.max(0, Math.min(10, Math.floor(pathCells.length * 0.03 * helperMult))));
-    const catapultCount = Math.round(Math.max(0, Math.min(4, Math.floor(pathCells.length * 0.015 * helperMult))));
-    const jumpCount = Math.round(Math.max(0, Math.min(4, Math.floor(pathCells.length * 0.015 * helperMult))));
-    const diamondCount = Math.round(Math.max(this.numPlayers, Math.min(this.numPlayers * 3, Math.floor(pathCells.length * 0.04 * helperMult))));
+    const multCount = Math.round(Math.max(2, Math.min(12, Math.floor(pathCells.length * 0.08 * helperMult))));
+    const magicCount = Math.round(Math.max(1, Math.min(16, Math.floor(pathCells.length * 0.06 * helperMult))));
+    const catapultCount = Math.round(Math.max(1, Math.min(10, Math.floor(pathCells.length * 0.04 * helperMult))));
+    const jumpCount = Math.round(Math.max(1, Math.min(8, Math.floor(pathCells.length * 0.035 * helperMult))));
+    const diamondCount = Math.round(Math.max(this.numPlayers * 2, Math.min(this.numPlayers * 6, Math.floor(pathCells.length * 0.1 * helperMult))));
     const blocks10x10 = (this.width / 10) * (this.height / 10);
-    const bombCount = Math.round(Math.max(0, Math.min(6, Math.floor(blocks10x10 * 0.5 * helperMult))));
+    const bombCount = Math.round(Math.max(1, Math.min(14, Math.floor(blocks10x10 * 1.2 * helperMult))));
 
     const total = multCount + magicCount + catapultCount + jumpCount + diamondCount + bombCount;
     if (total > pathCells.length) return;
@@ -350,7 +350,7 @@ export class Labyrinth {
     }
     const rest3d = rest3c.filter((c) => !trapCells.some((t) => t[0] === c[0] && t[1] === c[1]));
     const minArtifacts = this.numPlayers * 3; // each player needs 3 to win
-    const artifactCount = Math.round(Math.max(minArtifacts, Math.min(minArtifacts + 2, Math.floor(4 * helperMult))));
+    const artifactCount = Math.round(Math.max(minArtifacts, Math.min(minArtifacts + 6, Math.floor(12 * helperMult))));
     const artifactCells = this._pickSpread(rest3d, Math.min(artifactCount, rest3d.length));
     const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL];
     for (let i = 0; i < artifactCells.length; i++) {
@@ -371,7 +371,7 @@ export class Labyrinth {
     }
     for (const [x, y] of bombCells) this.grid[y][x] = BOMB;
     // Add hidden cells (revealed when diamonds collected): magic, jump, multipliers, shield
-    const hiddenCount = Math.round(Math.max(0, Math.min(6, Math.floor(pathCells.length * 0.025 * helperMult))));
+    const hiddenCount = Math.round(Math.max(2, Math.min(12, Math.floor(pathCells.length * 0.05 * helperMult))));
     const rest4 = rest3d.filter((c) => !artifactCells.some((a) => a[0] === c[0] && a[1] === c[1]));
     const hiddenCellCoords = this._pickSpread(rest4, hiddenCount);
     const hiddenTypes: string[] = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, MULT_X2, MULT_X3, SHIELD, SHIELD];
