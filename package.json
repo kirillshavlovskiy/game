@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "bash scripts/dev.sh",
+    "validate-scenarios": "npx tsx scripts/validate-scenarios.ts",
     "build": "next build",
     "clean": "rm -rf .next node_modules package-lock.json && npm install",
     "start": "next start",

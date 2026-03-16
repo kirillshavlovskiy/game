@@ -227,7 +227,14 @@ export default function LabyrinthGame() {
   const currentPlayerRef = useRef(currentPlayer);
   const teleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hiddenGemTeleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const teleportAutoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const teleportPickerRef = useRef(teleportPicker);
+  const handleTeleportSelectRef = useRef<(destX: number, destY: number) => void>(() => {});
   const currentPlayerCellRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    teleportPickerRef.current = teleportPicker;
+  }, [teleportPicker]);
 
   useEffect(() => {
     return () => {
@@ -238,6 +245,10 @@ export default function LabyrinthGame() {
       if (hiddenGemTeleportTimerRef.current) {
         clearTimeout(hiddenGemTeleportTimerRef.current);
         hiddenGemTeleportTimerRef.current = null;
+      }
+      if (teleportAutoTimerRef.current) {
+        clearTimeout(teleportAutoTimerRef.current);
+        teleportAutoTimerRef.current = null;
       }
     };
   }, []);
@@ -1312,6 +1323,31 @@ export default function LabyrinthGame() {
     [lab, teleportPicker, triggerRoundEnd]
   );
 
+  useEffect(() => {
+    handleTeleportSelectRef.current = handleTeleportSelect;
+  }, [handleTeleportSelect]);
+
+  useEffect(() => {
+    if (!teleportPicker) return;
+    if (teleportAutoTimerRef.current) {
+      clearTimeout(teleportAutoTimerRef.current);
+      teleportAutoTimerRef.current = null;
+    }
+    teleportAutoTimerRef.current = setTimeout(() => {
+      teleportAutoTimerRef.current = null;
+      const picker = teleportPickerRef.current;
+      if (!picker || picker.options.length === 0) return;
+      const [destX, destY] = picker.options[Math.floor(Math.random() * picker.options.length)];
+      handleTeleportSelectRef.current(destX, destY);
+    }, 2000);
+    return () => {
+      if (teleportAutoTimerRef.current) {
+        clearTimeout(teleportAutoTimerRef.current);
+        teleportAutoTimerRef.current = null;
+      }
+    };
+  }, [teleportPicker]);
+
   const handleCellTap = useCallback(
     (cellX: number, cellY: number) => {
       if (!lab) return;
@@ -2146,8 +2182,7 @@ export default function LabyrinthGame() {
               if (cellClass.includes("catapult") && cellClass.includes("artifact-inactive")) {
                 cellBg.background = "#15151a";
                 cellBg.color = "#444";
-              }
-              if (cellClass.includes("catapult")) {
+              } else if (cellClass.includes("catapult")) {
                 cellBg.background = "#2e2e1e";
                 cellBg.color = "#ffcc00";
                 cellBg.fontWeight = "bold";

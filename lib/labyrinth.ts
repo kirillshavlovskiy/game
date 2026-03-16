@@ -611,29 +611,38 @@ export class Labyrinth {
     return true;
   }
 
-  /** Use bomb at player position: explode 3x3 area, kill monsters, destroy walls. Returns true if used. */
-  useBomb(playerIndex: number): { used: boolean; monstersKilled: number; wallsDestroyed: number } {
+  /** Use bomb at player position: explode 3x3 area, kill monsters, destroy walls, clear traps. Returns true if used. */
+  useBomb(playerIndex: number): { used: boolean; monstersKilled: number; wallsDestroyed: number; trapsCleared: number } {
     const p = this.players[playerIndex];
-    if (!p || (p.bombs ?? 0) <= 0) return { used: false, monstersKilled: 0, wallsDestroyed: 0 };
+    if (!p || (p.bombs ?? 0) <= 0) return { used: false, monstersKilled: 0, wallsDestroyed: 0, trapsCleared: 0 };
     const cx = p.x;
     const cy = p.y;
     const inBlast = (mx: number, my: number) => Math.abs(mx - cx) <= 1 && Math.abs(my - cy) <= 1;
     const monstersKilled = this.monsters.filter((m) => inBlast(m.x, m.y)).length;
     this.monsters = this.monsters.filter((m) => !inBlast(m.x, m.y));
     let wallsDestroyed = 0;
+    let trapsCleared = 0;
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         const nx = cx + dx;
         const ny = cy + dy;
         if (nx < 0 || nx >= this.width || ny < 0 || ny >= this.height) continue;
-        if (this.grid[ny][nx] === WALL) {
+        const cell = this.grid[ny][nx];
+        if (cell === WALL) {
           this.grid[ny][nx] = PATH;
           wallsDestroyed++;
+        } else if (isTrapCell(cell)) {
+          this.grid[ny][nx] = PATH;
+          trapsCleared++;
         }
       }
     }
+    // Remove spider webs in blast zone
+    if (this.webPositions.length > 0) {
+      this.webPositions = this.webPositions.filter(([wx, wy]) => !inBlast(wx, wy));
+    }
     p.bombs = (p.bombs ?? 0) - 1;
-    return { used: true, monstersKilled, wallsDestroyed };
+    return { used: true, monstersKilled, wallsDestroyed, trapsCleared };
   }
 
   private _addExtraPaths(): void {
@@ -830,13 +839,15 @@ export class Labyrinth {
     return this.canMove(nx, ny);
   }
 
-  /** Returns true if the player can jump over wall in direction (dx, dy). */
+  /** Returns true if the player can jump over wall or trap in direction (dx, dy). */
   canJumpInDirection(dx: number, dy: number, playerIndex = 0): boolean {
     const p = this.players[playerIndex];
     if (!p || (p.jumps ?? 0) <= 0) return false;
     const nx = p.x + dx;
     const ny = p.y + dy;
-    if (this.grid[ny]?.[nx] !== WALL) return false;
+    const midCell = this.grid[ny]?.[nx];
+    const canJumpOver = midCell === WALL || isTrapCell(midCell);
+    if (!canJumpOver) return false;
     const jx = nx + dx;
     const jy = ny + dy;
     return jx >= 0 && jx < this.width && jy >= 0 && jy < this.height && this.canMove(jx, jy);
@@ -855,15 +866,19 @@ export class Labyrinth {
       return true;
     }
 
-    // Jump over wall (only when jumpOnly - user explicitly chose jump)
-    if (jumpOnly && (p.jumps ?? 0) > 0 && this.grid[ny]?.[nx] === WALL) {
-      const jx = nx + dx, jy = ny + dy;
-      if (jx >= 0 && jx < this.width && jy >= 0 && jy < this.height && this.canMove(jx, jy)) {
-        p.x = jx;
-        p.y = jy;
-        p.jumps--;
-        this.recordVisited(jx, jy);
-        return true;
+    // Jump over wall or trap (only when jumpOnly - user explicitly chose jump)
+    if (jumpOnly && (p.jumps ?? 0) > 0) {
+      const midCell = this.grid[ny]?.[nx];
+      const canJumpOver = midCell === WALL || isTrapCell(midCell);
+      if (canJumpOver) {
+        const jx = nx + dx, jy = ny + dy;
+        if (jx >= 0 && jx < this.width && jy >= 0 && jy < this.height && this.canMove(jx, jy)) {
+          p.x = jx;
+          p.y = jy;
+          p.jumps--;
+          this.recordVisited(jx, jy);
+          return true;
+        }
       }
     }
     return false;
@@ -1128,7 +1143,9 @@ export class Labyrinth {
     const targets: Array<{ x: number; y: number; dx: number; dy: number }> = [];
     for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
       const nx = p.x + dx, ny = p.y + dy;
-      if (this.grid[ny]?.[nx] === WALL) {
+      const midCell = this.grid[ny]?.[nx];
+      const canJumpOver = midCell === WALL || isTrapCell(midCell);
+      if (canJumpOver) {
         const jx = nx + dx, jy = ny + dy;
         if (jx >= 0 && jx < this.width && jy >= 0 && jy < this.height && this.canMove(jx, jy)) {
           targets.push({ x: jx, y: jy, dx, dy });
