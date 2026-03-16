@@ -36,6 +36,8 @@ import {
 } from "@/lib/labyrinth";
 import { resolveCombat, type CombatResult } from "@/lib/combatSystem";
 import { drawEvent, applyEvent } from "@/lib/eventDeck";
+import { applyDraculaTeleport, applyDraculaAttack } from "@/lib/draculaAI";
+import { DRACULA_CONFIG } from "@/lib/labyrinth";
 
 const CELL_SIZE = 44;
 
@@ -176,6 +178,7 @@ export default function LabyrinthGame() {
     playerIndex: number;
     monsterType: MonsterType;
   } | null>(null);
+  const [draculaAttacked, setDraculaAttacked] = useState<number | null>(null);
   const [teleportAnimation, setTeleportAnimation] = useState<{
     from: [number, number];
     to: [number, number];
@@ -209,7 +212,7 @@ export default function LabyrinthGame() {
     prevX?: number;
     prevY?: number;
   } | null>(null);
-  const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; shieldAbsorbed?: boolean }) | null>(null);
+  const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; shieldAbsorbed?: boolean; draculaWeakened?: boolean }) | null>(null);
   const [collisionEffect, setCollisionEffect] = useState<{ x: number; y: number } | null>(null);
   const [turnChangeEffect, setTurnChangeEffect] = useState<number | null>(null);
   const [combatUseShield, setCombatUseShield] = useState(true);
@@ -234,6 +237,69 @@ export default function LabyrinthGame() {
   const teleportPickerRef = useRef(teleportPicker);
   const handleTeleportSelectRef = useRef<(destX: number, destY: number) => void>(() => {});
   const currentPlayerCellRef = useRef<HTMLDivElement | null>(null);
+
+  const scheduleDraculaAction = useCallback((mi: number, action: "teleport" | "attack", delayMs: number) => {
+    setTimeout(() => {
+      setLab((prev2) => {
+        if (!prev2 || winnerRef.current !== null) return prev2;
+        const next2 = new Labyrinth(prev2.width, prev2.height, 0, prev2.numPlayers, prev2.monsterDensity);
+        next2.grid = prev2.grid.map((r) => [...r]);
+        next2.players = prev2.players.map((p) => ({ ...p }));
+        next2.goalX = prev2.goalX;
+        next2.goalY = prev2.goalY;
+        next2.monsters = prev2.monsters.map((m) => ({
+          ...m,
+          patrolArea: [...m.patrolArea],
+          hp: m.hp,
+          draculaState: m.draculaState,
+          draculaCooldowns: m.draculaCooldowns ? { ...m.draculaCooldowns } : undefined,
+          targetPlayerIndex: m.targetPlayerIndex,
+        }));
+        next2.eliminatedPlayers = new Set(prev2.eliminatedPlayers);
+        next2.hiddenCells = new Map(prev2.hiddenCells);
+        next2.webPositions = [...(prev2.webPositions || [])];
+        next2.fogZones = new Map(prev2.fogZones || new Map());
+        next2.bombCollectedBy = new Map([...(prev2.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next2.teleportUsedFrom = new Map([...(prev2.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next2.teleportUsedTo = new Map([...(prev2.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next2.catapultUsedFrom = new Map([...(prev2.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+        next2.visitedCells = new Set(prev2.visitedCells || []);
+        const d = next2.monsters[mi];
+        if (d?.type === "V") {
+          if (action === "teleport") {
+            const needAttack = applyDraculaTeleport(d, next2.players, next2.grid, next2.width, next2.height);
+            if (needAttack) {
+              scheduleDraculaAction(mi, "attack", DRACULA_CONFIG.attackTelegraphMs);
+            }
+          } else if (action === "attack") {
+            const targetIdx = applyDraculaAttack(d, next2.players, next2.eliminatedPlayers);
+            if (targetIdx !== null) {
+              const p = next2.players[targetIdx];
+              if (p) {
+                p.hp = Math.max(0, (p.hp ?? 3) - 1);
+                if ((p.artifacts ?? 0) > 0) {
+                  d.hp = Math.min(DRACULA_CONFIG.hp, (d.hp ?? 2) + 1);
+                }
+                setDraculaAttacked(targetIdx);
+                if (p.hp <= 0) {
+                  p.x = 0;
+                  p.y = 0;
+                  p.hp = DEFAULT_PLAYER_HP;
+                  if (p.artifacts > 0) {
+                    p.artifacts--;
+                    const ac = p.artifactsCollected ?? [];
+                    if (ac.length > 0) p.artifactsCollected = ac.slice(0, -1);
+                  }
+                  setEliminatedByMonster({ playerIndex: targetIdx, monsterType: "V" });
+                }
+              }
+            }
+          }
+        }
+        return next2;
+      });
+    }, delayMs);
+  }, []);
 
   useEffect(() => {
     teleportPickerRef.current = teleportPicker;
@@ -365,6 +431,12 @@ export default function LabyrinthGame() {
   }, [eliminatedByMonster]);
 
   useEffect(() => {
+    if (draculaAttacked === null) return;
+    const t = setTimeout(() => setDraculaAttacked(null), 2000);
+    return () => clearTimeout(t);
+  }, [draculaAttacked]);
+
+  useEffect(() => {
     if (jumpAdded === null) return;
     const t = setTimeout(() => setJumpAdded(null), 1500);
     return () => clearTimeout(t);
@@ -476,6 +548,7 @@ export default function LabyrinthGame() {
     setTorchGained(null);
     setCellsRevealed(null);
     setEliminatedByMonster(null);
+    setDraculaAttacked(null);
     setTeleportAnimation(null);
     setJumpAnimation(null);
     setTeleportPicker(null);
@@ -601,7 +674,14 @@ export default function LabyrinthGame() {
         next.visitedCells = new Set(prev.visitedCells || []);
         next.goalX = prev.goalX;
         next.goalY = prev.goalY;
-        next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+        next.monsters = prev.monsters.map((m) => ({
+          ...m,
+          patrolArea: [...m.patrolArea],
+          hp: m.hp,
+          draculaState: m.draculaState,
+          draculaCooldowns: m.draculaCooldowns ? { ...m.draculaCooldowns } : undefined,
+          targetPlayerIndex: m.targetPlayerIndex,
+        }));
         next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
         const pi = combat.playerIndex;
         const p = next.players[pi];
@@ -635,9 +715,21 @@ export default function LabyrinthGame() {
         }
 
         if (result.won && monsterIdx >= 0 && monsterIdx < next.monsters.length && m) {
+          // Dracula: 2 HP boss - first hit weakens, second kills
+          if (combat.monsterType === "V") {
+            const currentHp = m.hp ?? DRACULA_CONFIG.hp;
+            if (currentHp > 1) {
+              m.hp = currentHp - 1;
+              setCombatResult((r) => r ? { ...r, draculaWeakened: true } : null);
+              setCombatState(null);
+              setCombatUseShield(true);
+              setCombatUseDiceBonus(true);
+              setTimeout(() => setCombatResult(null), 2000);
+              return next;
+            }
+          }
           // Spider: web remains on tile when defeated
           if (combat.monsterType === "S") {
-            const webKey = `${m.x},${m.y}`;
             if (!next.webPositions.some(([wx, wy]) => wx === m.x && wy === m.y)) {
               next.webPositions.push([m.x, m.y]);
             }
@@ -1208,6 +1300,10 @@ export default function LabyrinthGame() {
         next.monsters = prev.monsters.map((m) => ({
           ...m,
           patrolArea: [...m.patrolArea],
+          hp: m.hp,
+          draculaState: m.draculaState,
+          draculaCooldowns: m.draculaCooldowns ? { ...m.draculaCooldowns } : undefined,
+          targetPlayerIndex: m.targetPlayerIndex,
         }));
         next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
         next.hiddenCells = new Map(prev.hiddenCells);
@@ -1218,7 +1314,7 @@ export default function LabyrinthGame() {
         next.teleportUsedTo = new Map([...(prev.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.catapultUsedFrom = new Map([...(prev.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
         next.visitedCells = new Set(prev.visitedCells || []);
-        next.moveMonsters();
+        next.moveMonsters(scheduleDraculaAction);
         const collision = next.checkMonsterCollision(currentPlayerRef.current);
         if (collision) {
           const p = next.players[collision.playerIndex];
@@ -1756,23 +1852,25 @@ export default function LabyrinthGame() {
               <div style={combatResultSectionStyle}>
                 <div style={{
                   ...combatResultBannerStyle,
-                  borderColor: combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
-                  background: combatResult.monsterEffect === "skeleton_shield" ? "rgba(255,204,0,0.15)" : combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)",
+                  borderColor: combatResult.draculaWeakened ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
+                  background: combatResult.draculaWeakened ? "rgba(255,102,0,0.2)" : combatResult.monsterEffect === "skeleton_shield" ? "rgba(255,204,0,0.15)" : combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)",
                 }}>
                   <span style={{
-                    color: combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
+                    color: combatResult.draculaWeakened ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
                     fontSize: "1.3rem",
                     fontWeight: "bold",
                   }}>
-                    {combatResult.monsterEffect === "skeleton_shield"
-                      ? "💀 Shield broken! Try again next turn."
-                      : combatResult.won
-                        ? (combatResult.reward ? `WIN! +${combatResult.reward.type === "jump" ? "1 jump" : combatResult.reward.type === "hp" ? "1 HP" : combatResult.reward.type === "shield" ? "1 shield" : combatResult.reward.type === "attackBonus" ? "1 attack" : "1 move"}` : "You are lucky! Monster defeated!")
-                        : combatResult.shieldAbsorbed
-                          ? "🛡 Shield absorbed!"
-                          : combatResult.monsterEffect === "ghost_evade"
-                            ? "👻 Attack missed!"
-                            : `✗ -${combatResult.damage} HP`}
+                    {combatResult.draculaWeakened
+                      ? "🧛 Dracula weakened! One more hit!"
+                      : combatResult.monsterEffect === "skeleton_shield"
+                        ? "💀 Shield broken! Try again next turn."
+                        : combatResult.won
+                          ? (combatResult.reward ? `WIN! +${combatResult.reward.type === "jump" ? "1 jump" : combatResult.reward.type === "hp" ? "1 HP" : combatResult.reward.type === "shield" ? "1 shield" : combatResult.reward.type === "attackBonus" ? "1 attack" : "1 move"}` : "You are lucky! Monster defeated!")
+                          : combatResult.shieldAbsorbed
+                            ? "🛡 Shield absorbed!"
+                            : combatResult.monsterEffect === "ghost_evade"
+                              ? "👻 Attack missed!"
+                              : `✗ -${combatResult.damage} HP`}
                   </span>
                 </div>
                 <div style={combatStatsStyle}>
@@ -1908,7 +2006,7 @@ export default function LabyrinthGame() {
         </div>
       )}
 
-      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || healingGained !== null || harmTaken !== null || bombGained !== null || hiddenGemTeleport !== null || torchGained !== null || cellsRevealed !== null || webSlowed !== null) && (
+      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || healingGained !== null || harmTaken !== null || bombGained !== null || hiddenGemTeleport !== null || torchGained !== null || cellsRevealed !== null || webSlowed !== null || draculaAttacked !== null) && (
         <div style={effectToastStyle} className="effect-toast">
           {bonusAdded !== null && diceResult !== null && (
             <span style={{ color: "#ffcc00" }}>×{bonusAdded / diceResult} moves!</span>
@@ -1932,6 +2030,9 @@ export default function LabyrinthGame() {
           )}
           {healingGained !== null && (
             <span style={{ color: "#44ff88", marginLeft: 12 }}>❤️ +1 HP!</span>
+          )}
+          {draculaAttacked !== null && (
+            <span style={{ color: "#ff4444", marginLeft: 12 }}>🧛 Dracula bit you! -1 HP</span>
           )}
           {bombGained !== null && (
             <span style={{ color: "#ff8844", marginLeft: 12 }}>💣 +1 Bomb!</span>
@@ -2078,6 +2179,8 @@ export default function LabyrinthGame() {
                 </span>
               ) : null;
               if (monster) cellClass += " path monster";
+              const draculaTelegraph = monster?.type === "V" && (monster.draculaState === "telegraphTeleport" || monster.draculaState === "telegraphAttack");
+              if (draculaTelegraph) cellClass += " dracula-telegraph";
               if (pi !== undefined && !lab.eliminatedPlayers.has(pi)) {
                 cellClass += " path";
                 if (isTeleportOption) cellClass += " magic hole";
@@ -2330,6 +2433,10 @@ export default function LabyrinthGame() {
               }
               if (cellClass.includes("monster")) {
                 cellBg.background = "#2e1e1e";
+              }
+              if (cellClass.includes("dracula-telegraph")) {
+                cellBg.boxShadow = "inset 0 0 16px rgba(255,80,80,0.6), 0 0 12px #ff4444";
+                cellBg.border = "2px solid #ff4444";
                 cellBg.color = "#ff6666";
                 cellBg.zIndex = 5;
               }

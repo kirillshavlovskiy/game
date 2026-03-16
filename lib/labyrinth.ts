@@ -1,3 +1,5 @@
+import { updateDracula as updateDraculaAI } from "./draculaAI";
+
 export const WALL = "#";
 export const PATH = " ";
 export const PLAYER = "@";
@@ -30,6 +32,28 @@ export const DEFAULT_PLAYER_HP = 3;
 
 export type MonsterType = "V" | "Z" | "S" | "G" | "K"; // Vampire/Dracula, Zombie, Spider, Ghost, Skeleton
 
+export type DraculaState =
+  | "idle"
+  | "hunt"
+  | "telegraphTeleport"
+  | "teleport"
+  | "telegraphAttack"
+  | "attack"
+  | "recover";
+
+export const DRACULA_CONFIG = {
+  hp: 2,
+  defense: 5,
+  damage: 1,
+  vision: 4,
+  moveSpeed: 1,
+  teleportRange: 3,
+  teleportCooldown: 3,
+  attackCooldown: 1,
+  teleportTelegraphMs: 800,
+  attackTelegraphMs: 600,
+} as const;
+
 export interface Monster {
   x: number;
   y: number;
@@ -42,6 +66,14 @@ export interface Monster {
   spawnY?: number;
   /** Skeleton only: first hit removes shield, second kills */
   hasShield?: boolean;
+  /** Dracula only: boss with 2 HP */
+  hp?: number;
+  /** Dracula only: state machine */
+  draculaState?: DraculaState;
+  /** Dracula only: cooldowns in ticks */
+  draculaStateTimer?: number;
+  draculaCooldowns?: { teleport: number; attack: number };
+  targetPlayerIndex?: number | null;
 }
 
 export function isMonsterType(type: string): type is MonsterType {
@@ -57,7 +89,7 @@ export function getMonsterDefense(type: MonsterType): number {
 }
 
 export function getMonsterDamage(type: MonsterType): number {
-  return type === "V" || type === "Z" ? 2 : 1; // Dracula, Zombie = 2; Ghost, Skeleton, Spider = 1
+  return type === "Z" ? 2 : 1; // Dracula = 1 per spec; Zombie = 2; Ghost, Skeleton, Spider = 1
 }
 
 export function isTrapCell(cell: string): boolean {
@@ -511,26 +543,51 @@ export class Labyrinth {
         if (patrolArea.length >= 2) {
           chosen.push([x, y]);
           const mType = types[(this.monsters.length) % 5];
-          this.monsters.push({
+          const m: Monster = {
             x, y,
             type: mType,
             patrolArea,
-            visionRadius: 3,
+            visionRadius: mType === "V" ? DRACULA_CONFIG.vision : 3,
             spawnX: x,
             spawnY: y,
-            hasShield: mType === "K", // Skeleton: first hit removes shield
-          });
+            hasShield: mType === "K",
+          };
+          if (mType === "V") {
+            m.hp = DRACULA_CONFIG.hp;
+            m.draculaState = "idle";
+            m.draculaCooldowns = { teleport: 0, attack: 0 };
+            m.targetPlayerIndex = null;
+          }
+          this.monsters.push(m);
         }
       }
     }
   }
 
-  /** Move monsters using vision/chase/attack AI. */
-  moveMonsters(): void {
-    for (const m of this.monsters) {
-      const [nx, ny] = this._getMonsterNextPosition(m);
-      m.x = nx;
-      m.y = ny;
+  /** Move monsters using vision/chase/attack AI. For Dracula, uses state machine; scheduleDracula called when telegraph needed. */
+  moveMonsters(scheduleDracula?: (monsterIndex: number, action: "teleport" | "attack", delayMs: number) => void): void {
+    for (let mi = 0; mi < this.monsters.length; mi++) {
+      const m = this.monsters[mi];
+      if (m.type === "V") {
+        if (m.draculaState === "telegraphTeleport" || m.draculaState === "telegraphAttack") {
+          continue;
+        }
+        const result = updateDraculaAI(
+          m,
+          this.players,
+          this.eliminatedPlayers,
+          this.grid,
+          this.width,
+          this.height
+        );
+        if (result.scheduledAction && scheduleDracula) {
+          scheduleDracula(mi, result.scheduledAction.type, result.scheduledAction.delayMs);
+        }
+      } else {
+        const [nx, ny] = this._getMonsterNextPosition(m);
+        m.x = nx;
+        m.y = ny;
+      }
     }
   }
 
