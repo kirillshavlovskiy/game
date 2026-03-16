@@ -34,7 +34,7 @@ import {
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
 import { resolveCombat, type CombatResult } from "@/lib/combatSystem";
-import { drawEvent, applyEvent, type GameEvent } from "@/lib/eventDeck";
+import { drawEvent, applyEvent } from "@/lib/eventDeck";
 
 const CELL_SIZE = 44;
 
@@ -210,7 +210,6 @@ export default function LabyrinthGame() {
   const [turnChangeEffect, setTurnChangeEffect] = useState<number | null>(null);
   const [combatUseShield, setCombatUseShield] = useState(true);
   const [combatUseDiceBonus, setCombatUseDiceBonus] = useState(true);
-  const [eventLog, setEventLog] = useState<GameEvent[]>([]);
   const [mazeZoom, setMazeZoom] = useState(1);
   const [gameStarted, setGameStarted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -478,7 +477,6 @@ export default function LabyrinthGame() {
     setCombatResult(null);
     setCollisionEffect(null);
     setTurnChangeEffect(null);
-    setEventLog([]);
   }, [getDimensions, numPlayers, difficulty]);
 
   const generateWithAI = useCallback(async () => {
@@ -706,7 +704,6 @@ export default function LabyrinthGame() {
       }
       if (Math.random() < 0.35) {
         const ev = drawEvent();
-        setEventLog((log) => [...log.slice(-19), ev]);
         const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((r) => [...r]);
         next.players = prev.players.map((p) => ({ ...p }));
@@ -1547,16 +1544,6 @@ export default function LabyrinthGame() {
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
         <aside style={statsPanelStyle}>
           <div style={{ fontSize: "0.9rem", fontWeight: "bold", color: "#00ff88", marginBottom: 4 }}>Players</div>
-          {eventLog.length > 0 && (
-            <div style={{ marginBottom: 8 }}>
-              <div style={{ fontSize: "0.7rem", fontWeight: "bold", color: "#888", marginBottom: 4 }}>Events</div>
-              <div style={{ maxHeight: 80, overflowY: "auto", fontSize: "0.7rem", color: "#aaa" }}>
-                {eventLog.slice().reverse().map((ev, i) => (
-                  <div key={i} style={{ marginBottom: 2 }}>{ev.description}</div>
-                ))}
-              </div>
-            </div>
-          )}
           {lab.players.map((p, i) => (
             <div
               key={i}
