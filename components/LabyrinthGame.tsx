@@ -273,7 +273,7 @@ export default function LabyrinthGame() {
             }
           } else if (action === "attack") {
             const targetIdx = applyDraculaAttack(d, next2.players, next2.eliminatedPlayers);
-            if (targetIdx !== null) {
+            if (targetIdx !== null && targetIdx === currentPlayerRef.current) {
               const p = next2.players[targetIdx];
               if (p) {
                 p.hp = Math.max(0, (p.hp ?? 3) - 1);
