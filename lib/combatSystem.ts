@@ -19,9 +19,13 @@ export interface CombatResult {
 export type MonsterReward =
   | { type: "jump"; amount: number }
   | { type: "movement"; amount: number }
+  | { type: "bonusMoves"; amount: number }
   | { type: "hp"; amount: number }
   | { type: "shield"; amount: number }
-  | { type: "attackBonus"; amount: number };
+  | { type: "attackBonus"; amount: number }
+  | { type: "artifact"; amount: number }
+  | { type: "catapult"; amount: number }
+  | { type: "diceBonus"; amount: number };
 
 /** Combat hints for each monster type */
 export function getMonsterHint(monsterType: MonsterType, skeletonHasShield?: boolean): string {
@@ -43,13 +47,13 @@ export function getMonsterHint(monsterType: MonsterType, skeletonHasShield?: boo
   }
 }
 
-/** Get reward for defeating this monster type */
+/** Get primary reward for defeating this monster type */
 export function getMonsterReward(monsterType: MonsterType): MonsterReward {
   switch (monsterType) {
     case "S":
       return { type: "jump", amount: 1 }; // Spider: web agility
     case "G":
-      return { type: "movement", amount: 1 }; // Ghost: phantasmal speed
+      return { type: "bonusMoves", amount: 2 }; // Ghost: phantasmal speed → extra moves
     case "Z":
       return { type: "hp", amount: 1 }; // Zombie: survive the tough
     case "K":
@@ -59,6 +63,20 @@ export function getMonsterReward(monsterType: MonsterType): MonsterReward {
     default:
       return { type: "jump", amount: 1 };
   }
+}
+
+/** Get optional extra reward when defeating a monster (artifact, bonus moves, etc.) */
+export function getMonsterBonusReward(): MonsterReward | null {
+  if (Math.random() > 0.5) return null; // 50% chance of extra reward
+  const rewards: MonsterReward[] = [
+    { type: "artifact", amount: 1 },
+    { type: "bonusMoves", amount: 2 },
+    { type: "shield", amount: 1 },
+    { type: "jump", amount: 1 },
+    { type: "catapult", amount: 1 },
+    { type: "diceBonus", amount: 1 },
+  ];
+  return rewards[Math.floor(Math.random() * rewards.length)];
 }
 
 /**

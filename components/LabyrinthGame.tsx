@@ -34,7 +34,7 @@ import {
   type MonsterType,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
-import { resolveCombat, getMonsterHint, type CombatResult } from "@/lib/combatSystem";
+import { resolveCombat, getMonsterHint, getMonsterBonusReward, type CombatResult } from "@/lib/combatSystem";
 import { drawEvent, applyEvent } from "@/lib/eventDeck";
 import { applyDraculaTeleport, applyDraculaAttack } from "@/lib/draculaAI";
 import { DRACULA_CONFIG } from "@/lib/labyrinth";
@@ -193,6 +193,8 @@ export default function LabyrinthGame() {
   const [catapultMode, setCatapultMode] = useState(false);
   const [catapultPicker, setCatapultPicker] = useState<{ playerIndex: number; from: [number, number] } | null>(null);
   const [passThroughMagic, setPassThroughMagic] = useState(false);
+  const [bonusMovesGained, setBonusMovesGained] = useState<number | null>(null);
+  const [catapultGained, setCatapultGained] = useState<boolean | null>(null);
   const [catapultAnimation, setCatapultAnimation] = useState<{
     from: [number, number];
     to: [number, number];
@@ -366,17 +368,6 @@ export default function LabyrinthGame() {
     setCombatUseDiceBonus((p?.diceBonus ?? 0) > 0);
   }, [combatState, lab]);
 
-  // Focus/scroll to current player marker only when turn changes to another player (not on every move)
-  useEffect(() => {
-    if (winner !== null || !lab || lab.eliminatedPlayers.has(currentPlayer)) return;
-    const el = currentPlayerCellRef.current;
-    if (el) {
-      const id = requestAnimationFrame(() => {
-        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
-      });
-      return () => cancelAnimationFrame(id);
-    }
-  }, [currentPlayer, winner]);
 
   useEffect(() => {
     setPlayerNames((prev) => {
@@ -509,6 +500,18 @@ export default function LabyrinthGame() {
     return () => clearTimeout(t);
   }, [torchGained]);
 
+  useEffect(() => {
+    if (bonusMovesGained === null) return;
+    const t = setTimeout(() => setBonusMovesGained(null), 1500);
+    return () => clearTimeout(t);
+  }, [bonusMovesGained]);
+
+  useEffect(() => {
+    if (catapultGained === null) return;
+    const t = setTimeout(() => setCatapultGained(null), 1500);
+    return () => clearTimeout(t);
+  }, [catapultGained]);
+
   const getDimensions = useCallback(() => {
     return mazeSize;
   }, [mazeSize]);
@@ -548,6 +551,8 @@ export default function LabyrinthGame() {
     setHiddenGemTeleport(null);
     setTorchGained(null);
     setCellsRevealed(null);
+    setBonusMovesGained(null);
+    setCatapultGained(null);
     setEliminatedByMonster(null);
     setDraculaAttacked(null);
     setTeleportAnimation(null);
@@ -617,6 +622,8 @@ export default function LabyrinthGame() {
         setHiddenGemTeleport(null);
         setTorchGained(null);
         setCellsRevealed(null);
+        setBonusMovesGained(null);
+        setCatapultGained(null);
         setTeleportAnimation(null);
         setCatapultMode(false);
         setCatapultPicker(null);
@@ -738,29 +745,76 @@ export default function LabyrinthGame() {
             }
           }
           next.monsters.splice(monsterIdx, 1);
-          // Apply monster reward
+          let totalBonusMoves = 0;
+          let totalJumpAdded = 0;
+          // Apply primary monster reward
           if (p && result.reward) {
             const r = result.reward;
-            if (r.type === "jump") p.jumps = (p.jumps ?? 0) + r.amount;
-            if (r.type === "movement") p.diceBonus = (p.diceBonus ?? 0) + r.amount; // +1 to next roll
-            if (r.type === "hp") p.hp = Math.min(DEFAULT_PLAYER_HP, (p.hp ?? 3) + r.amount);
-            if (r.type === "shield") p.shield = (p.shield ?? 0) + r.amount;
+            if (r.type === "jump") {
+              p.jumps = (p.jumps ?? 0) + r.amount;
+              totalJumpAdded += r.amount;
+            }
+            if (r.type === "movement") p.diceBonus = (p.diceBonus ?? 0) + r.amount;
+            if (r.type === "bonusMoves") totalBonusMoves += r.amount;
+            if (r.type === "hp") {
+              p.hp = Math.min(DEFAULT_PLAYER_HP, (p.hp ?? 3) + r.amount);
+              setHealingGained(true);
+            }
+            if (r.type === "shield") {
+              p.shield = (p.shield ?? 0) + r.amount;
+              setShieldGained(true);
+            }
             if (r.type === "attackBonus") p.attackBonus = Math.min(1, (p.attackBonus ?? 0) + r.amount);
           }
-          if (pi === currentPlayerRef.current) {
-            movesLeftRef.current = 0;
-            setMovesLeft(0);
-            setDiceResult(null);
-            let nextP = (pi + 1) % next.numPlayers;
-            while (next.eliminatedPlayers.has(nextP) && nextP !== pi) {
-              nextP = (nextP + 1) % next.numPlayers;
+          // 50% chance: extra reward (artifact, bonus moves, shield, jump, catapult, dice bonus)
+          const bonusReward = getMonsterBonusReward();
+          if (p && bonusReward) {
+            const r = bonusReward;
+            if (r.type === "artifact") {
+              p.artifacts = Math.min(3, (p.artifacts ?? 0) + r.amount);
+              const ac = p.artifactsCollected ?? [];
+              p.artifactsCollected = [...ac, `monster-${combat.monsterType}`];
             }
-            const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
-            const firstLiving = living.length > 0 ? Math.min(...living) : -1;
-            const roundComplete = living.length <= 1 || nextP === firstLiving;
-            setTurnChangeEffect(nextP);
-            setCurrentPlayer(nextP);
-            if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
+            if (r.type === "bonusMoves") totalBonusMoves += r.amount;
+            if (r.type === "shield") {
+              p.shield = (p.shield ?? 0) + r.amount;
+              setShieldGained(true);
+            }
+            if (r.type === "jump") {
+              p.jumps = (p.jumps ?? 0) + r.amount;
+              totalJumpAdded += r.amount;
+            }
+            if (r.type === "catapult") {
+              p.catapultCharges = (p.catapultCharges ?? 0) + r.amount;
+              setCatapultGained(true);
+            }
+            if (r.type === "diceBonus") {
+              p.diceBonus = (p.diceBonus ?? 0) + r.amount;
+            }
+          }
+          if (totalJumpAdded > 0) setJumpAdded(totalJumpAdded);
+          if (totalBonusMoves > 0) setBonusMovesGained(totalBonusMoves);
+          if (pi === currentPlayerRef.current) {
+            if (totalBonusMoves > 0) {
+              movesLeftRef.current += totalBonusMoves;
+              setMovesLeft((m) => m + totalBonusMoves);
+            } else {
+              movesLeftRef.current = 0;
+              setMovesLeft(0);
+              setDiceResult(null);
+            }
+            if (totalBonusMoves === 0) {
+              let nextP = (pi + 1) % next.numPlayers;
+              while (next.eliminatedPlayers.has(nextP) && nextP !== pi) {
+                nextP = (nextP + 1) % next.numPlayers;
+              }
+              const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
+              const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+              const roundComplete = living.length <= 1 || nextP === firstLiving;
+              setTurnChangeEffect(nextP);
+              setCurrentPlayer(nextP);
+              if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
+            }
           }
         } else if (!result.won && p) {
           const useShield = combatUseShieldRef.current;
@@ -1176,7 +1230,7 @@ export default function LabyrinthGame() {
               }
             }
           }
-          if (cell && isCatapultCell(cell) && !next.hasUsedCatapultFrom(currentPlayer, p.x, p.y)) {
+          if (cell && isCatapultCell(cell) && (!next.hasUsedCatapultFrom(currentPlayer, p.x, p.y) || (p.catapultCharges ?? 0) > 0)) {
             setCatapultPicker({ playerIndex: currentPlayer, from: [p.x, p.y] });
             setCatapultMode(true);
           }
@@ -1184,32 +1238,41 @@ export default function LabyrinthGame() {
           if (owner === currentPlayer && cell && isDiamondCell(cell)) {
             p.diamonds = (p.diamonds ?? 0) + 1;
             next.grid[p.y][p.x] = PATH;
-            const totalDiamonds = next.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
-            const revealed = next.revealHiddenCells(totalDiamonds);
-            if (revealed > 0) setCellsRevealed(revealed);
-            // Random hidden gem in some diamonds: shield, jump, teleport, or torch
-            if (Math.random() < 0.45) {
-              const gems = ["shield", "jump", "teleport", "torch"] as const;
-              const gem = gems[Math.floor(Math.random() * gems.length)];
-              if (gem === "shield") {
+            // No hidden cell reveal on diamond - only when torch gained
+            // Always give a reward: shield, jump, teleport, torch, bonus moves, or catapult
+            const rewards = ["shield", "jump", "teleport", "torch", "bonusMoves", "catapult"] as const;
+            const reward = rewards[Math.floor(Math.random() * rewards.length)];
+            if (reward === "shield") {
+              p.shield = (p.shield ?? 0) + 1;
+              setShieldGained(true);
+            } else if (reward === "jump") {
+              p.jumps = (p.jumps ?? 0) + 1;
+              setJumpAdded(1);
+            } else if (reward === "torch") {
+              p.hasTorch = true;
+              setTorchGained(true);
+              const revealed = next.revealAllHiddenCells();
+              if (revealed > 0) setCellsRevealed(revealed);
+            } else if (reward === "teleport") {
+              setHiddenGemTeleport(true);
+              const fromX = p.x;
+              const fromY = p.y;
+              const options = next.getTeleportOptions(currentPlayer, 6);
+              if (options.length > 0) {
+                setTeleportPicker({ playerIndex: currentPlayer, from: [fromX, fromY], options, sourceType: "gem" });
+                teleportPickerSet = true;
+              } else {
                 p.shield = (p.shield ?? 0) + 1;
                 setShieldGained(true);
-              } else if (gem === "jump") {
-                p.jumps = (p.jumps ?? 0) + 1;
-                setJumpAdded(1);
-              } else if (gem === "torch") {
-                p.hasTorch = true;
-                setTorchGained(true);
-              } else {
-                setHiddenGemTeleport(true);
-                const fromX = p.x;
-                const fromY = p.y;
-                const options = next.getTeleportOptions(currentPlayer, 6);
-                if (options.length > 0) {
-                  setTeleportPicker({ playerIndex: currentPlayer, from: [fromX, fromY], options, sourceType: "gem" });
-                  teleportPickerSet = true;
-                }
               }
+            } else if (reward === "bonusMoves") {
+              const bonus = 2;
+              movesLeftRef.current += bonus;
+              setMovesLeft((m) => m + bonus);
+              setBonusMovesGained(bonus);
+            } else {
+              p.catapultCharges = (p.catapultCharges ?? 0) + 1;
+              setCatapultGained(true);
             }
           }
         }
@@ -1420,7 +1483,12 @@ export default function LabyrinthGame() {
       next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
       const result = next.catapultLaunch(playerIndex, dx, dy, strength);
       if (result) {
-        next.recordCatapultUsedFrom(playerIndex, from[0], from[1]);
+        const pl = next.players[playerIndex];
+        if ((pl?.catapultCharges ?? 0) > 0) {
+          pl.catapultCharges = (pl.catapultCharges ?? 0) - 1;
+        } else {
+          next.recordCatapultUsedFrom(playerIndex, from[0], from[1]);
+        }
         setCatapultAnimation({ from, to: [result.destX, result.destY], playerIndex });
         setTeleportPicker(null);
         setCatapultPicker(null);
@@ -1669,14 +1737,14 @@ export default function LabyrinthGame() {
       <header style={headerStyle}>
         <h1 style={headerTitleStyle}>LABYRINTH</h1>
         <div style={headerStatsStyle}>
-          <span style={{ ...headerStatItemStyle, color: winner !== null ? (winner >= 0 ? "#00ff88" : "#ff4444") : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88"), fontWeight: "bold" }}>
-            {winner !== null
-              ? winner >= 0
-                ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
-                : "Monsters win!"
-              : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
-          </span>
-          <span style={headerStatDivider}>|</span>
+          {winner !== null && (
+            <>
+              <span style={{ ...headerStatItemStyle, color: winner >= 0 ? "#00ff88" : "#ff4444", fontWeight: "bold" }}>
+                {winner >= 0 ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!` : "Monsters win!"}
+              </span>
+              <span style={headerStatDivider}>|</span>
+            </>
+          )}
           <span style={headerStatItemStyle}>
             Moves: {diceResult !== null ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}` : "—/—"}
           </span>
@@ -1763,6 +1831,9 @@ export default function LabyrinthGame() {
               </div>
               <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
                 Artifacts: {p?.artifacts ?? 0}/3
+                {(p?.catapultCharges ?? 0) > 0 && (
+                  <span style={{ marginLeft: 6, color: "#ffaa44" }}>🎯 {p.catapultCharges}</span>
+                )}
               </div>
               {(p?.artifactsCollected?.length ?? 0) > 0 && (
                 <div style={{ fontSize: "0.7rem", color: "#888", marginTop: 2, display: "flex", flexWrap: "wrap", gap: 2 }}>
@@ -1990,7 +2061,7 @@ export default function LabyrinthGame() {
         </div>
       )}
 
-      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || healingGained !== null || harmTaken !== null || bombGained !== null || hiddenGemTeleport !== null || torchGained !== null || cellsRevealed !== null || webSlowed !== null || draculaAttacked !== null) && (
+      {(bonusAdded !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || healingGained !== null || harmTaken !== null || bombGained !== null || hiddenGemTeleport !== null || torchGained !== null || cellsRevealed !== null || webSlowed !== null || draculaAttacked !== null || bonusMovesGained !== null || catapultGained !== null) && (
         <div style={effectToastStyle} className="effect-toast">
           {bonusAdded !== null && diceResult !== null && (
             <span style={{ color: "#ffcc00" }}>×{bonusAdded / diceResult} moves!</span>
@@ -2025,10 +2096,16 @@ export default function LabyrinthGame() {
             <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ Hidden gem: Teleport!</span>
           )}
           {torchGained !== null && (
-            <span style={{ color: "#ffcc66", marginLeft: 12 }}>🔦 Torch! Fog zones cleared</span>
+            <span style={{ color: "#ffcc66", marginLeft: 12 }}>🔦 Torch! Labyrinth lit for all players</span>
           )}
           {cellsRevealed !== null && (
             <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ {cellsRevealed} hidden cells revealed!</span>
+          )}
+          {bonusMovesGained !== null && (
+            <span style={{ color: "#ffcc00", marginLeft: 12 }}>+{bonusMovesGained} moves!</span>
+          )}
+          {catapultGained !== null && (
+            <span style={{ color: "#ffaa44", marginLeft: 12 }}>🎯 +1 catapult charge!</span>
           )}
         </div>
       )}
@@ -2548,29 +2625,70 @@ export default function LabyrinthGame() {
                       />
                     </div>
                   )}
-                  {(() => {
-                    const effectiveFog = wouldHaveFog ? (isWallCell ? (adjacentFog ? 1 : 0) : (fogIntensity ?? 0)) : 0;
-                    if (effectiveFog <= 0) return null;
-                    const baseOpacity = 0.08 + effectiveFog * 0.92;
-                    return (
-                      <div
-                        className="cell-fog"
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          zIndex: 50,
-                          pointerEvents: "none",
-                          background: `radial-gradient(ellipse 90% 90% at 50% 50%, rgba(6,6,14,${baseOpacity * 0.2}) 0%, rgba(4,4,10,${baseOpacity * 0.6}) 50%, rgba(2,2,8,${baseOpacity}) 100%)`,
-                          boxShadow: `inset 0 0 ${8 + effectiveFog * 24}px rgba(0,0,0,${baseOpacity * 0.7})`,
-                        }}
-                      />
-                    );
-                  })()}
                 </div>
               );
             })
           )}
         </div>
+        {/* Fog overlay layer - separate from cells, natural fog on top of maze */}
+        {lab && (() => {
+          const hasTorch = lab.players.some((pl) => pl.hasTorch);
+          const cs = CELL_SIZE * mazeZoom;
+          const fogTiles: { x: number; y: number; intensity: number; visible: boolean }[] = [];
+          for (let y = 0; y < lab.height; y++) {
+            for (let x = 0; x < lab.width; x++) {
+              const fogIntensity = lab.fogZones?.get(`${x},${y}`) ?? 0;
+              const isVisited = lab.visitedCells?.has(`${x},${y}`);
+              const isPlayerCell = lab.players.some((pl, i) => !lab.eliminatedPlayers?.has(i) && pl.x === x && pl.y === y);
+              const isWallCell = lab.getCellAt(x, y) === "#";
+              const adjacentFog = isWallCell && [[x-1,y],[x+1,y],[x,y-1],[x,y+1]].some(([nx,ny]) => (lab.fogZones?.get(`${nx},${ny}`) ?? 0) > 0 && !lab.visitedCells?.has(`${nx},${ny}`));
+              const wouldHaveFog = !hasTorch && !(isVisited || isPlayerCell) && (isWallCell ? adjacentFog : fogIntensity > 0);
+              const inFogZone = fogIntensity > 0 || (isWallCell && [[x-1,y],[x+1,y],[x,y-1],[x,y+1]].some(([nx,ny]) => (lab.fogZones?.get(`${nx},${ny}`) ?? 0) > 0));
+              if (inFogZone) {
+                const effectiveFog = isWallCell ? (adjacentFog ? 0.9 : 0.4) : fogIntensity;
+                fogTiles.push({ x, y, intensity: Math.max(0.35, effectiveFog), visible: wouldHaveFog });
+              }
+            }
+          }
+          if (fogTiles.length === 0) return null;
+          return (
+            <div
+              className="fog-overlay"
+              style={{
+                width: lab.width * cs,
+                height: lab.height * cs,
+                display: "grid",
+                gridTemplateColumns: `repeat(${lab.width}, ${cs}px)`,
+                gridTemplateRows: `repeat(${lab.height}, ${cs}px)`,
+                position: "absolute",
+                top: 0,
+                left: 0,
+              }}
+            >
+              {fogTiles.map(({ x, y, intensity, visible }) => {
+                const baseOpacity = 0.2 + intensity * 0.8;
+                return (
+                  <div
+                    key={`${x}-${y}`}
+                    className={`fog-tile ${!visible ? "fog-clearing" : ""}`}
+                    style={{
+                      gridColumn: x + 1,
+                      gridRow: y + 1,
+                      opacity: visible ? baseOpacity : 0,
+                      width: "150%",
+                      height: "150%",
+                      marginLeft: "-25%",
+                      marginTop: "-25%",
+                    }}
+                  >
+                    <div className="fog-tile-inner" />
+                    <div className="fog-tile-wisp" style={{ transform: `rotate(${(x * 13 + y * 7) % 360}deg)` }} />
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
         {catapultPicker && catapultDragOffset && lab && (catapultDragOffset.dx !== 0 || catapultDragOffset.dy !== 0) && (() => {
           const dx = catapultDragOffset.dx;
           const dy = catapultDragOffset.dy;

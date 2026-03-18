@@ -171,6 +171,7 @@ export class Labyrinth {
     attackBonus?: number; // +1 attack from defeating Dracula
     hasTeleportArtifact?: boolean; // A3
     hasTorch?: boolean; // from hidden gem - clears fog zones
+    catapultCharges?: number; // free catapult uses from diamond
     loseNextMove?: boolean; // Zombie won: lose 1 movement next turn
   }>;
   goalX: number;
@@ -223,6 +224,7 @@ export class Labyrinth {
       diceBonus: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
+      catapultCharges: 0,
     }));
     this.goalX = width - 1;
     this.goalY = height - 1;
@@ -484,6 +486,20 @@ export class Labyrinth {
         revealed++;
       }
     }
+    return revealed;
+  }
+
+  /** Reveal ALL hidden cells (used when a player gains torch - lightens labyrinth for everyone). */
+  revealAllHiddenCells(): number {
+    let revealed = 0;
+    for (const [key, type] of this.hiddenCells.entries()) {
+      const [x, y] = key.split(",").map(Number);
+      if (this.grid[y]?.[x] === PATH) {
+        this.grid[y][x] = type;
+        revealed++;
+      }
+    }
+    this.hiddenCells.clear();
     return revealed;
   }
 
