@@ -234,7 +234,6 @@ export default function LabyrinthGame() {
   const currentPlayerRef = useRef(currentPlayer);
   const teleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hiddenGemTeleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const teleportAutoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const teleportPickerRef = useRef(teleportPicker);
   const catapultPickerRef = useRef(catapultPicker);
   const passThroughMagicRef = useRef(false);
@@ -320,10 +319,6 @@ export default function LabyrinthGame() {
       if (hiddenGemTeleportTimerRef.current) {
         clearTimeout(hiddenGemTeleportTimerRef.current);
         hiddenGemTeleportTimerRef.current = null;
-      }
-      if (teleportAutoTimerRef.current) {
-        clearTimeout(teleportAutoTimerRef.current);
-        teleportAutoTimerRef.current = null;
       }
     };
   }, []);
