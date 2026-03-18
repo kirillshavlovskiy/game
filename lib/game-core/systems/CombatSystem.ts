@@ -12,7 +12,6 @@ import type {
   PlayerStatus,
 } from "../types";
 import { DRACULA_CONFIG } from "../constants";
-import { rollD6 as rollD6Impl } from "./TurnSystem";
 
 export type MonsterType = "spider" | "ghost" | "zombie" | "skeleton" | "dracula";
 
@@ -23,8 +22,6 @@ const MONSTER_STATS: Record<MonsterType, { defense: number; damage: number }> = 
   skeleton: { defense: 4, damage: 1 },
   dracula: { defense: 5, damage: 1 },
 };
-
-export const rollD6 = rollD6Impl;
 
 export function resolvePlayerVsMonster(
   player: PlayerState,
