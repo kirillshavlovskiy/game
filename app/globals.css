@@ -132,6 +132,22 @@ button {
   opacity: 0.85;
 }
 
+/* Combat attacking state - pulse glow */
+@keyframes combatAttackPulse {
+  0%, 100% {
+    box-shadow: inset 0 0 20px rgba(255, 80, 80, 0.3), 0 0 24px rgba(255, 100, 100, 0.5);
+    border-color: #ff6666;
+  }
+  50% {
+    box-shadow: inset 0 0 30px rgba(255, 120, 120, 0.5), 0 0 36px rgba(255, 140, 140, 0.8);
+    border-color: #ff9999;
+  }
+}
+
+.combat-attacking {
+  animation: combatAttackPulse 1.2s ease-in-out infinite;
+}
+
 /* Bomb explosion - flash overlay on 3×3 blast zone */
 @keyframes bombExplosion {
   0% {

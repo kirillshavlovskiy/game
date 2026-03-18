@@ -92,6 +92,12 @@ export function getMonsterDamage(type: MonsterType): number {
   return type === "Z" || type === "L" ? 2 : 1; // Zombie, Lava = 2; Dracula, Ghost, Skeleton, Spider = 1
 }
 
+/** Min/max damage for variable monster attacks. Returns [min, max] inclusive. */
+export function getMonsterDamageRange(type: MonsterType): [number, number] {
+  const base = getMonsterDamage(type);
+  return [base, base + 1]; // e.g. 1→1-2, 2→2-3
+}
+
 export function isTrapCell(cell: string): boolean {
   return cell === TRAP_LOSE_TURN || cell === TRAP_HARM || cell === TRAP_TELEPORT || cell === TRAP_SLOW;
 }
@@ -508,7 +514,7 @@ export class Labyrinth {
   }
 
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "Z", "S", "G", "K", "L"];
+    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // Dracula first for initial fight
     const intersections: [number, number][] = [];
     const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
@@ -767,6 +773,22 @@ export class Labyrinth {
     }));
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
+
+    // TEMPORARY: Lava at (1,0) next to spawn for testing - remove when done
+    if (this.width > 1 && isWalkable(this.grid[0][1])) {
+      const patrolArea = this._getPatrolArea(1, 0, 28);
+      if (patrolArea.length >= 2) {
+        this.monsters.unshift({
+          x: 1,
+          y: 0,
+          type: "L",
+          patrolArea,
+          visionRadius: 3,
+          spawnX: 1,
+          spawnY: 0,
+        });
+      }
+    }
   }
 
   loadGrid(grid: string[][]): boolean {
@@ -815,6 +837,21 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
+    // TEMPORARY: Lava at (1,0) next to spawn for testing - remove when done
+    if (this.width > 1 && isWalkable(this.grid[0][1])) {
+      const patrolArea = this._getPatrolArea(1, 0, 28);
+      if (patrolArea.length >= 2) {
+        this.monsters.unshift({
+          x: 1,
+          y: 0,
+          type: "L",
+          patrolArea,
+          visionRadius: 3,
+          spawnX: 1,
+          spawnY: 0,
+        });
+      }
+    }
     // Add hidden cells and spider webs from path cells for AI-loaded mazes
     const pathCells: [number, number][] = [];
     for (let y = 1; y < this.height - 1; y++)
