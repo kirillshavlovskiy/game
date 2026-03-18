@@ -192,6 +192,7 @@ export default function LabyrinthGame() {
   } | null>(null);
   const [catapultMode, setCatapultMode] = useState(false);
   const [catapultPicker, setCatapultPicker] = useState<{ playerIndex: number; from: [number, number] } | null>(null);
+  const [passThroughMagic, setPassThroughMagic] = useState(false);
   const [catapultAnimation, setCatapultAnimation] = useState<{
     from: [number, number];
     to: [number, number];
@@ -235,6 +236,8 @@ export default function LabyrinthGame() {
   const hiddenGemTeleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const teleportAutoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const teleportPickerRef = useRef(teleportPicker);
+  const catapultPickerRef = useRef(catapultPicker);
+  const passThroughMagicRef = useRef(false);
   const handleTeleportSelectRef = useRef<(destX: number, destY: number) => void>(() => {});
   const currentPlayerCellRef = useRef<HTMLDivElement | null>(null);
 
@@ -304,6 +307,9 @@ export default function LabyrinthGame() {
   useEffect(() => {
     teleportPickerRef.current = teleportPicker;
   }, [teleportPicker]);
+  useEffect(() => {
+    catapultPickerRef.current = catapultPicker;
+  }, [catapultPicker]);
 
   useEffect(() => {
     return () => {
@@ -554,6 +560,7 @@ export default function LabyrinthGame() {
     setTeleportPicker(null);
     setCatapultPicker(null);
     setCatapultMode(false);
+    setPassThroughMagic(false);
     setCatapultDragOffset(null);
     setCatapultAnimation(null);
     setBombExplosion(null);
@@ -618,6 +625,7 @@ export default function LabyrinthGame() {
         setTeleportAnimation(null);
         setCatapultMode(false);
         setCatapultPicker(null);
+        setPassThroughMagic(false);
         setCatapultDragOffset(null);
         setCatapultAnimation(null);
         setBombExplosion(null);
@@ -993,6 +1001,7 @@ export default function LabyrinthGame() {
     (dx: number, dy: number, jumpOnly = false) => {
       if (winner !== null || !lab) return;
       if (movesLeftRef.current <= 0) return;
+      if (passThroughMagicRef.current) return;
       if (teleportTimerRef.current) {
         clearTimeout(teleportTimerRef.current);
         teleportTimerRef.current = null;
@@ -1004,6 +1013,7 @@ export default function LabyrinthGame() {
       setTeleportPicker(null);
       setCatapultPicker(null);
       setCatapultMode(false);
+      setPassThroughMagic(false);
       setCatapultDragOffset(null);
       const p = lab.players[currentPlayer]!;
       const destX = jumpOnly ? p.x + 2 * dx : p.x + dx;
@@ -1161,29 +1171,13 @@ export default function LabyrinthGame() {
                 setTeleportPicker({ playerIndex: currentPlayer, from: [p.x, p.y], options, sourceType: "magic" });
                 teleportPickerSet = true;
               } else {
-                const dest = next.getRandomTeleportDestination(currentPlayer);
-                if (dest) {
-                  const [fromX, fromY] = [p.x, p.y];
-                  p.x = dest[0];
-                  p.y = dest[1];
-                  next.recordVisited(dest[0], dest[1]);
-                  next.recordTeleportUsedFrom(currentPlayer, fromX, fromY);
-                  setTeleportAnimation({ from: [fromX, fromY], to: dest, playerIndex: currentPlayer });
-                  movesLeftRef.current = 0;
-                  setMovesLeft(0);
-                  setDiceResult(null);
-                  teleportedThisMove = true;
-                  let nextP = (currentPlayer + 1) % next.numPlayers;
-                  while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
-                    nextP = (nextP + 1) % next.numPlayers;
-                  }
-                  const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
-                  const firstLiving = living.length > 0 ? Math.min(...living) : -1;
-                  const roundComplete = living.length <= 1 || nextP === firstLiving;
-                  setTurnChangeEffect(nextP);
-                  setCurrentPlayer(nextP);
-                  if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
-                }
+                // Pass through: 600ms delay, no teleport. Monsters paused during this time.
+                passThroughMagicRef.current = true;
+                setPassThroughMagic(true);
+                setTimeout(() => {
+                  passThroughMagicRef.current = false;
+                  setPassThroughMagic(false);
+                }, 600);
               }
             }
           }
@@ -1289,8 +1283,10 @@ export default function LabyrinthGame() {
     if (!lab || winner !== null) return;
     const id = setInterval(() => {
       if (combatStateRef.current) return;
+      if (teleportPickerRef.current || catapultPickerRef.current || passThroughMagicRef.current) return;
       setLab((prev) => {
         if (!prev || winnerRef.current !== null || combatStateRef.current) return prev;
+        if (teleportPickerRef.current || catapultPickerRef.current || passThroughMagicRef.current) return prev;
         const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((r) => [...r]);
         next.players = prev.players.map((p) => ({
@@ -1337,7 +1333,7 @@ export default function LabyrinthGame() {
   }, [lab?.width, lab?.height, lab?.numPlayers, winner, combatState]);
 
   useEffect(() => {
-    if (!lab || winner !== null || combatState || movesLeft > 0 || rolling || catapultPicker || teleportPicker) return;
+    if (!lab || winner !== null || combatState || movesLeft > 0 || rolling || catapultPicker || teleportPicker || passThroughMagic) return;
     if (lab.eliminatedPlayers.has(currentPlayer)) {
       let nextP = (currentPlayer + 1) % lab.numPlayers;
       while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
@@ -1349,7 +1345,7 @@ export default function LabyrinthGame() {
     }
     const t = setTimeout(() => rollDice(), 400);
     return () => clearTimeout(t);
-  }, [lab, winner, movesLeft, rolling, rollDice, currentPlayer, catapultPicker, teleportPicker]);
+  }, [lab, winner, movesLeft, rolling, rollDice, currentPlayer, catapultPicker, teleportPicker, passThroughMagic]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1374,7 +1370,7 @@ export default function LabyrinthGame() {
       };
       const d = map[e.key];
       if (d) {
-        if (movesLeftRef.current <= 0 || winnerRef.current !== null || !lab) return;
+        if (movesLeftRef.current <= 0 || winnerRef.current !== null || !lab || passThroughMagicRef.current) return;
         // Same keys for move and jump: prefer jump when possible in that direction
         const jumpPreferred = lab.canJumpInDirection(d[0], d[1], currentPlayer);
         doMove(d[0], d[1], jumpPreferred);
@@ -1395,8 +1391,8 @@ export default function LabyrinthGame() {
   }
   const cp = lab?.players[currentPlayer];
   const gameOver = winner !== null;
-  const moveDisabled = movesLeft <= 0 || gameOver || (lab?.eliminatedPlayers.has(currentPlayer) ?? false);
-  const rollDisabled = (!combatState && movesLeft > 0) || gameOver || rolling || !!catapultPicker || !!teleportPicker;
+  const moveDisabled = movesLeft <= 0 || gameOver || (lab?.eliminatedPlayers.has(currentPlayer) ?? false) || passThroughMagic;
+  const rollDisabled = (!combatState && movesLeft > 0) || gameOver || rolling || !!catapultPicker || !!teleportPicker || passThroughMagic;
   const showSecretCells = movesLeft > 0;
   const jumpTargets = lab && cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
   const canMoveUp = !moveDisabled && lab?.canMoveOnly(0, -1, currentPlayer);
@@ -1535,26 +1531,7 @@ export default function LabyrinthGame() {
     handleTeleportSelectRef.current = handleTeleportSelect;
   }, [handleTeleportSelect]);
 
-  useEffect(() => {
-    if (!teleportPicker) return;
-    if (teleportAutoTimerRef.current) {
-      clearTimeout(teleportAutoTimerRef.current);
-      teleportAutoTimerRef.current = null;
-    }
-    teleportAutoTimerRef.current = setTimeout(() => {
-      teleportAutoTimerRef.current = null;
-      const picker = teleportPickerRef.current;
-      if (!picker || picker.options.length === 0) return;
-      const [destX, destY] = picker.options[Math.floor(Math.random() * picker.options.length)];
-      handleTeleportSelectRef.current(destX, destY);
-    }, 2000);
-    return () => {
-      if (teleportAutoTimerRef.current) {
-        clearTimeout(teleportAutoTimerRef.current);
-        teleportAutoTimerRef.current = null;
-      }
-    };
-  }, [teleportPicker]);
+  // No auto-select timer: user has infinite time to choose teleport destination
 
   const handleCellTap = useCallback(
     (cellX: number, cellY: number) => {
