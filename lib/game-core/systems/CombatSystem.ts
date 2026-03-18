@@ -44,7 +44,6 @@ export function resolvePlayerVsMonster(
       damageToMonster: 0,
       monsterDefeated: false,
       playerDefeated: false,
-      statusApplied: monster.type === "zombie" ? { type: "slowed", turns: 1, mpPenalty: 1 } : undefined,
       log,
     };
   }
