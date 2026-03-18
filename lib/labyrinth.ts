@@ -30,7 +30,7 @@ export const ARTIFACT_HEALING = "A5";
 export const MAX_ROUNDS = 15;
 export const DEFAULT_PLAYER_HP = 3;
 
-export type MonsterType = "V" | "Z" | "S" | "G" | "K"; // Vampire/Dracula, Zombie, Spider, Ghost, Skeleton
+export type MonsterType = "V" | "Z" | "S" | "G" | "K" | "L"; // Vampire/Dracula, Zombie, Spider, Ghost, Skeleton, Lava Elemental
 
 export type DraculaState =
   | "idle"
@@ -77,19 +77,19 @@ export interface Monster {
 }
 
 export function isMonsterType(type: string): type is MonsterType {
-  return type === "V" || type === "Z" || type === "S" || type === "G" || type === "K";
+  return type === "V" || type === "Z" || type === "S" || type === "G" || type === "K" || type === "L";
 }
 
 export function getMonsterName(type: MonsterType): string {
-  return type === "V" ? "Dracula" : type === "Z" ? "Zombie" : type === "S" ? "Spider" : type === "G" ? "Ghost" : "Skeleton";
+  return type === "V" ? "Dracula" : type === "Z" ? "Zombie" : type === "S" ? "Spider" : type === "G" ? "Ghost" : type === "L" ? "Lava Elemental" : "Skeleton";
 }
 
 export function getMonsterDefense(type: MonsterType): number {
-  return type === "V" ? 5 : type === "Z" || type === "K" ? 4 : 3; // Spider, Ghost = 3
+  return type === "V" ? 5 : type === "Z" || type === "K" || type === "L" ? 4 : 3; // Spider, Ghost = 3; Lava = 4
 }
 
 export function getMonsterDamage(type: MonsterType): number {
-  return type === "Z" ? 2 : 1; // Dracula = 1 per spec; Zombie = 2; Ghost, Skeleton, Spider = 1
+  return type === "Z" || type === "L" ? 2 : 1; // Zombie, Lava = 2; Dracula, Ghost, Skeleton, Spider = 1
 }
 
 export function isTrapCell(cell: string): boolean {
@@ -508,7 +508,7 @@ export class Labyrinth {
   }
 
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "Z", "S", "G", "K"];
+    const types: MonsterType[] = ["V", "Z", "S", "G", "K", "L"];
     const intersections: [number, number][] = [];
     const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
@@ -542,7 +542,7 @@ export class Labyrinth {
         const patrolArea = this._getPatrolArea(x, y, 28);
         if (patrolArea.length >= 2) {
           chosen.push([x, y]);
-          const mType = types[(this.monsters.length) % 5];
+          const mType = types[(this.monsters.length) % 6];
           const m: Monster = {
             x, y,
             type: mType,

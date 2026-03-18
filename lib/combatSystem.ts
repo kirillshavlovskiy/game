@@ -38,6 +38,8 @@ export function getMonsterHint(monsterType: MonsterType, skeletonHasShield?: boo
       return "🧛 Dracula: High defense (5). Defeat for +1 attack.";
     case "S":
       return "🕷 Spider: Def 3. Win for +1 jump.";
+    case "L":
+      return "🔥 Lava Elemental: Def 4, hits for 2 dmg. Win for +1 shield.";
     default:
       return "Roll dice + attack bonus ≥ defense to win.";
   }
@@ -56,6 +58,8 @@ export function getMonsterReward(monsterType: MonsterType): MonsterReward {
       return { type: "shield", amount: 1 }; // Skeleton: bone armor
     case "V":
       return { type: "attackBonus", amount: 1 }; // Dracula: vampire strength
+    case "L":
+      return { type: "shield", amount: 1 }; // Lava Elemental: molten armor
     default:
       return { type: "jump", amount: 1 };
   }
@@ -121,7 +125,9 @@ export function resolveCombat(
         ? "zombie_slow"
         : !won && monsterType === "V"
           ? "dracula_lifesteal"
-          : undefined,
+          : !won && monsterType === "L"
+            ? "lava_burn"
+            : undefined,
     reward: won ? getMonsterReward(monsterType) : undefined,
   };
 }

@@ -57,7 +57,13 @@ const CELL_SIZE = 44;
  */
 
 function getMonsterIcon(type: MonsterType): string {
-  return type === "V" ? "🧛" : type === "Z" ? "🧟" : type === "G" ? "👻" : type === "K" ? "💀" : "🕷";
+  return type === "V" ? "🧛" : type === "Z" ? "🧟" : type === "G" ? "👻" : type === "K" ? "💀" : type === "L" ? "🔥" : "🕷";
+}
+
+/** Lava Elemental sprite states from manifest */
+function getLavaElementalSprite(type: MonsterType, state: "neutral" | "attacking" | "hurt" | "defeated" | "angry" | "enraged"): string | null {
+  if (type !== "L") return null;
+  return `/monsters/lava/${state}.png`;
 }
 
 function getParabolicArcPath(from: [number, number], to: [number, number], cellSize: number, steps = 16): string {
@@ -1826,11 +1832,22 @@ export default function LabyrinthGame() {
         <div style={combatModalOverlayStyle}>
           <div style={combatModalStyle} onClick={(e) => e.stopPropagation()}>
             <h2 style={combatModalTitleStyle}>
-              <span style={{ marginRight: 8 }}>{combatState ? getMonsterIcon(combatState.monsterType) : combatResult?.monsterType ? getMonsterIcon(combatResult.monsterType) : "👹"}</span>
+              {(combatState || combatResult) && (combatState?.monsterType ?? combatResult?.monsterType) === "L" ? (
+                <img src="/monsters/lava/neutral.png" alt="" style={{ width: 28, height: 28, verticalAlign: "middle", marginRight: 8 }} />
+              ) : (
+                <span style={{ marginRight: 8 }}>{combatState ? getMonsterIcon(combatState.monsterType) : combatResult?.monsterType ? getMonsterIcon(combatResult.monsterType) : "👹"}</span>
+              )}
               ⚔️ Combat vs {combatState ? getMonsterName(combatState.monsterType) : combatResult?.monsterType ? getMonsterName(combatResult.monsterType) : "Monster"}
             </h2>
             {combatResult ? (
               <div style={combatResultSectionStyle}>
+                {combatResult.monsterType && getLavaElementalSprite(combatResult.monsterType, combatResult.won ? "defeated" : combatResult.shieldAbsorbed ? "angry" : "hurt") && (
+                  <img
+                    src={getLavaElementalSprite(combatResult.monsterType, combatResult.won ? "defeated" : combatResult.shieldAbsorbed ? "angry" : "hurt")!}
+                    alt={getMonsterName(combatResult.monsterType)}
+                    style={{ width: 72, height: 72, objectFit: "contain", marginBottom: 4 }}
+                  />
+                )}
                 <div style={{
                   ...combatResultBannerStyle,
                   borderColor: combatResult.draculaWeakened ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
@@ -1875,9 +1892,17 @@ export default function LabyrinthGame() {
                   border: "2px solid #ff6666",
                   boxShadow: "inset 0 0 20px rgba(255,80,80,0.2)",
                 }}>
-                  <span style={{ fontSize: "3.5rem", lineHeight: 1 }} title={getMonsterName(combatState.monsterType)}>
-                    {getMonsterIcon(combatState.monsterType)}
-                  </span>
+                  {getLavaElementalSprite(combatState.monsterType, rolling ? "attacking" : "neutral") ? (
+                    <img
+                      src={getLavaElementalSprite(combatState.monsterType, rolling ? "attacking" : "neutral")!}
+                      alt={getMonsterName(combatState.monsterType)}
+                      style={{ width: 80, height: 80, objectFit: "contain" }}
+                    />
+                  ) : (
+                    <span style={{ fontSize: "3.5rem", lineHeight: 1 }} title={getMonsterName(combatState.monsterType)}>
+                      {getMonsterIcon(combatState.monsterType)}
+                    </span>
+                  )}
                   <span style={{ color: "#ff9999", fontSize: "1rem" }}>vs</span>
                   <span style={{ color: "#ffcc00", fontSize: "1.1rem", fontWeight: "bold" }}>{getMonsterName(combatState.monsterType)}</span>
                 </div>

@@ -1,0 +1,12 @@
+{
+  "id": "lava-monster",
+  "name": "Lava Elemental",
+  "states": [
+    { "state": "neutral", "file": "neutral.png" },
+    { "state": "angry", "file": "angry.png" },
+    { "state": "attacking", "file": "attacking.png" },
+    { "state": "hurt", "file": "hurt.png" },
+    { "state": "enraged", "file": "enraged.png" },
+    { "state": "defeated", "file": "defeated.png" }
+  ]
+}
