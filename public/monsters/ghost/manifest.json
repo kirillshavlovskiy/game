@@ -1,0 +1,5 @@
+{
+  "id": "ghost",
+  "monsterType": "G",
+  "states": ["idle", "hunt", "attack", "hurt", "defeated", "recover"]
+}
