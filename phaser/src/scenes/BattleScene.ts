@@ -444,7 +444,7 @@ export class BattleScene extends Phaser.Scene {
       duration: 600,
       ease: 'Cubic.Out',
       onUpdate: (tween) => {
-        const v = Math.floor(tween.getValue());
+        const v = Math.floor(tween.getValue() ?? 0);
         const face = (v % 6) + 1;
         this.diceGraphics.clear();
         drawDiceFace(this.diceGraphics, cx, cy, diceSize, face, 0xf5f5f5);

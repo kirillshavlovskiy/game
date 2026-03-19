@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "bash scripts/dev.sh",
+    "dev": "node node_modules/next/dist/bin/next dev",
     "validate-scenarios": "npx tsx scripts/validate-scenarios.ts",
     "build": "next build",
     "clean": "rm -rf .next node_modules package-lock.json && npm install",
