@@ -42,7 +42,7 @@ export type DraculaState =
   | "recover";
 
 export const DRACULA_CONFIG = {
-  hp: 2,
+  hp: 3,
   defense: 5,
   damage: 1,
   vision: 4,
@@ -90,6 +90,11 @@ export function getMonsterDefense(type: MonsterType): number {
 
 export function getMonsterDamage(type: MonsterType): number {
   return type === "Z" || type === "L" ? 2 : 1; // Zombie, Lava = 2; Dracula, Ghost, Skeleton, Spider = 1
+}
+
+/** Max HP for multi-hit monsters. Others = 1 (one-shot). */
+export function getMonsterMaxHp(type: MonsterType): number {
+  return type === "V" ? DRACULA_CONFIG.hp : type === "Z" || type === "L" ? 2 : 1;
 }
 
 /** Min/max damage for variable monster attacks. Returns [min, max] inclusive. */
@@ -376,7 +381,11 @@ export class Labyrinth {
     const minArtifacts = this.numPlayers * 3; // each player needs 3 to win
     const artifactCount = Math.round(Math.max(minArtifacts, Math.min(minArtifacts + 6, Math.floor(12 * helperMult))));
     const hiddenCount = Math.round(Math.max(2, Math.min(12, Math.floor(pathCells.length * 0.05 * helperMult))));
-    const fogCount = Math.round(Math.max(2, Math.min(10, Math.floor(pathCells.length * 0.04 * obstacleMult))));
+    // Fog as % of path cells: easy 20%, extreme 100%
+    const fogPercent = Math.min(1, 0.2 + (0.8 * (this.monsterDensity - 1)) / 3);
+    const targetFogCells = Math.floor(pathCells.length * fogPercent);
+    const cellsPerFogZone = 20; // approximate path cells per fog zone (radius 3)
+    const fogCount = Math.max(2, Math.min(15, Math.ceil(targetFogCells / cellsPerFogZone)));
 
     const total = multCount + magicCount + catapultCount + jumpCount + diamondCount + bombCount
       + trapCount + artifactCount + hiddenCount + fogCount;
@@ -563,6 +572,8 @@ export class Labyrinth {
             m.draculaState = "idle";
             m.draculaCooldowns = { teleport: 0, attack: 0 };
             m.targetPlayerIndex = null;
+          } else if (mType === "Z" || mType === "L") {
+            m.hp = 2;
           }
           this.monsters.push(m);
         }
@@ -859,6 +870,7 @@ export class Labyrinth {
         if (this.grid[y][x] === PATH && (x !== this.goalX || y !== this.goalY) &&
             !["M", "J", "2", "3", "4", "H", "B"].includes(this.grid[y][x]))
           pathCells.push([x, y]);
+    const totalPathCells = pathCells.length;
     const hiddenTypes = [MAGIC, MAGIC, CATAPULT, CATAPULT, JUMP, JUMP, "2", "3", SHIELD, SHIELD, BOMB];
     const n = Math.min(6, Math.floor(pathCells.length / 2));
     for (let i = 0; i < n; i++) {
@@ -871,7 +883,11 @@ export class Labyrinth {
       const idx = Math.floor(Math.random() * pathCells.length);
       this.webPositions.push(pathCells.splice(idx, 1)[0]);
     }
-    const fogCount = Math.min(6, Math.floor(pathCells.length / 5));
+    // Fog as % of total path cells by difficulty (monsterDensity: 1–4): easy 20%, extreme 100%
+    const fogPercent = Math.min(1, 0.2 + (0.8 * (this.monsterDensity - 1)) / 3);
+    const targetFogCells = Math.floor(totalPathCells * fogPercent);
+    const cellsPerFogZone = 20;
+    const fogCount = Math.max(2, Math.min(15, Math.ceil(targetFogCells / cellsPerFogZone)));
     const FOG_RADIUS = 3;
     for (let i = 0; i < fogCount && pathCells.length > 0; i++) {
       const idx = Math.floor(Math.random() * pathCells.length);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import {
   Labyrinth,
@@ -22,6 +22,7 @@ import {
   getMonsterName,
   getMonsterDefense,
   getMonsterDamageRange,
+  getMonsterMaxHp,
   isArtifactCell,
   isTrapCell,
   isWalkable,
@@ -265,7 +266,7 @@ export default function LabyrinthGame() {
     prevX?: number;
     prevY?: number;
   } | null>(null);
-  const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; shieldAbsorbed?: boolean; draculaWeakened?: boolean }) | null>(null);
+  const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; shieldAbsorbed?: boolean; draculaWeakened?: boolean; monsterWeakened?: boolean; monsterHp?: number; monsterMaxHp?: number; secondAttempt?: boolean }) | null>(null);
   const [combatVictoryPhase, setCombatVictoryPhase] = useState<"hurt" | "defeated">("hurt");
   const [collisionEffect, setCollisionEffect] = useState<{ x: number; y: number } | null>(null);
   const [turnChangeEffect, setTurnChangeEffect] = useState<number | null>(null);
@@ -294,6 +295,41 @@ export default function LabyrinthGame() {
   const passThroughMagicRef = useRef(false);
   const handleTeleportSelectRef = useRef<(destX: number, destY: number) => void>(() => {});
   const currentPlayerCellRef = useRef<HTMLDivElement | null>(null);
+
+  const fogIntensityMap = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!lab || lab.players.some((p) => p.hasTorch)) return map;
+    const clearedCoords = new Set<string>();
+    lab.players.forEach((p, i) => { if (!lab!.eliminatedPlayers?.has(i)) clearedCoords.add(`${p.x},${p.y}`); });
+    lab.visitedCells?.forEach((k) => clearedCoords.add(k));
+    const manhattan = (ax: number, ay: number, bx: number, by: number) => Math.abs(ax - bx) + Math.abs(ay - by);
+    const getClearance = (cx: number, cy: number): number => {
+      let minDist = FOG_CLEARANCE_RADIUS + 1;
+      clearedCoords.forEach((key) => {
+        const [px, py] = key.split(",").map(Number);
+        const d = manhattan(cx, cy, px, py);
+        if (d < minDist) minDist = d;
+      });
+      return Math.max(0, 1 - minDist / (FOG_CLEARANCE_RADIUS + 0.5));
+    };
+    for (let cy = 0; cy < lab.height; cy++) {
+      for (let cx = 0; cx < lab.width; cx++) {
+        const fogIntensity = lab.fogZones?.get(`${cx},${cy}`) ?? 0;
+        const clearance = getClearance(cx, cy);
+        const isWallCell = lab.getCellAt(cx, cy) === "#";
+        const hasAdjacentFog = [[0,-1],[1,0],[0,1],[-1,0]].some(([dx,dy]) => (lab.fogZones?.get(`${cx+dx},${cy+dy}`) ?? 0) > 0);
+        const adjacentClearance = isWallCell ? Math.max(0, ...[[0,-1],[1,0],[0,1],[-1,0]].map(([dx,dy]) => {
+          const nx = cx + dx, ny = cy + dy;
+          return (nx >= 0 && nx < lab.width && ny >= 0 && ny < lab.height) ? getClearance(nx, ny) : 0;
+        })) : clearance;
+        const effectiveClearance = isWallCell ? adjacentClearance : clearance;
+        const rawFog = isWallCell ? (hasAdjacentFog ? 1 : 0) : fogIntensity;
+        const effectiveFog = rawFog * (1 - effectiveClearance);
+        if (effectiveFog > 0) map.set(`${cx},${cy}`, effectiveFog);
+      }
+    }
+    return map;
+  }, [lab]);
 
   const scheduleDraculaAction = useCallback((mi: number, action: "teleport" | "attack", delayMs: number) => {
     setTimeout(() => {
@@ -733,7 +769,9 @@ export default function LabyrinthGame() {
         return;
       }
 
-      setCombatResult({ ...result, monsterType: combat.monsterType });
+      const maxHp = getMonsterMaxHp(combat.monsterType);
+      const monsterHp = monster?.hp ?? maxHp;
+      setCombatResult({ ...result, monsterType: combat.monsterType, monsterHp, monsterMaxHp: maxHp });
       setRolling(false);
       combatSurpriseRef.current = "hunt"; // reset for next combat
       setLab((prev) => {
@@ -802,18 +840,16 @@ export default function LabyrinthGame() {
         }
 
         if (result.won && monsterIdx >= 0 && monsterIdx < next.monsters.length && m) {
-          // Dracula: 2 HP boss - first hit weakens, second kills
-          if (combat.monsterType === "V") {
-            const currentHp = m.hp ?? DRACULA_CONFIG.hp;
-            if (currentHp > 1) {
-              m.hp = currentHp - 1;
-              setCombatResult((r) => r ? { ...r, draculaWeakened: true } : null);
-              setCombatState(null);
-              setCombatUseShield(true);
-              setCombatUseDiceBonus(true);
-              setTimeout(() => setCombatResult(null), 2800);
-              return next;
-            }
+          const maxHp = getMonsterMaxHp(combat.monsterType);
+          const currentHp = m.hp ?? maxHp;
+          if (maxHp > 1 && currentHp > 1) {
+            m.hp = currentHp - 1;
+            setCombatResult((r) => r ? { ...r, monsterWeakened: true, monsterHp: m.hp, monsterMaxHp: maxHp } : null);
+            setCombatState(null);
+            setCombatUseShield(true);
+            setCombatUseDiceBonus(true);
+            setTimeout(() => setCombatResult(null), 2800);
+            return next;
           }
           // Spider: web remains on tile when defeated
           if (combat.monsterType === "S") {
@@ -1313,18 +1349,8 @@ export default function LabyrinthGame() {
           if (cell && isMagicCell(cell) && !next.hasUsedTeleportFrom(currentPlayer, p.x, p.y)) {
             const options = next.getTeleportOptions(currentPlayer, 6);
             if (options.length > 0) {
-              if (movesLeftRef.current <= 0) {
-                setTeleportPicker({ playerIndex: currentPlayer, from: [p.x, p.y], options, sourceType: "magic" });
-                teleportPickerSet = true;
-              } else {
-                // Pass through: 600ms delay, no teleport. Monsters paused during this time.
-                passThroughMagicRef.current = true;
-                setPassThroughMagic(true);
-                setTimeout(() => {
-                  passThroughMagicRef.current = false;
-                  setPassThroughMagic(false);
-                }, 600);
-              }
+              setTeleportPicker({ playerIndex: currentPlayer, from: [p.x, p.y], options, sourceType: "magic" });
+              teleportPickerSet = true;
             }
           }
           if (cell && isCatapultCell(cell) && !next.hasUsedCatapultFrom(currentPlayer, p.x, p.y)) {
@@ -1684,7 +1710,31 @@ export default function LabyrinthGame() {
     handleTeleportSelectRef.current = handleTeleportSelect;
   }, [handleTeleportSelect]);
 
-  // No auto-select timer: user has infinite time to choose teleport destination
+  const MAGIC_TELEPORT_TIMEOUT_MS = 6000;
+
+  useEffect(() => {
+    if (!teleportPicker || teleportPicker.options.length === 0) {
+      if (teleportTimerRef.current) {
+        clearTimeout(teleportTimerRef.current);
+        teleportTimerRef.current = null;
+      }
+      return;
+    }
+    if (teleportTimerRef.current) clearTimeout(teleportTimerRef.current);
+    teleportTimerRef.current = setTimeout(() => {
+      teleportTimerRef.current = null;
+      const picker = teleportPickerRef.current;
+      if (!picker || picker.options.length === 0) return;
+      const [destX, destY] = picker.options[Math.floor(Math.random() * picker.options.length)]!;
+      handleTeleportSelectRef.current(destX, destY);
+    }, MAGIC_TELEPORT_TIMEOUT_MS);
+    return () => {
+      if (teleportTimerRef.current) {
+        clearTimeout(teleportTimerRef.current);
+        teleportTimerRef.current = null;
+      }
+    };
+  }, [teleportPicker]);
 
   const handleCellTap = useCallback(
     (cellX: number, cellY: number) => {
@@ -2009,31 +2059,31 @@ export default function LabyrinthGame() {
             </h2>
             {combatResult ? (
               <div style={{ ...combatResultSectionStyle, flex: 1, justifyContent: "center", gap: 16 }}>
-                {combatResult.monsterType && getMonsterSprite(combatResult.monsterType, combatResult.secondAttempt ? "idle" : combatResult.draculaWeakened ? "recover" : combatResult.won ? (combatVictoryPhase === "defeated" ? "defeated" : "hurt") : combatResult.shieldAbsorbed ? "angry" : "hurt") ? (
+                {combatResult.monsterType && getMonsterSprite(combatResult.monsterType, combatResult.secondAttempt ? "idle" : (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "recover" : combatResult.won ? (combatVictoryPhase === "defeated" ? "defeated" : "hurt") : combatResult.shieldAbsorbed ? "angry" : "hurt") ? (
                   <img
-                    src={getMonsterSprite(combatResult.monsterType, combatResult.secondAttempt ? "idle" : combatResult.draculaWeakened ? "recover" : combatResult.won ? (combatVictoryPhase === "defeated" ? "defeated" : "hurt") : combatResult.shieldAbsorbed ? "angry" : "hurt")!}
+                    src={getMonsterSprite(combatResult.monsterType, combatResult.secondAttempt ? "idle" : (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "recover" : combatResult.won ? (combatVictoryPhase === "defeated" ? "defeated" : "hurt") : combatResult.shieldAbsorbed ? "angry" : "hurt")!}
                     alt={getMonsterName(combatResult.monsterType)}
                     style={{ width: 180, height: 180, objectFit: "contain", marginBottom: 12 }}
                   />
                 ) : (
-                  <span style={{ fontSize: "7rem", lineHeight: 1, marginBottom: 12 }} title={getMonsterName(combatResult.monsterType)}>
-                    {getMonsterIcon(combatResult.monsterType)}
+                  <span style={{ fontSize: "7rem", lineHeight: 1, marginBottom: 12 }} title={combatResult.monsterType ? getMonsterName(combatResult.monsterType) : "Monster"}>
+                    {combatResult.monsterType ? getMonsterIcon(combatResult.monsterType) : "👹"}
                   </span>
                 )}
                 <div style={{
                   ...combatResultBannerStyle,
-                  borderColor: combatResult.secondAttempt ? "#ffcc00" : combatResult.draculaWeakened ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
-                  background: combatResult.secondAttempt ? "rgba(255,204,0,0.2)" : combatResult.draculaWeakened ? "rgba(255,102,0,0.2)" : combatResult.monsterEffect === "skeleton_shield" ? "rgba(255,204,0,0.15)" : combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)",
+                  borderColor: combatResult.secondAttempt ? "#ffcc00" : (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
+                  background: combatResult.secondAttempt ? "rgba(255,204,0,0.2)" : (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "rgba(255,102,0,0.2)" : combatResult.monsterEffect === "skeleton_shield" ? "rgba(255,204,0,0.15)" : combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)",
                 }}>
                   <span style={{
-                    color: combatResult.secondAttempt ? "#ffcc00" : combatResult.draculaWeakened ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
+                    color: combatResult.secondAttempt ? "#ffcc00" : (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
                     fontSize: "1.3rem",
                     fontWeight: "bold",
                   }}>
                     {combatResult.secondAttempt
                       ? "🎲 Second attempt! Roll again — monster was caught off guard!"
-                      : combatResult.draculaWeakened
-                        ? "🧛 Dracula weakened! One more hit!"
+                      : (combatResult.draculaWeakened || combatResult.monsterWeakened)
+                        ? `${getMonsterName(combatResult.monsterType!)} weakened! One more hit!`
                         : combatResult.monsterEffect === "skeleton_shield"
                           ? "💀 Shield broken! Try again next turn."
                           : combatResult.won
@@ -2045,6 +2095,30 @@ export default function LabyrinthGame() {
                                 : `✗ -${combatResult.damage} HP`}
                   </span>
                 </div>
+                {(combatResult.monsterMaxHp ?? 0) > 1 && (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, width: "100%", maxWidth: 200 }}>
+                    <span style={{ fontSize: "0.85rem", color: "#aaa" }}>Monster HP</span>
+                    <div style={{ width: "100%", height: 12, background: "#ff4444", borderRadius: 6, overflow: "hidden", display: "flex", flexDirection: "row" }}>
+                      <div
+                        style={{
+                          width: `${100 * ((combatResult.monsterHp ?? combatResult.monsterMaxHp ?? 1) / (combatResult.monsterMaxHp ?? 1))}%`,
+                          height: "100%",
+                          background: "linear-gradient(90deg, #22cc44, #44ff66)",
+                          transition: "width 0.3s ease",
+                        }}
+                      />
+                      <div
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          height: "100%",
+                          background: "#ff4444",
+                        }}
+                      />
+                    </div>
+                    <span style={{ fontSize: "0.8rem", color: "#888" }}>{combatResult.monsterHp ?? combatResult.monsterMaxHp ?? 1} / {combatResult.monsterMaxHp ?? 1}</span>
+                  </div>
+                )}
                 <div style={combatStatsStyle}>
                   <span>Dice: <strong>{combatResult.playerRoll}</strong></span>
                   <span>+ Attack bonus: <strong>{combatResult.attackTotal - combatResult.playerRoll}</strong></span>
@@ -2110,6 +2184,21 @@ export default function LabyrinthGame() {
                     </span>
                   )}
                   <span style={{ color: "#ffcc00", fontSize: "1.1rem", fontWeight: "bold" }}>{getMonsterName(combatState.monsterType)}</span>
+                  {(() => {
+                    const maxHp = getMonsterMaxHp(combatState.monsterType);
+                    if (maxHp <= 1) return null;
+                    const monster = lab?.monsters[combatState.monsterIndex];
+                    const hp = monster?.hp ?? maxHp;
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, width: "100%", maxWidth: 160, marginTop: 4 }}>
+                        <span style={{ fontSize: "0.75rem", color: "#888" }}>HP {hp}/{maxHp}</span>
+                        <div style={{ width: "100%", height: 8, background: "#ff4444", borderRadius: 4, overflow: "hidden", display: "flex", flexDirection: "row" }}>
+                          <div style={{ width: `${100 * hp / maxHp}%`, height: "100%", background: "linear-gradient(90deg, #22cc44, #44ff66)" }} />
+                          <div style={{ flex: 1, minWidth: 0, height: "100%", background: "#ff4444" }} />
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {style.label != null && (
                     <span
                       style={{
@@ -2508,7 +2597,9 @@ export default function LabyrinthGame() {
                 }
                 cellClass += (isRevealed || (isHidden && showSecretCells)) ? " path multiplier mult-x" + cellType : " path";
               } else if (isArtifactCell(cellType)) {
-                if (!isHidden) {
+                const isFogged = (fogIntensityMap.get(`${x},${y}`) ?? 0) > 0;
+                const showArtifact = !isHidden && !isFogged;
+                if (showArtifact) {
                   const art = cellType;
                   content = (
                     <span style={{ fontSize: "1.1rem" }} title={art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : art === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}>
@@ -2516,7 +2607,7 @@ export default function LabyrinthGame() {
                     </span>
                   );
                 }
-                cellClass += " path artifact" + (isHidden ? " artifact-hidden" : "");
+                cellClass += " path artifact" + (isHidden || isFogged ? " artifact-hidden" : "");
               } else if (isTrapCell(cellType)) {
                 {
                   const trap = cellType;
@@ -2585,6 +2676,8 @@ export default function LabyrinthGame() {
                 if (cellType === "#") content = null;
               }
               }
+
+              if ((fogIntensityMap.get(`${x},${y}`) ?? 0) > 0) content = null;
 
               const cellBg: React.CSSProperties = {};
               if (cellClass.includes("wall")) {
@@ -2690,6 +2783,8 @@ export default function LabyrinthGame() {
               const isCurrentPlayerCell = cp && x === cp.x && y === cp.y;
               const isCollisionCell = collisionEffect && collisionEffect.x === x && collisionEffect.y === y;
               if (isCollisionCell) cellClass += " cell-collision";
+              const cellFog = fogIntensityMap.get(`${x},${y}`) ?? 0;
+              const cellOpacity = cellFog > 0 ? 1 - 0.75 * cellFog : 1;
               return (
                 <div
                   key={`${x}-${y}`}
@@ -2704,6 +2799,7 @@ export default function LabyrinthGame() {
                     minWidth: effectiveCellSize,
                     minHeight: effectiveCellSize,
                     position: "relative",
+                    opacity: cellOpacity,
                     cursor: isTappable ? "pointer" : isCatapultSourceCell ? "grab" : undefined,
                     touchAction: isCatapultSourceCell ? "none" : isTappable ? "manipulation" : undefined,
                     userSelect: isCatapultSourceCell ? "none" : undefined,
@@ -2842,22 +2938,17 @@ export default function LabyrinthGame() {
               const playerOnTop = py < lab.height / 2;
               const getCellFog = (cx: number, cy: number) => {
                 if (lab.players.some((p) => p.hasTorch)) return 0;
-                const fogZoneIntensity = lab.fogZones?.get(`${cx},${cy}`) ?? 0;
+                const fogIntensity = lab.fogZones?.get(`${cx},${cy}`) ?? 0;
                 const clearance = getClearance(cx, cy);
                 const isWallCell = lab.getCellAt(cx, cy) === "#";
-                const hasAdjacentPath = [[0,-1],[1,0],[0,1],[-1,0]].some(([dx,dy]) => {
-                  const nx = cx + dx, ny = cy + dy;
-                  return nx >= 0 && nx < lab.width && ny >= 0 && ny < lab.height && lab.getCellAt(nx, ny) !== "#";
-                });
+                const hasAdjacentFog = [[0,-1],[1,0],[0,1],[-1,0]].some(([dx,dy]) => (lab.fogZones?.get(`${cx+dx},${cy+dy}`) ?? 0) > 0);
                 const adjacentClearance = isWallCell ? Math.max(0, ...[[0,-1],[1,0],[0,1],[-1,0]].map(([dx,dy]) => {
                   const nx = cx + dx, ny = cy + dy;
                   return (nx >= 0 && nx < lab.width && ny >= 0 && ny < lab.height) ? getClearance(nx, ny) : 0;
                 })) : clearance;
                 const effectiveClearance = isWallCell ? adjacentClearance : clearance;
-                // Fog all uncleared cells (hides artifacts); fog zones add extra darkness
-                const baseFog = 1 - effectiveClearance;
-                const rawFog = isWallCell ? (hasAdjacentPath ? baseFog : 0) : Math.max(baseFog, fogZoneIntensity);
-                return Math.max(0, rawFog);
+                const rawFog = isWallCell ? (hasAdjacentFog ? 1 : 0) : fogIntensity;
+                return Math.max(0, rawFog * (1 - effectiveClearance));
               };
               const getGradientFactor = (cx: number, cy: number): number => {
                 const hAway = playerOnLeft ? Math.max(0, cx - px) : Math.max(0, px - cx);
@@ -2880,16 +2971,15 @@ export default function LabyrinthGame() {
                         return f00 * (1 - fx) * (1 - fy) + f10 * fx * (1 - fy) + f01 * (1 - fx) * fy + f11 * fx * fy;
                       })();
                   if (effectiveFog <= 0) return <div key={`${gx}-${gy}`} />;
-                  const baseOpacity = 0.1 + effectiveFog * 0.85;
+                  const baseOpacity = 0.15 + effectiveFog * 0.82;
                   const gradientFactor = getGradientFactor(mx, my);
-                  const opacity = Math.max(0.05, Math.min(1, baseOpacity + 0.2 * gradientFactor));
-                  const opacityEdge = opacity * 0.5;
+                  const opacity = Math.max(0.12, Math.min(1, baseOpacity + 0.15 * gradientFactor));
                   return (
                     <div
                       key={`${gx}-${gy}`}
                       style={{
-                        background: `radial-gradient(ellipse 90% 90% at 50% 50%, rgba(4,4,12,${opacity}), rgba(4,4,12,${opacityEdge}))`,
-                        boxShadow: `inset 0 0 4px rgba(0,0,4,${opacity * 0.2})`,
+                        background: `linear-gradient(135deg, rgba(4,4,14,${opacity}), rgba(2,2,8,${opacity * 0.95}))`,
+                        boxShadow: `inset 0 0 6px rgba(0,0,0,${opacity * 0.4})`,
                       }}
                     />
                   );
