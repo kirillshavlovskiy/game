@@ -21,8 +21,10 @@ import {
   getCollectibleOwner,
   getMonsterName,
   getMonsterDefense,
+  getMonsterDamageRange,
   isArtifactCell,
   isTrapCell,
+  isWalkable,
   TRAP_LOSE_TURN,
   TRAP_HARM,
   TRAP_TELEPORT,
@@ -34,7 +36,7 @@ import {
   type MonsterType,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
-import { resolveCombat, getMonsterHint, getMonsterBonusReward, type CombatResult } from "@/lib/combatSystem";
+import { resolveCombat, getMonsterHint, getMonsterBonusReward, getSurpriseDefenseModifier, type CombatResult, type MonsterSurpriseState } from "@/lib/combatSystem";
 import { drawEvent, applyEvent } from "@/lib/eventDeck";
 import { applyDraculaTeleport, applyDraculaAttack } from "@/lib/draculaAI";
 import { DRACULA_CONFIG } from "@/lib/labyrinth";
@@ -57,7 +59,46 @@ const CELL_SIZE = 44;
  */
 
 function getMonsterIcon(type: MonsterType): string {
-  return type === "V" ? "🧛" : type === "Z" ? "🧟" : type === "G" ? "👻" : type === "K" ? "💀" : "🕷";
+  return type === "V" ? "🧛" : type === "Z" ? "🧟" : type === "G" ? "👻" : type === "K" ? "💀" : type === "L" ? "🔥" : "🕷";
+}
+
+/** Monster combat state: idle = player initiated (easiest), hunt = neutral, attack/angry = monster aggressive (worst) */
+type MonsterCombatState = "idle" | "hunt" | "attack" | "angry";
+
+/** Lava Elemental sprite states from manifest */
+function getLavaElementalSprite(type: MonsterType, state: "neutral" | "attacking" | "hurt" | "defeated" | "angry" | "enraged"): string | null {
+  if (type !== "L") return null;
+  return `/monsters/lava/${state}.png`;
+}
+
+/** Unified monster sprite: returns image path for monsters with assets, null for emoji fallback. */
+function getMonsterSprite(type: MonsterType, state: MonsterCombatState | "rolling" | "hurt" | "defeated" | "neutral" | "recover"): string | null {
+  if (type === "L") {
+    if (state === "neutral" || state === "idle" || state === "hunt") return "/monsters/lava/neutral.png";
+    if (state === "attack" || state === "rolling") return "/monsters/lava/attacking.png";
+    if (state === "angry") return "/monsters/lava/angry.png";
+    if (state === "hurt") return "/monsters/lava/hurt.png";
+    if (state === "defeated") return "/monsters/lava/defeated.png";
+    return "/monsters/lava/neutral.png";
+  }
+  if (type === "V") {
+    if (state === "neutral" || state === "idle") return "/monsters/dracula/idle.png";
+    if (state === "hunt") return "/monsters/dracula/hunt.png";
+    if (state === "attack" || state === "angry" || state === "rolling") return "/monsters/dracula/attack.png";
+    if (state === "hurt" || state === "recover") return "/monsters/dracula/hurt.png";
+    if (state === "defeated") return "/monsters/dracula/defeated.png";
+    return "/monsters/dracula/idle.png";
+  }
+  return null; // Z, G, K, S use emoji with state-based styling
+}
+
+/** Idle sprite for monsters with all 6 states in assets. Use instead of emoji on grid etc. */
+const MONSTER_IDLE_PATHS: Partial<Record<MonsterType, string>> = {
+  L: "/monsters/lava/neutral.png",
+  V: "/monsters/dracula/idle.png",
+};
+function getMonsterIdleSprite(type: MonsterType): string | null {
+  return MONSTER_IDLE_PATHS[type] ?? null;
 }
 
 function getParabolicArcPath(from: [number, number], to: [number, number], cellSize: number, steps = 16): string {
@@ -216,6 +257,7 @@ export default function LabyrinthGame() {
     prevY?: number;
   } | null>(null);
   const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; shieldAbsorbed?: boolean; draculaWeakened?: boolean }) | null>(null);
+  const [combatVictoryPhase, setCombatVictoryPhase] = useState<"hurt" | "defeated">("hurt");
   const [collisionEffect, setCollisionEffect] = useState<{ x: number; y: number } | null>(null);
   const [turnChangeEffect, setTurnChangeEffect] = useState<number | null>(null);
   const [combatUseShield, setCombatUseShield] = useState(true);
@@ -231,6 +273,8 @@ export default function LabyrinthGame() {
   const movesLeftRef = useRef(0);
   const winnerRef = useRef(winner);
   const combatStateRef = useRef(combatState);
+  const combatSurpriseRef = useRef<MonsterSurpriseState>("hunt");
+  const combatHasRolledRef = useRef(false);
   const combatUseShieldRef = useRef(true);
   const combatUseDiceBonusRef = useRef(true);
   const currentPlayerRef = useRef(currentPlayer);
@@ -363,11 +407,23 @@ export default function LabyrinthGame() {
     const key = `${combatState.playerIndex}-${combatState.monsterIndex}`;
     if (prevCombatKeyRef.current === key) return;
     prevCombatKeyRef.current = key;
+    setRolling(false); // Ensure not stuck in "Rolling..." when combat opens
+    combatHasRolledRef.current = false; // Reset so we don't show surprise state until user rolls
     const p = lab.players[combatState.playerIndex];
     setCombatUseShield((p?.shield ?? 0) > 0);
     setCombatUseDiceBonus((p?.diceBonus ?? 0) > 0);
   }, [combatState, lab]);
 
+  // Victory phase: show hurt → defeated transition when player wins combat
+  useEffect(() => {
+    if (!combatResult?.won) {
+      setCombatVictoryPhase("hurt");
+      return;
+    }
+    setCombatVictoryPhase("hurt");
+    const t = setTimeout(() => setCombatVictoryPhase("defeated"), 1400);
+    return () => clearTimeout(t);
+  }, [combatResult?.won]);
 
   useEffect(() => {
     setPlayerNames((prev) => {
@@ -645,9 +701,9 @@ export default function LabyrinthGame() {
     }
   }, [getDimensions, numPlayers, newGame, difficulty]);
 
-  const handleRollComplete = useCallback((value: number) => {
+  const handleCombatRollComplete = useCallback((value: number) => {
     const combat = combatStateRef.current;
-    if (combat) {
+    if (!combat) return;
       // Combat roll: resolve and update state (dice always rolled before fight)
       const p = lab?.players[combat.playerIndex];
       const attackBonus = Math.min(1, p?.attackBonus ?? 0); // 0-1 from defeating Dracula
@@ -656,9 +712,23 @@ export default function LabyrinthGame() {
       const effectiveRoll = value + (useDiceBonus ? 1 : 0);
       const monster = lab?.monsters[combat.monsterIndex];
       const skeletonHasShield = combat.monsterType === "K" && (monster?.hasShield ?? true);
-      const result = resolveCombat(effectiveRoll, attackBonus, combat.monsterType, skeletonHasShield);
+      const surpriseState = combatSurpriseRef.current;
+      const surpriseModifier = getSurpriseDefenseModifier(surpriseState);
+      const result = resolveCombat(effectiveRoll, attackBonus, combat.monsterType, skeletonHasShield, surpriseModifier);
+
+      // Second attempt: idle/hunt + dice 1-3 on miss = retry, no damage. Attack/angry = HP damage.
+      const canSecondAttempt = !result.won && (surpriseState === "idle" || surpriseState === "hunt") && value <= 3;
+      if (canSecondAttempt) {
+        setCombatResult({ ...result, monsterType: combat.monsterType, secondAttempt: true });
+        setRolling(false);
+        combatSurpriseRef.current = "hunt";
+        setTimeout(() => setCombatResult(null), 2600);
+        return;
+      }
+
       setCombatResult({ ...result, monsterType: combat.monsterType });
       setRolling(false);
+      combatSurpriseRef.current = "hunt"; // reset for next combat
       setLab((prev) => {
         if (!prev || winnerRef.current !== null) return prev;
         const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
@@ -720,7 +790,7 @@ export default function LabyrinthGame() {
           setCombatState(null);
           setCombatUseShield(true);
           setCombatUseDiceBonus(true);
-          setTimeout(() => setCombatResult(null), 2000);
+          setTimeout(() => setCombatResult(null), 2800);
           return next;
         }
 
@@ -734,7 +804,7 @@ export default function LabyrinthGame() {
               setCombatState(null);
               setCombatUseShield(true);
               setCombatUseDiceBonus(true);
-              setTimeout(() => setCombatResult(null), 2000);
+              setTimeout(() => setCombatResult(null), 2800);
               return next;
             }
           }
@@ -859,9 +929,12 @@ export default function LabyrinthGame() {
       setCombatState(null);
       setCombatUseShield(true);
       setCombatUseDiceBonus(true);
-      setTimeout(() => setCombatResult(null), 2000);
+      setTimeout(() => setCombatResult(null), 2800);
       return;
-    }
+  }, []);
+
+  const handleMovementRollComplete = useCallback((value: number) => {
+    if (combatStateRef.current) return;
     const p = lab?.players[currentPlayerRef.current];
     const bonus = p?.diceBonus ?? 0;
     let totalValue = Math.min(6, value + bonus);
@@ -934,10 +1007,73 @@ export default function LabyrinthGame() {
 
   const rollDice = useCallback(async () => {
     if (winner !== null || !lab) return;
-    if (!combatState && movesLeft > 0) return;
+    if (combatState) return;
+    if (movesLeft > 0) return;
     setRolling(true);
     await diceRef.current?.roll();
   }, [lab, movesLeft, winner, combatState]);
+
+  const handleCombatRollClick = useCallback(() => {
+    if (rolling) return;
+    combatHasRolledRef.current = true; // Only show surprise state/size after user clicks
+    const surpriseRoll = Math.floor(Math.random() * 4);
+    combatSurpriseRef.current = surpriseRoll === 0 ? "idle" : surpriseRoll === 1 ? "hunt" : surpriseRoll === 2 ? "attack" : "angry";
+    setRolling(true);
+    const rollResult = combatDiceRef.current?.roll();
+    if (rollResult) {
+      rollResult.catch(() => setRolling(false));
+    } else {
+      const v = Math.floor(Math.random() * 6) + 1;
+      handleCombatRollComplete(v);
+    }
+  }, [rolling, handleCombatRollComplete]);
+
+  const handleRunAway = useCallback(() => {
+    const combat = combatStateRef.current;
+    if (!combat || rolling) return;
+    if (movesLeftRef.current <= 0) return;
+    movesLeftRef.current--;
+    setMovesLeft(movesLeftRef.current);
+    setCombatState(null);
+    setCombatUseShield(true);
+    setCombatUseDiceBonus(true);
+    setLab((prev) => {
+      if (!prev || winnerRef.current !== null) return prev;
+      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
+      next.grid = prev.grid.map((r) => [...r]);
+      next.players = prev.players.map((p) => ({ ...p }));
+      next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+      next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+      next.hiddenCells = new Map(prev.hiddenCells);
+      next.webPositions = [...(prev.webPositions || [])];
+      next.fogZones = new Map(prev.fogZones || new Map());
+      next.goalX = prev.goalX;
+      next.goalY = prev.goalY;
+      const pi = combat.playerIndex;
+      const p = next.players[pi];
+      if (!p) return prev;
+      let retreatX: number;
+      let retreatY: number;
+      if (combat.prevX !== undefined && combat.prevY !== undefined) {
+        retreatX = combat.prevX;
+        retreatY = combat.prevY;
+      } else {
+        const dirs: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+        const retreat = dirs.find(([dx, dy]) => {
+          const nx = p.x + dx;
+          const ny = p.y + dy;
+          return nx >= 0 && nx < next.width && ny >= 0 && ny < next.height && isWalkable(next.grid[ny][nx]) &&
+            !next.monsters.some((mo) => mo.x === nx && mo.y === ny);
+        });
+        if (!retreat) return prev;
+        retreatX = p.x + retreat[0];
+        retreatY = p.y + retreat[1];
+      }
+      p.x = retreatX;
+      p.y = retreatY;
+      return next;
+    });
+  }, [rolling]);
 
   const triggerRoundEnd = useCallback(() => {
     setLab((prev) => {
@@ -1403,7 +1539,7 @@ export default function LabyrinthGame() {
     }
     const t = setTimeout(() => rollDice(), 400);
     return () => clearTimeout(t);
-  }, [lab, winner, movesLeft, rolling, rollDice, currentPlayer, catapultPicker, teleportPicker, passThroughMagic]);
+  }, [lab, winner, movesLeft, rolling, rollDice, currentPlayer, catapultPicker, teleportPicker, passThroughMagic, combatState]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1450,7 +1586,7 @@ export default function LabyrinthGame() {
   const cp = lab?.players[currentPlayer];
   const gameOver = winner !== null;
   const moveDisabled = movesLeft <= 0 || gameOver || (lab?.eliminatedPlayers.has(currentPlayer) ?? false) || passThroughMagic;
-  const rollDisabled = (!combatState && movesLeft > 0) || gameOver || rolling || !!catapultPicker || !!teleportPicker || passThroughMagic;
+  const rollDisabled = !!combatState || (!combatState && movesLeft > 0) || gameOver || rolling || !!catapultPicker || !!teleportPicker || passThroughMagic;
   const showSecretCells = movesLeft > 0;
   const jumpTargets = lab && cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
   const canMoveUp = !moveDisabled && lab?.canMoveOnly(0, -1, currentPlayer);
@@ -1894,35 +2030,56 @@ export default function LabyrinthGame() {
       )}
 
       {(combatState || combatResult) && (!combatState || combatState.playerIndex === currentPlayer) && (
-        <div style={combatModalOverlayStyle}>
+        <div style={combatModalOverlayStyle} onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
           <div style={combatModalStyle} onClick={(e) => e.stopPropagation()}>
             <h2 style={combatModalTitleStyle}>
-              <span style={{ marginRight: 8 }}>{combatState ? getMonsterIcon(combatState.monsterType) : combatResult?.monsterType ? getMonsterIcon(combatResult.monsterType) : "👹"}</span>
+              {(() => {
+                const mt = combatState?.monsterType ?? combatResult?.monsterType;
+                const idleSrc = mt && getMonsterIdleSprite(mt);
+                return idleSrc ? (
+                  <img src={idleSrc} alt="" style={{ width: 48, height: 48, verticalAlign: "middle", marginRight: 12 }} />
+                ) : (
+                  <span style={{ marginRight: 12, fontSize: "2rem" }}>{combatState ? getMonsterIcon(combatState.monsterType) : combatResult?.monsterType ? getMonsterIcon(combatResult.monsterType) : "👹"}</span>
+                );
+              })()}
               ⚔️ Combat vs {combatState ? getMonsterName(combatState.monsterType) : combatResult?.monsterType ? getMonsterName(combatResult.monsterType) : "Monster"}
             </h2>
             {combatResult ? (
-              <div style={combatResultSectionStyle}>
+              <div style={{ ...combatResultSectionStyle, flex: 1, justifyContent: "center", gap: 16 }}>
+                {combatResult.monsterType && getMonsterSprite(combatResult.monsterType, combatResult.secondAttempt ? "idle" : combatResult.draculaWeakened ? "recover" : combatResult.won ? (combatVictoryPhase === "defeated" ? "defeated" : "hurt") : combatResult.shieldAbsorbed ? "angry" : "hurt") ? (
+                  <img
+                    src={getMonsterSprite(combatResult.monsterType, combatResult.secondAttempt ? "idle" : combatResult.draculaWeakened ? "recover" : combatResult.won ? (combatVictoryPhase === "defeated" ? "defeated" : "hurt") : combatResult.shieldAbsorbed ? "angry" : "hurt")!}
+                    alt={getMonsterName(combatResult.monsterType)}
+                    style={{ width: 180, height: 180, objectFit: "contain", marginBottom: 12 }}
+                  />
+                ) : (
+                  <span style={{ fontSize: "7rem", lineHeight: 1, marginBottom: 12 }} title={getMonsterName(combatResult.monsterType)}>
+                    {getMonsterIcon(combatResult.monsterType)}
+                  </span>
+                )}
                 <div style={{
                   ...combatResultBannerStyle,
-                  borderColor: combatResult.draculaWeakened ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
-                  background: combatResult.draculaWeakened ? "rgba(255,102,0,0.2)" : combatResult.monsterEffect === "skeleton_shield" ? "rgba(255,204,0,0.15)" : combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)",
+                  borderColor: combatResult.secondAttempt ? "#ffcc00" : combatResult.draculaWeakened ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
+                  background: combatResult.secondAttempt ? "rgba(255,204,0,0.2)" : combatResult.draculaWeakened ? "rgba(255,102,0,0.2)" : combatResult.monsterEffect === "skeleton_shield" ? "rgba(255,204,0,0.15)" : combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)",
                 }}>
                   <span style={{
-                    color: combatResult.draculaWeakened ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
+                    color: combatResult.secondAttempt ? "#ffcc00" : combatResult.draculaWeakened ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
                     fontSize: "1.3rem",
                     fontWeight: "bold",
                   }}>
-                    {combatResult.draculaWeakened
-                      ? "🧛 Dracula weakened! One more hit!"
-                      : combatResult.monsterEffect === "skeleton_shield"
-                        ? "💀 Shield broken! Try again next turn."
-                        : combatResult.won
-                          ? (combatResult.reward ? `WIN! +${combatResult.reward.type === "jump" ? "1 jump" : combatResult.reward.type === "hp" ? "1 HP" : combatResult.reward.type === "shield" ? "1 shield" : combatResult.reward.type === "attackBonus" ? "1 attack" : "1 move"}` : "You are lucky! Monster defeated!")
-                          : combatResult.shieldAbsorbed
-                            ? "🛡 Shield absorbed!"
-                            : combatResult.monsterEffect === "ghost_evade"
-                              ? "👻 Attack missed!"
-                              : `✗ -${combatResult.damage} HP`}
+                    {combatResult.secondAttempt
+                      ? "🎲 Second attempt! Roll again — monster was caught off guard!"
+                      : combatResult.draculaWeakened
+                        ? "🧛 Dracula weakened! One more hit!"
+                        : combatResult.monsterEffect === "skeleton_shield"
+                          ? "💀 Shield broken! Try again next turn."
+                          : combatResult.won
+                            ? (combatResult.reward ? `WIN! +${combatResult.reward.type === "jump" ? "1 jump" : combatResult.reward.type === "hp" ? "1 HP" : combatResult.reward.type === "shield" ? "1 shield" : combatResult.reward.type === "attackBonus" ? "1 attack" : "1 move"}` : "You are lucky! Monster defeated!")
+                            : combatResult.shieldAbsorbed
+                              ? "🛡 Shield absorbed!"
+                              : combatResult.monsterEffect === "ghost_evade"
+                                ? "👻 Attack missed!"
+                                : `✗ -${combatResult.damage} HP`}
                   </span>
                 </div>
                 <div style={combatStatsStyle}>
@@ -1933,27 +2090,85 @@ export default function LabyrinthGame() {
                 </div>
               </div>
             ) : combatState ? (
+              (() => {
+                // State/size only change after user clicks Roll; before that show stable neutral
+                const isRollingActive = rolling && combatHasRolledRef.current;
+                const displayState = isRollingActive ? combatSurpriseRef.current : "neutral";
+                const [dmgMin, dmgMax] = getMonsterDamageRange(combatState.monsterType);
+                const stateStyles = {
+                  neutral: { bg: "linear-gradient(135deg, rgba(40,40,50,0.7) 0%, rgba(25,25,35,0.9) 100%)", border: "#666", glow: "rgba(100,100,120,0.3)", label: null },
+                  idle: { bg: "linear-gradient(135deg, rgba(30,80,40,0.7) 0%, rgba(15,50,25,0.9) 100%)", border: "#44ff88", glow: "rgba(68,255,136,0.5)", label: "IDLE" },
+                  hunt: { bg: "linear-gradient(135deg, rgba(80,60,20,0.6) 0%, rgba(50,40,10,0.8) 100%)", border: "#ffcc00", glow: "rgba(255,204,0,0.4)", label: "HUNT" },
+                  attack: { bg: "linear-gradient(135deg, rgba(120,30,30,0.8) 0%, rgba(60,15,15,0.95) 100%)", border: "#ff6666", glow: "rgba(255,80,80,0.6)", label: "ATTACKING" },
+                  angry: { bg: "linear-gradient(135deg, rgba(100,20,20,0.9) 0%, rgba(80,10,10,0.98) 100%)", border: "#ff3333", glow: "rgba(255,50,50,0.7)", label: "ANGRY" },
+                };
+                const style = stateStyles[displayState as keyof typeof stateStyles] ?? stateStyles.neutral;
+                return (
               <div style={combatRollSectionStyle}>
-                <div style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 12,
-                  marginBottom: 12,
-                  padding: "12px 20px",
-                  background: "linear-gradient(135deg, rgba(80,20,20,0.6) 0%, rgba(40,10,10,0.8) 100%)",
-                  borderRadius: 12,
-                  border: "2px solid #ff6666",
-                  boxShadow: "inset 0 0 20px rgba(255,80,80,0.2)",
-                }}>
-                  <span style={{ fontSize: "3.5rem", lineHeight: 1 }} title={getMonsterName(combatState.monsterType)}>
-                    {getMonsterIcon(combatState.monsterType)}
-                  </span>
-                  <span style={{ color: "#ff9999", fontSize: "1rem" }}>vs</span>
+                <div
+                  className={isRollingActive ? "combat-attacking" : undefined}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flex: 1,
+                    gap: 8,
+                    padding: isRollingActive ? "16px" : "12px",
+                    background: style.bg,
+                    borderRadius: 14,
+                    border: `3px solid ${style.border}`,
+                    boxShadow: `inset 0 0 30px ${style.glow}, 0 0 24px ${style.glow}`,
+                    minHeight: isRollingActive ? 260 : 200,
+                  }}
+                >
+                  {getMonsterSprite(combatState.monsterType, displayState) ? (
+                    <img
+                      src={getMonsterSprite(combatState.monsterType, displayState)!}
+                      alt={getMonsterName(combatState.monsterType)}
+                      style={{
+                        width: isRollingActive ? 220 : 160,
+                        height: isRollingActive ? 220 : 160,
+                        objectFit: "contain",
+                        transition: "width 0.5s, height 0.5s",
+                      }}
+                    />
+                  ) : (
+                    <span
+                      style={{
+                        fontSize: isRollingActive ? "8rem" : "6rem",
+                        lineHeight: 1,
+                        transition: "font-size 0.5s",
+                        filter: displayState === "neutral" ? undefined : displayState === "idle" ? "brightness(1.2) saturate(0.9)" : (displayState === "attack" || displayState === "angry") ? "brightness(1.1) drop-shadow(0 0 12px rgba(255,80,80,0.8))" : undefined,
+                      }}
+                      title={getMonsterName(combatState.monsterType)}
+                    >
+                      {getMonsterIcon(combatState.monsterType)}
+                    </span>
+                  )}
                   <span style={{ color: "#ffcc00", fontSize: "1.1rem", fontWeight: "bold" }}>{getMonsterName(combatState.monsterType)}</span>
+                  {style.label != null && (
+                    <span
+                      style={{
+                        fontSize: "0.75rem",
+                        fontWeight: "bold",
+                        letterSpacing: "0.1em",
+                        padding: "4px 10px",
+                        borderRadius: 6,
+                        background: displayState === "idle" ? "rgba(68,255,136,0.3)" : displayState === "hunt" ? "rgba(255,204,0,0.3)" : "rgba(255,80,80,0.4)",
+                        border: `1px solid ${style.border}`,
+                        color: style.border,
+                      }}
+                    >
+                      {style.label}
+                    </span>
+                  )}
                 </div>
+                {!rolling && (
+                <>
                 <div style={combatMonsterInfoStyle}>
                   Defense: <strong>{getMonsterDefense(combatState.monsterType)}</strong>
+                  <span style={{ marginLeft: 8, color: "#ff8888" }}>• Damage: {dmgMin}-{dmgMax}</span>
                   {lab?.players[combatState.playerIndex] && (lab.players[combatState.playerIndex]?.attackBonus ?? 0) > 0 && (
                     <span style={{ marginLeft: 12, color: "#ffcc00" }}>
                       (Attack +{lab.players[combatState.playerIndex]?.attackBonus ?? 0})
@@ -1991,10 +2206,12 @@ export default function LabyrinthGame() {
                     <span style={{ color: "#666", fontSize: "0.85rem" }}>No artifacts available</span>
                   )}
                 </div>
-                <div style={{ color: "#888", fontSize: "0.85rem", marginBottom: 8 }}>Roll dice when ready (manual)</div>
+                </>
+                )}
+                <div style={{ color: "#ffcc00", fontSize: "1rem", fontWeight: "bold", marginBottom: 8, marginTop: 4 }}>🎲 {rolling ? "Rolling..." : "Roll dice to attack"}</div>
                 <div
                   className="combat-dice"
-                  onClick={() => !rolling && (combatDiceRef.current?.roll() ?? (() => { const v = Math.floor(Math.random() * 6) + 1; handleRollComplete(v); })())}
+                  onClick={handleCombatRollClick}
                   style={{
                     cursor: rolling ? "default" : "pointer",
                     width: DICE_PANEL_WIDTH,
@@ -2022,30 +2239,44 @@ export default function LabyrinthGame() {
                       justifyContent: "center",
                       pointerEvents: "none",
                       color: "#ffcc00",
-                      opacity: 0.8,
+                      opacity: rolling ? 0.3 : 0.8,
                       zIndex: 0,
                     }}
                   >
                     <span style={{ fontSize: "2.5rem", marginBottom: 4 }}>🎲</span>
-                    <span style={{ fontSize: "0.8rem", fontWeight: "bold" }}>Click to roll</span>
+                    <span style={{ fontSize: "0.8rem", fontWeight: "bold" }}>{rolling ? "Rolling..." : "Click to roll"}</span>
                   </div>
                   <div style={{ position: "relative", zIndex: 1, width: "100%", height: "100%", minHeight: 120 }}>
                     <Dice3D
                       ref={combatDiceRef}
-                      onRollComplete={handleRollComplete}
+                      onRollComplete={handleCombatRollComplete}
                       disabled={rolling}
                     />
                   </div>
                 </div>
                 <div style={{ fontSize: "0.8rem", color: "#888", marginTop: 6 }}>Click dice area or button below to roll</div>
-                <button
-                  onClick={() => !rolling && combatDiceRef.current?.roll()}
-                  disabled={rolling}
-                  style={{ ...buttonStyle, marginTop: 8, background: "#ffcc00", color: "#111" }}
-                >
-                  {rolling ? "Rolling..." : "Roll to attack"}
-                </button>
+                <div style={{ display: "flex", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
+                  <button
+                    onClick={handleCombatRollClick}
+                    disabled={rolling}
+                    style={{ ...buttonStyle, flex: 1, minWidth: 140, background: "#ffcc00", color: "#111" }}
+                  >
+                    {rolling ? "Rolling..." : "Roll to attack"}
+                  </button>
+                  {movesLeft > 0 && (
+                    <button
+                      onClick={handleRunAway}
+                      disabled={rolling}
+                      style={{ ...buttonStyle, flex: 1, minWidth: 140, background: "#666", color: "#fff", border: "1px solid #888" }}
+                      title="Retreat to previous cell (costs 1 move)"
+                    >
+                      🏃 Run away
+                    </button>
+                  )}
+                </div>
               </div>
+                );
+              })()
             ) : null}
           </div>
         </div>
@@ -2235,9 +2466,20 @@ export default function LabyrinthGame() {
               const wouldHaveFog = !(hasTorch || isVisited || isPlayerCell) && (isWallCell ? adjacentFog : (fogIntensity ?? 0) > 0);
 
               const monsterIcon = monster && !wouldHaveFog ? (
-                <span key="m" className="monster-icon" style={{ fontSize: "1.4rem", lineHeight: 1 }} title={getMonsterName(monster.type)}>
-                  {monster.type === "V" ? "🧛" : monster.type === "Z" ? "🧟" : monster.type === "G" ? "👻" : monster.type === "K" ? "💀" : "🕷"}
-                </span>
+                getMonsterIdleSprite(monster.type) ? (
+                  <img
+                    key="m"
+                    src={getMonsterIdleSprite(monster.type)!}
+                    alt={getMonsterName(monster.type)}
+                    className="monster-icon"
+                    style={{ width: 36, height: 36, objectFit: "contain" }}
+                    title={getMonsterName(monster.type)}
+                  />
+                ) : (
+                  <span key="m" className="monster-icon" style={{ fontSize: "1.75rem", lineHeight: 1 }} title={getMonsterName(monster.type)}>
+                    {getMonsterIcon(monster.type)}
+                  </span>
+                )
               ) : null;
               if (monster) cellClass += " path monster";
               const draculaTelegraph = monster?.type === "V" && (monster.draculaState === "telegraphTeleport" || monster.draculaState === "telegraphAttack");
@@ -2772,6 +3014,8 @@ export default function LabyrinthGame() {
           padding: "0.5rem",
           borderRadius: 8,
           border: "1px solid #333",
+          visibility: combatState ? "hidden" : "visible",
+          pointerEvents: combatState ? "none" : "auto",
         }}
       >
         <div
@@ -2787,7 +3031,7 @@ export default function LabyrinthGame() {
         >
           <Dice3D
             ref={diceRef}
-            onRollComplete={handleRollComplete}
+            onRollComplete={handleMovementRollComplete}
             disabled={rollDisabled}
           />
         </div>
@@ -3189,24 +3433,28 @@ const combatModalOverlayStyle: React.CSSProperties = {
 };
 
 const combatModalStyle: React.CSSProperties = {
-  background: "#1a1a24",
+  background: "linear-gradient(180deg, #1e1e2a 0%, #16161e 100%)",
   padding: "2rem",
-  borderRadius: 12,
-  border: "2px solid #ffcc00",
-  boxShadow: "0 0 40px rgba(255,204,0,0.3)",
-  minWidth: 320,
-  maxWidth: 420,
+  borderRadius: 16,
+  border: "3px solid #ffcc00",
+  boxShadow: "0 0 60px rgba(255,204,0,0.4), inset 0 0 40px rgba(0,0,0,0.3)",
+  width: 500,
+  maxWidth: "95vw",
+  maxHeight: "90vh",
+  overflowY: "auto",
+  overflowX: "hidden",
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
 };
 
 const combatModalTitleStyle: React.CSSProperties = {
-  margin: "0 0 1.5rem 0",
+  margin: "0 0 1rem 0",
   color: "#ffcc00",
-  fontSize: "1.4rem",
+  fontSize: "1.35rem",
   fontWeight: "bold",
   textAlign: "center",
+  flexShrink: 0,
 };
 
 const combatRollSectionStyle: React.CSSProperties = {
@@ -3231,18 +3479,18 @@ const combatResultSectionStyle: React.CSSProperties = {
 };
 
 const combatResultBannerStyle: React.CSSProperties = {
-  padding: "1rem 1.5rem",
-  borderRadius: 8,
+  padding: "1.2rem 1.8rem",
+  borderRadius: 10,
   border: "2px solid",
-  fontSize: "1.1rem",
+  fontSize: "1.25rem",
 };
 
 const combatStatsStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 4,
+  gap: 6,
   color: "#888",
-  fontSize: "0.9rem",
+  fontSize: "1rem",
 };
 
 const modalStyle: React.CSSProperties = {
