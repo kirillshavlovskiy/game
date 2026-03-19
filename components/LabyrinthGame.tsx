@@ -109,7 +109,8 @@ function getMonsterSprite(type: MonsterType, state: MonsterCombatState | "rollin
     if (state === "neutral" || state === "idle") return "/monsters/zombie/idle.png";
     if (state === "hunt") return "/monsters/zombie/hunt.png";
     if (state === "attack" || state === "angry" || state === "rolling") return "/monsters/zombie/attack.png";
-    if (state === "hurt" || state === "recover") return "/monsters/zombie/hurt.png";
+    if (state === "hurt") return "/monsters/zombie/hurt.png";
+    if (state === "recover") return "/monsters/zombie/recover.png";
     if (state === "defeated") return "/monsters/zombie/defeated.png";
     return "/monsters/zombie/idle.png";
   }

@@ -37,6 +37,7 @@
   ],
   "exclude": [
     "node_modules",
-    "_old.tsx"
+    "_old.tsx",
+    "phaser"
   ]
 }
