@@ -2212,7 +2212,7 @@ export default function LabyrinthGame() {
                                     combatResult.reward?.type === "hp" && "❤️ +1 HP",
                                     combatResult.reward?.type === "shield" && "🛡 +1 shield",
                                     combatResult.reward?.type === "attackBonus" && "⚔️ +1 attack",
-                                    combatResult.reward?.type === "bonusMoves" && "🎯 +2 moves",
+                                    combatResult.reward?.type === "movement" && "🎯 +1 move",
                                     combatResult.bonusReward?.type === "artifact" && "✨ +1 artifact",
                                     combatResult.bonusReward?.type === "bonusMoves" && "🎯 +2 moves",
                                     combatResult.bonusReward?.type === "shield" && "🛡 +1 shield",
@@ -2234,7 +2234,7 @@ export default function LabyrinthGame() {
                     {combatResult.reward?.type === "hp" && <span style={{ fontSize: "1.8rem" }} title="+1 HP">❤️</span>}
                     {combatResult.reward?.type === "shield" && <span style={{ fontSize: "1.8rem" }} title="+1 shield">🛡</span>}
                     {combatResult.reward?.type === "attackBonus" && <span style={{ fontSize: "1.8rem" }} title="+1 attack">⚔️</span>}
-                    {combatResult.reward?.type === "bonusMoves" && <span style={{ fontSize: "1.8rem" }} title="+2 moves">🎯</span>}
+                    {combatResult.reward?.type === "movement" && <span style={{ fontSize: "1.8rem" }} title="+1 move">🎯</span>}
                     {combatResult.bonusReward?.type === "artifact" && <span style={{ fontSize: "1.8rem", filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }} title="+1 artifact">✨</span>}
                     {combatResult.bonusReward?.type === "bonusMoves" && <span style={{ fontSize: "1.8rem" }} title="+2 moves">🎯</span>}
                     {combatResult.bonusReward?.type === "shield" && <span style={{ fontSize: "1.8rem" }} title="+1 shield">🛡</span>}
