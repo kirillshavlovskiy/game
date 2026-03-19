@@ -180,6 +180,7 @@ export class Labyrinth {
     artifactsCollected?: string[];
     diceBonus?: number; // +1 to next roll from A1
     attackBonus?: number; // +1 attack from defeating Dracula
+    catapultCharges?: number; // bonus from monster defeat - launch without standing on C cell
     hasTeleportArtifact?: boolean; // A3
     hasTorch?: boolean; // from hidden gem - clears fog zones
     loseNextMove?: boolean; // Zombie won: lose 1 movement next turn
@@ -232,6 +233,7 @@ export class Labyrinth {
       artifacts: 0,
       artifactsCollected: [] as string[],
       diceBonus: 0,
+      catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
     }));
@@ -781,6 +783,7 @@ export class Labyrinth {
       artifacts: 0,
       artifactsCollected: [] as string[],
       diceBonus: 0,
+      catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
     }));
@@ -835,6 +838,7 @@ export class Labyrinth {
       artifacts: 0,
       artifactsCollected: [] as string[],
       diceBonus: 0,
+      catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
     }));
