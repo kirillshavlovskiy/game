@@ -24,6 +24,30 @@ export type MonsterReward =
   | { type: "shield"; amount: number }
   | { type: "attackBonus"; amount: number };
 
+/** Bonus reward types (50% chance on monster defeat) */
+export type MonsterBonusReward =
+  | { type: "artifact"; amount: number }
+  | { type: "bonusMoves"; amount: number }
+  | { type: "shield"; amount: number }
+  | { type: "jump"; amount: number }
+  | { type: "catapult"; amount: number }
+  | { type: "diceBonus"; amount: number };
+
+const BONUS_REWARDS: MonsterBonusReward[] = [
+  { type: "artifact", amount: 1 },
+  { type: "bonusMoves", amount: 1 },
+  { type: "shield", amount: 1 },
+  { type: "jump", amount: 1 },
+  { type: "catapult", amount: 1 },
+  { type: "diceBonus", amount: 1 },
+];
+
+/** 50% chance to return a random bonus reward on monster defeat */
+export function getMonsterBonusReward(): MonsterBonusReward | null {
+  if (Math.random() >= 0.5) return null;
+  return BONUS_REWARDS[Math.floor(Math.random() * BONUS_REWARDS.length)]!;
+}
+
 /** Surprise state affects monster defense: idle=easier, angry=harder */
 export function getSurpriseDefenseModifier(state: MonsterSurpriseState): number {
   switch (state) {
