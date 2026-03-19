@@ -37,7 +37,7 @@ import {
   type MonsterType,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
-import { resolveCombat, getMonsterHint, getMonsterBonusReward, getSurpriseDefenseModifier, type CombatResult, type MonsterSurpriseState, type MonsterReward } from "@/lib/combatSystem";
+import { resolveCombat, getMonsterHint, getMonsterBonusReward, getSurpriseDefenseModifier, type CombatResult, type MonsterSurpriseState, type MonsterReward, type MonsterBonusReward } from "@/lib/combatSystem";
 import { drawEvent, applyEvent } from "@/lib/eventDeck";
 import { applyDraculaTeleport, applyDraculaAttack } from "@/lib/draculaAI";
 import { DRACULA_CONFIG } from "@/lib/labyrinth";
@@ -279,7 +279,7 @@ export default function LabyrinthGame() {
     prevX?: number;
     prevY?: number;
   } | null>(null);
-  const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; playerIndex?: number; shieldAbsorbed?: boolean; draculaWeakened?: boolean; monsterWeakened?: boolean; monsterHp?: number; monsterMaxHp?: number; secondAttempt?: boolean; bonusReward?: MonsterReward | null }) | null>(null);
+  const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; playerIndex?: number; shieldAbsorbed?: boolean; draculaWeakened?: boolean; monsterWeakened?: boolean; monsterHp?: number; monsterMaxHp?: number; secondAttempt?: boolean; bonusReward?: MonsterBonusReward | null }) | null>(null);
   const [combatVictoryPhase, setCombatVictoryPhase] = useState<"hurt" | "defeated">("hurt");
   const [defeatedMonsterOnCell, setDefeatedMonsterOnCell] = useState<{ x: number; y: number; monsterType: MonsterType } | null>(null);
   const [collisionEffect, setCollisionEffect] = useState<{ x: number; y: number } | null>(null);
