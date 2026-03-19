@@ -175,10 +175,61 @@ button {
   border-radius: 4px;
 }
 
-/* Fog/darkness zone - gradual opacity from transparent (edge) to opaque (center). Cleared by torch. */
-.cell-fog {
+/* Fog overlay layer - separate layer on top of maze for realistic fog */
+.fog-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   pointer-events: none;
-  transition: opacity 0.2s ease;
+  z-index: 40;
+  overflow: hidden;
+}
+
+.fog-tile {
+  position: absolute;
+  pointer-events: none;
+  transition: opacity 1.4s cubic-bezier(0.25, 0.1, 0.25, 1), filter 1.2s ease-out, transform 1s ease;
+  will-change: opacity;
+}
+
+.fog-tile.fog-clearing {
+  opacity: 0 !important;
+  filter: blur(12px) brightness(1.2);
+  transform: scale(1.1);
+}
+
+/* Fog tile inner - layered for depth */
+.fog-tile-inner {
+  position: absolute;
+  inset: -15%;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse 80% 80% at 50% 50%,
+    rgba(12, 12, 28, 0.3) 0%,
+    rgba(8, 8, 22, 0.7) 40%,
+    rgba(4, 4, 16, 0.95) 70%,
+    rgba(2, 2, 10, 1) 100%
+  );
+  box-shadow:
+    inset 0 0 40% 0 rgba(0, 0, 0, 0.6),
+    inset 0 0 20px 2px rgba(20, 25, 45, 0.4);
+  filter: blur(0.5px);
+}
+
+/* Subtle wispy overlay for organic feel */
+.fog-tile-wisp {
+  position: absolute;
+  inset: -25%;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse 60% 60% at 30% 30%,
+    rgba(15, 18, 35, 0.5) 0%,
+    transparent 70%
+  );
+  opacity: 0.6;
+  filter: blur(2px);
 }
 
 /* Monster icons - ensure consistent rendering */
