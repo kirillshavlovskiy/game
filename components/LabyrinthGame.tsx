@@ -42,6 +42,8 @@ import { applyDraculaTeleport, applyDraculaAttack } from "@/lib/draculaAI";
 import { DRACULA_CONFIG } from "@/lib/labyrinth";
 
 const CELL_SIZE = 44;
+const FOG_GRANULARITY = 1; // 1 = per-cell (performant); 8 = fine-grained but heavy DOM
+const FOG_CLEARANCE_RADIUS = 2; // Cells within this distance of player/visited get fog cleared
 
 /**
  * MOVE POLICY — how moves are consumed/kept per action:
@@ -89,13 +91,22 @@ function getMonsterSprite(type: MonsterType, state: MonsterCombatState | "rollin
     if (state === "defeated") return "/monsters/dracula/defeated.png";
     return "/monsters/dracula/idle.png";
   }
-  return null; // Z, G, K, S use emoji with state-based styling
+  if (type === "Z") {
+    if (state === "neutral" || state === "idle") return "/monsters/zombie/idle.png";
+    if (state === "hunt") return "/monsters/zombie/hunt.png";
+    if (state === "attack" || state === "angry" || state === "rolling") return "/monsters/zombie/attack.png";
+    if (state === "hurt" || state === "recover") return "/monsters/zombie/hurt.png";
+    if (state === "defeated") return "/monsters/zombie/defeated.png";
+    return "/monsters/zombie/idle.png";
+  }
+  return null; // G, K, S use emoji with state-based styling
 }
 
 /** Idle sprite for monsters with all 6 states in assets. Use instead of emoji on grid etc. */
 const MONSTER_IDLE_PATHS: Partial<Record<MonsterType, string>> = {
   L: "/monsters/lava/neutral.png",
   V: "/monsters/dracula/idle.png",
+  Z: "/monsters/zombie/idle.png",
 };
 function getMonsterIdleSprite(type: MonsterType): string | null {
   return MONSTER_IDLE_PATHS[type] ?? null;
@@ -620,6 +631,8 @@ export default function LabyrinthGame() {
     setCombatResult(null);
     setCollisionEffect(null);
     setTurnChangeEffect(null);
+    combatHasRolledRef.current = false;
+    setRolling(false);
   }, [getDimensions, numPlayers, difficulty]);
 
   const generateWithAI = useCallback(async () => {
@@ -1132,6 +1145,7 @@ export default function LabyrinthGame() {
   const doMove = useCallback(
     (dx: number, dy: number, jumpOnly = false) => {
       if (winner !== null || !lab) return;
+      if (combatStateRef.current) return; // Run away only via combat modal
       if (movesLeftRef.current <= 0) return;
       if (passThroughMagicRef.current) return;
       if (teleportTimerRef.current) {
@@ -1355,6 +1369,9 @@ export default function LabyrinthGame() {
         if (collision) {
           const p = next.players[collision.playerIndex];
           setCollisionEffect(p ? { x: p.x, y: p.y } : null);
+          combatHasRolledRef.current = false;
+          combatSurpriseRef.current = "hunt";
+          setRolling(false);
           setCombatState({
             playerIndex: collision.playerIndex,
             monsterType: collision.monsterType,
@@ -1456,6 +1473,9 @@ export default function LabyrinthGame() {
         if (collision) {
           const p = next.players[collision.playerIndex];
           setCollisionEffect(p ? { x: p.x, y: p.y } : null);
+          combatHasRolledRef.current = false;
+          combatSurpriseRef.current = "hunt";
+          setRolling(false);
           setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType, monsterIndex: collision.monsterIndex });
         }
         return next;
@@ -1486,6 +1506,7 @@ export default function LabyrinthGame() {
         e.preventDefault();
         return;
       }
+      if (combatStateRef.current) return; // Movement only via combat modal when in combat
       const map: Record<string, [number, number]> = {
         ArrowUp: [0, -1],
         ArrowDown: [0, 1],
@@ -1523,7 +1544,7 @@ export default function LabyrinthGame() {
   }
   const cp = lab?.players[currentPlayer];
   const gameOver = winner !== null;
-  const moveDisabled = movesLeft <= 0 || gameOver || (lab?.eliminatedPlayers.has(currentPlayer) ?? false) || passThroughMagic;
+  const moveDisabled = movesLeft <= 0 || gameOver || (lab?.eliminatedPlayers.has(currentPlayer) ?? false) || passThroughMagic || !!combatState;
   const rollDisabled = !!combatState || (!combatState && movesLeft > 0) || gameOver || rolling || !!catapultPicker || !!teleportPicker || passThroughMagic;
   const showSecretCells = movesLeft > 0;
   const jumpTargets = lab && cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
@@ -1924,43 +1945,55 @@ export default function LabyrinthGame() {
         </aside>
 
         <div style={mainContentStyle}>
-      {teleportPicker && (
-        <div style={{ ...eliminatedOverlayStyle, pointerEvents: "none" }}>
-          <div style={{ ...eliminatedBannerStyle, borderColor: "#aa66ff", background: "rgba(0,0,0,0.9)", pointerEvents: "none", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ color: "#aa66ff" }}>🌀 Select destination to teleport (click a highlighted cell)</span>
-          </div>
-        </div>
-      )}
-      {catapultPicker && (
-        <div style={{ ...eliminatedOverlayStyle, pointerEvents: "none" }}>
-          <div style={{ ...eliminatedBannerStyle, borderColor: "#ffcc00", background: "rgba(0,0,0,0.9)", pointerEvents: "none", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ color: "#ffcc00" }}>Slingshot: drag back to aim, release to launch (parabolic arc)</span>
-          </div>
-        </div>
-      )}
-
-      {turnChangeEffect !== null && lab && !lab.eliminatedPlayers.has(turnChangeEffect) && (
+      {/* Single overlay for hints - one at a time to avoid duplication */}
+      {(teleportPicker || catapultPicker || (turnChangeEffect !== null && lab && !lab.eliminatedPlayers.has(turnChangeEffect))) && (
         <div style={{ ...eliminatedOverlayStyle, pointerEvents: "none", zIndex: 450 }}>
           <div
             className="turn-change-banner"
             style={{
               ...eliminatedBannerStyle,
-              borderColor: PLAYER_COLORS[turnChangeEffect] ?? "#00ff88",
-              background: "rgba(0,0,0,0.92)",
-              color: PLAYER_COLORS[turnChangeEffect] ?? "#00ff88",
-              boxShadow: `0 0 30px ${(PLAYER_COLORS[turnChangeEffect] ?? "#00ff88")}88`,
+              borderColor: turnChangeEffect !== null && lab && !lab.eliminatedPlayers.has(turnChangeEffect)
+                ? (PLAYER_COLORS[turnChangeEffect] ?? "#00ff88")
+                : teleportPicker
+                  ? "#aa66ff"
+                  : "#ffcc00",
+              background: turnChangeEffect !== null ? "rgba(0,0,0,0.92)" : "rgba(0,0,0,0.9)",
+              color: turnChangeEffect !== null && lab && !lab.eliminatedPlayers.has(turnChangeEffect)
+                ? (PLAYER_COLORS[turnChangeEffect] ?? "#00ff88")
+                : teleportPicker
+                  ? "#aa66ff"
+                  : "#ffcc00",
+              boxShadow: turnChangeEffect !== null && lab && !lab.eliminatedPlayers.has(turnChangeEffect)
+                ? `0 0 30px ${(PLAYER_COLORS[turnChangeEffect] ?? "#00ff88")}88`
+                : undefined,
               fontSize: "1.2rem",
               fontWeight: "bold",
             }}
           >
-            <span style={{ fontSize: "1.5rem" }}>●</span>
-            <span>{playerNames[turnChangeEffect] ?? `Player ${turnChangeEffect + 1}`}&apos;s turn!</span>
+            {turnChangeEffect !== null && lab && !lab.eliminatedPlayers.has(turnChangeEffect) ? (
+              <>
+                <span style={{ fontSize: "1.5rem" }}>●</span>
+                <span>{playerNames[turnChangeEffect] ?? `Player ${turnChangeEffect + 1}`}&apos;s turn!</span>
+              </>
+            ) : teleportPicker ? (
+              <span>🌀 Select destination to teleport (click a highlighted cell)</span>
+            ) : (
+              <span>Slingshot: drag back to aim, release to launch (parabolic arc)</span>
+            )}
           </div>
         </div>
       )}
 
-      {(combatState || combatResult) && (!combatState || combatState.playerIndex === currentPlayer) && (
-        <div style={combatModalOverlayStyle} onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+      {lab && (
+        <div
+          style={{
+            ...combatModalOverlayStyle,
+            visibility: (combatState || combatResult) && (!combatState || combatState.playerIndex === currentPlayer) ? "visible" : "hidden",
+            pointerEvents: (combatState || combatResult) && (!combatState || combatState.playerIndex === currentPlayer) ? "auto" : "none",
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
           <div style={combatModalStyle} onClick={(e) => e.stopPropagation()}>
             <h2 style={combatModalTitleStyle}>
               {(() => {
@@ -2158,30 +2191,8 @@ export default function LabyrinthGame() {
                     position: "relative",
                   }}
                 >
-                  {/* Fallback hint (behind 3D dice - visible when canvas hasn't loaded) */}
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      pointerEvents: "none",
-                      color: "#ffcc00",
-                      opacity: rolling ? 0.3 : 0.8,
-                      zIndex: 0,
-                    }}
-                  >
-                    <span style={{ fontSize: "2.5rem", marginBottom: 4 }}>🎲</span>
-                    <span style={{ fontSize: "0.8rem", fontWeight: "bold" }}>{rolling ? "Rolling..." : "Click to roll"}</span>
-                  </div>
-                  <div style={{ position: "relative", zIndex: 1, width: "100%", height: "100%", minHeight: 120 }}>
-                    <Dice3D
-                      ref={combatDiceRef}
-                      onRollComplete={handleCombatRollComplete}
-                      disabled={rolling}
-                    />
+                  <div style={{ width: "100%", height: "100%", minHeight: 120 }}>
+                    <Dice3D ref={combatDiceRef} onRollComplete={handleCombatRollComplete} disabled={rolling} />
                   </div>
                 </div>
                 <div style={{ fontSize: "0.8rem", color: "#888", marginTop: 6 }}>Click dice area or button below to roll</div>
@@ -2381,15 +2392,7 @@ export default function LabyrinthGame() {
               let content: React.ReactNode = null;
               let cellClass = "cell";
 
-              const fogIntensity = lab.fogZones?.get(`${x},${y}`);
-              const hasTorch = lab.players.some((pl) => pl.hasTorch);
-              const isVisited = lab.visitedCells?.has(`${x},${y}`);
-              const isPlayerCell = lab.players.some((pl, i) => !lab.eliminatedPlayers?.has(i) && pl.x === x && pl.y === y);
-              const isWallCell = lab.getCellAt(x, y) === "#";
-              const adjacentFog = isWallCell && !hasTorch && !isVisited && !isPlayerCell && [[x-1,y],[x+1,y],[x,y-1],[x,y+1]].some(([nx,ny]) => (lab.fogZones?.get(`${nx},${ny}`) ?? 0) > 0 && !lab.visitedCells?.has(`${nx},${ny}`));
-              const wouldHaveFog = !(hasTorch || isVisited || isPlayerCell) && (isWallCell ? adjacentFog : (fogIntensity ?? 0) > 0);
-
-              const monsterIcon = monster && !wouldHaveFog ? (
+              const monsterIcon = monster ? (
                 getMonsterIdleSprite(monster.type) ? (
                   <img
                     key="m"
@@ -2497,15 +2500,15 @@ export default function LabyrinthGame() {
                 cellClass += " start";
               } else {
               const cellType = lab.getCellAt(x, y);
+              const isHidden = lab.hiddenCells.has(`${x},${y}`);
               if (isMultiplierCell(cellType)) {
                 const isRevealed = isMultiplierCell(lab.grid[y]?.[x]);
-                const isHidden = lab.hiddenCells.has(`${x},${y}`);
-                if ((isRevealed || (isHidden && showSecretCells)) && !wouldHaveFog) {
+                if (isRevealed || (isHidden && showSecretCells)) {
                   content = `×${cellType}`;
                 }
                 cellClass += (isRevealed || (isHidden && showSecretCells)) ? " path multiplier mult-x" + cellType : " path";
               } else if (isArtifactCell(cellType)) {
-                if (!wouldHaveFog) {
+                if (!isHidden) {
                   const art = cellType;
                   content = (
                     <span style={{ fontSize: "1.1rem" }} title={art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : art === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}>
@@ -2513,9 +2516,9 @@ export default function LabyrinthGame() {
                     </span>
                   );
                 }
-                cellClass += " path artifact";
+                cellClass += " path artifact" + (isHidden ? " artifact-hidden" : "");
               } else if (isTrapCell(cellType)) {
-                if (!wouldHaveFog) {
+                {
                   const trap = cellType;
                   content = (
                     <span style={{ fontSize: "1rem", display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={trap === TRAP_LOSE_TURN ? "Lose turn" : trap === TRAP_HARM ? "Harm: -1 HP (shield blocks)" : trap === TRAP_TELEPORT ? "Teleport" : "Slow"}>
@@ -2533,7 +2536,7 @@ export default function LabyrinthGame() {
                 }
                 cellClass += " path trap";
               } else if (isBombCell(cellType)) {
-                if (!wouldHaveFog) {
+                {
                   content = (
                     <span style={{ fontSize: "1.1rem" }} title="Bomb pickup">
                       💣
@@ -2543,7 +2546,7 @@ export default function LabyrinthGame() {
                 cellClass += " path bomb";
               } else if ((showSecretCells || isTeleportOption) && isMagicCell(cellType)) {
                 const magicUsed = lab.hasUsedTeleportFrom(currentPlayer, x, y);
-                if (!wouldHaveFog) {
+                {
                   content = (
                     <span className="hole-cell" style={{ fontSize: "1.1rem", opacity: magicUsed ? 0.4 : 1 }} title={magicUsed ? "Teleport used" : "Teleport: pick destination"}>
                       🌀
@@ -2553,7 +2556,7 @@ export default function LabyrinthGame() {
                 cellClass += " path magic hole" + (magicUsed ? " artifact-inactive" : "");
               } else if (showSecretCells && isCatapultCell(cellType)) {
                 const catapultUsed = lab.hasUsedCatapultFrom(currentPlayer, x, y);
-                if (!wouldHaveFog) {
+                {
                   content = (
                     <span style={{ fontSize: "1.2rem", display: "inline-flex", alignItems: "center", justifyContent: "center", opacity: catapultUsed ? 0.4 : 1 }} title={catapultUsed ? "Catapult used" : "Slingshot"}>
                       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2566,14 +2569,14 @@ export default function LabyrinthGame() {
                 }
                 cellClass += " path catapult" + (catapultUsed ? " artifact-inactive" : "");
               } else if (showSecretCells && isJumpCell(cellType)) {
-                if (!wouldHaveFog) content = "J";
+                content = "J";
                 cellClass += " path jump";
               } else if (showSecretCells && isShieldCell(cellType)) {
-                if (!wouldHaveFog) content = "🛡";
+                content = "🛡";
                 cellClass += " path shield";
               } else if (showSecretCells && isDiamondCell(cellType)) {
                 const owner = getCollectibleOwner(cellType);
-                if (!wouldHaveFog) content = "💎";
+                content = "💎";
                 cellClass += " path collectible";
                 if (owner !== null) cellClass += " collectible-p" + owner;
                 if (owner === currentPlayer) cellClass += " collectible-mine";
@@ -2632,9 +2635,14 @@ export default function LabyrinthGame() {
                 cellBg.fontWeight = "bold";
               }
               if (cellClass.includes("artifact")) {
-                cellBg.background = "#1e2e2e";
-                cellBg.color = "#aa66ff";
-                cellBg.fontWeight = "bold";
+                if (cellClass.includes("artifact-hidden")) {
+                  cellBg.background = "#1a1e24";
+                  cellBg.boxShadow = "inset 0 0 8px rgba(170,102,255,0.12)";
+                } else {
+                  cellBg.background = "#1e2e2e";
+                  cellBg.color = "#aa66ff";
+                  cellBg.fontWeight = "bold";
+                }
               }
               if (cellClass.includes("trap")) {
                 cellBg.background = "#2e2e1e";
@@ -2723,7 +2731,7 @@ export default function LabyrinthGame() {
                     setCatapultDragOffset({ dx, dy });
                   } : undefined}
                 >
-                  {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && !wouldHaveFog && (
+                  {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && (
                     <div className="spider-web" style={{ position: "absolute", inset: 0, zIndex: 0 }}>
                       <svg viewBox="0 0 44 44" preserveAspectRatio="xMidYMid slice">
                         <defs>
@@ -2791,29 +2799,105 @@ export default function LabyrinthGame() {
                       />
                     </div>
                   )}
-                  {(() => {
-                    const effectiveFog = wouldHaveFog ? (isWallCell ? (adjacentFog ? 1 : 0) : (fogIntensity ?? 0)) : 0;
-                    if (effectiveFog <= 0) return null;
-                    const baseOpacity = 0.08 + effectiveFog * 0.92;
-                    return (
-                      <div
-                        className="cell-fog"
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          zIndex: 50,
-                          pointerEvents: "none",
-                          background: `radial-gradient(ellipse 90% 90% at 50% 50%, rgba(6,6,14,${baseOpacity * 0.2}) 0%, rgba(4,4,10,${baseOpacity * 0.6}) 50%, rgba(2,2,8,${baseOpacity}) 100%)`,
-                          boxShadow: `inset 0 0 ${8 + effectiveFog * 24}px rgba(0,0,0,${baseOpacity * 0.7})`,
-                        }}
-                      />
-                    );
-                  })()}
                 </div>
               );
             })
           )}
         </div>
+        {/* Fog overlay: per-cell (FOG_GRANULARITY=1) for performance; cleared at player/visited; gradient by player position */}
+        {lab && !lab.players.some((p) => p.hasTorch) && (
+          <div
+            className="fog-overlay"
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: lab.width * CELL_SIZE * mazeZoom,
+              height: lab.height * CELL_SIZE * mazeZoom,
+              display: "grid",
+              gridTemplateColumns: `repeat(${lab.width * FOG_GRANULARITY}, 1fr)`,
+              gridTemplateRows: `repeat(${lab.height * FOG_GRANULARITY}, 1fr)`,
+              pointerEvents: "none",
+              zIndex: 40,
+            }}
+          >
+            {(() => {
+              const clearedCoords = new Set<string>();
+              lab.players.forEach((p, i) => { if (!lab.eliminatedPlayers?.has(i)) clearedCoords.add(`${p.x},${p.y}`); });
+              lab.visitedCells?.forEach((k) => clearedCoords.add(k));
+              const manhattan = (ax: number, ay: number, bx: number, by: number) => Math.abs(ax - bx) + Math.abs(ay - by);
+              const getClearance = (cx: number, cy: number): number => {
+                let minDist = FOG_CLEARANCE_RADIUS + 1;
+                clearedCoords.forEach((key) => {
+                  const [px, py] = key.split(",").map(Number);
+                  const d = manhattan(cx, cy, px, py);
+                  if (d < minDist) minDist = d;
+                });
+                return Math.max(0, 1 - minDist / (FOG_CLEARANCE_RADIUS + 0.5));
+              };
+              const cp = lab.players[currentPlayer];
+              const px = cp?.x ?? lab.width / 2;
+              const py = cp?.y ?? lab.height / 2;
+              const playerOnLeft = px < lab.width / 2;
+              const playerOnTop = py < lab.height / 2;
+              const getCellFog = (cx: number, cy: number) => {
+                if (lab.players.some((p) => p.hasTorch)) return 0;
+                const fogZoneIntensity = lab.fogZones?.get(`${cx},${cy}`) ?? 0;
+                const clearance = getClearance(cx, cy);
+                const isWallCell = lab.getCellAt(cx, cy) === "#";
+                const hasAdjacentPath = [[0,-1],[1,0],[0,1],[-1,0]].some(([dx,dy]) => {
+                  const nx = cx + dx, ny = cy + dy;
+                  return nx >= 0 && nx < lab.width && ny >= 0 && ny < lab.height && lab.getCellAt(nx, ny) !== "#";
+                });
+                const adjacentClearance = isWallCell ? Math.max(0, ...[[0,-1],[1,0],[0,1],[-1,0]].map(([dx,dy]) => {
+                  const nx = cx + dx, ny = cy + dy;
+                  return (nx >= 0 && nx < lab.width && ny >= 0 && ny < lab.height) ? getClearance(nx, ny) : 0;
+                })) : clearance;
+                const effectiveClearance = isWallCell ? adjacentClearance : clearance;
+                // Fog all uncleared cells (hides artifacts); fog zones add extra darkness
+                const baseFog = 1 - effectiveClearance;
+                const rawFog = isWallCell ? (hasAdjacentPath ? baseFog : 0) : Math.max(baseFog, fogZoneIntensity);
+                return Math.max(0, rawFog);
+              };
+              const getGradientFactor = (cx: number, cy: number): number => {
+                const hAway = playerOnLeft ? Math.max(0, cx - px) : Math.max(0, px - cx);
+                const vAway = playerOnTop ? Math.max(0, cy - py) : Math.max(0, py - cy);
+                return (hAway / lab.width + vAway / lab.height) / 2;
+              };
+              return Array.from({ length: lab.height * FOG_GRANULARITY }).map((_, gy) =>
+                Array.from({ length: lab.width * FOG_GRANULARITY }).map((_, gx) => {
+                  const mx = Math.floor(gx / FOG_GRANULARITY);
+                  const my = Math.floor(gy / FOG_GRANULARITY);
+                  const effectiveFog = FOG_GRANULARITY === 1
+                    ? getCellFog(mx, my)
+                    : (() => {
+                        const fx = (gx % FOG_GRANULARITY) / FOG_GRANULARITY;
+                        const fy = (gy % FOG_GRANULARITY) / FOG_GRANULARITY;
+                        const f00 = getCellFog(mx, my);
+                        const f10 = getCellFog(mx + 1, my);
+                        const f01 = getCellFog(mx, my + 1);
+                        const f11 = getCellFog(mx + 1, my + 1);
+                        return f00 * (1 - fx) * (1 - fy) + f10 * fx * (1 - fy) + f01 * (1 - fx) * fy + f11 * fx * fy;
+                      })();
+                  if (effectiveFog <= 0) return <div key={`${gx}-${gy}`} />;
+                  const baseOpacity = 0.1 + effectiveFog * 0.85;
+                  const gradientFactor = getGradientFactor(mx, my);
+                  const opacity = Math.max(0.05, Math.min(1, baseOpacity + 0.2 * gradientFactor));
+                  const opacityEdge = opacity * 0.5;
+                  return (
+                    <div
+                      key={`${gx}-${gy}`}
+                      style={{
+                        background: `radial-gradient(ellipse 90% 90% at 50% 50%, rgba(4,4,12,${opacity}), rgba(4,4,12,${opacityEdge}))`,
+                        boxShadow: `inset 0 0 4px rgba(0,0,4,${opacity * 0.2})`,
+                      }}
+                    />
+                  );
+                })
+              );
+            })()}
+          </div>
+        )}
         {catapultPicker && catapultDragOffset && lab && (catapultDragOffset.dx !== 0 || catapultDragOffset.dy !== 0) && (() => {
           const dx = catapultDragOffset.dx;
           const dy = catapultDragOffset.dy;

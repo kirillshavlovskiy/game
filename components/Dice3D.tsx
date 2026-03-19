@@ -77,7 +77,9 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
         el.id = "dice-scene-" + Math.random().toString(36).slice(2);
         const id = el.id;
 
-        // Wait for container to have dimensions (layout complete)
+        // Wait for container to have dimensions (layout complete), with timeout to prevent infinite loop
+        const DIMENSION_WAIT_MS = 3000;
+        const start = Date.now();
         await new Promise<void>((resolve) => {
           if (el.clientWidth > 0 && el.clientHeight > 0) {
             resolve();
@@ -85,13 +87,26 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
           }
           const check = () => {
             if (!mounted || !containerRef.current) return;
-            if (el.clientWidth > 0 && el.clientHeight > 0) resolve();
+            if (el.clientWidth > 0 && el.clientHeight > 0) {
+              resolve();
+              return;
+            }
+            if (Date.now() - start > DIMENSION_WAIT_MS) resolve(); // Proceed anyway to avoid infinite loop
             else requestAnimationFrame(check);
           };
           requestAnimationFrame(check);
         });
 
         if (!mounted) return;
+
+        // Ensure minimum dimensions for WebGL canvas (avoids init failure when parent was hidden)
+        if (el.clientWidth < 100 || el.clientHeight < 100) {
+          el.style.minWidth = "120px";
+          el.style.minHeight = "120px";
+          el.style.width = "120px";
+          el.style.height = "120px";
+          await new Promise((r) => requestAnimationFrame(r)); // Let layout apply
+        }
 
         const { default: DiceBox } = await import("@3d-dice/dice-box-threejs");
         if (!mounted) return;
@@ -103,7 +118,7 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
         const box = new DiceBox("#" + id, {
           assetPath: "https://cdn.jsdelivr.net/gh/MajorVictory/3DDiceRoller@master/textures/envmap/",
           theme_surface: "taverntable",
-          theme_material: "glass",
+          theme_material: "plastic",
           theme_customColorset: { background: "#00ff88", foreground: "#000000", outline: "#00ff88" },
           sounds: false,
           shadows: true,
