@@ -116,8 +116,10 @@ export function resolveCombat(
     };
   }
 
+  // Lava Elemental: no surprise modifier (always def 4) — dice 5+ always hits
   const effectiveDefense = Math.max(0,
-    (monsterType === "K" && skeletonHasShield ? 0 : monsterDefense) + surpriseModifier
+    (monsterType === "K" && skeletonHasShield ? 0 : monsterDefense) +
+    (monsterType === "L" ? 0 : surpriseModifier)
   );
   const attackTotal = playerRoll + attackBonus;
   const hit = attackTotal >= effectiveDefense;
@@ -145,7 +147,9 @@ export function resolveCombat(
         ? "zombie_slow"
         : !won && monsterType === "V"
           ? "dracula_lifesteal"
-          : undefined,
+          : !won && monsterType === "L"
+            ? "lava_burn"
+            : undefined,
     reward: won ? getMonsterReward(monsterType) : undefined,
   };
 }

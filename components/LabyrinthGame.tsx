@@ -37,7 +37,7 @@ import {
   type MonsterType,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
-import { resolveCombat, getMonsterHint, getMonsterBonusReward, getSurpriseDefenseModifier, type CombatResult, type MonsterSurpriseState } from "@/lib/combatSystem";
+import { resolveCombat, getMonsterHint, getMonsterBonusReward, getSurpriseDefenseModifier, type CombatResult, type MonsterSurpriseState, type MonsterReward } from "@/lib/combatSystem";
 import { drawEvent, applyEvent } from "@/lib/eventDeck";
 import { applyDraculaTeleport, applyDraculaAttack } from "@/lib/draculaAI";
 import { DRACULA_CONFIG } from "@/lib/labyrinth";
@@ -45,6 +45,19 @@ import { DRACULA_CONFIG } from "@/lib/labyrinth";
 const CELL_SIZE = 44;
 const FOG_GRANULARITY = 1; // 1 = per-cell (performant); 8 = fine-grained but heavy DOM
 const FOG_CLEARANCE_RADIUS = 2; // Cells within this distance of player/visited get fog cleared
+
+/** Avatar options for player selection (emoji) */
+const PLAYER_AVATARS = ["🧙", "🧛", "🧟", "🦸", "🧚", "🦊", "🐉", "🦉", "🐺", "🦋"] as const;
+
+function getArtifactIcon(a: string): string {
+  if (a.startsWith("monster-")) return "✨";
+  if (a === ARTIFACT_DICE) return "🎲";
+  if (a === ARTIFACT_SHIELD) return "🛡";
+  if (a === ARTIFACT_TELEPORT_CELL) return "🌀";
+  if (a === ARTIFACT_HEALING) return "❤️";
+  if (a === ARTIFACT_REVEAL) return "👁";
+  return "✨";
+}
 
 /**
  * MOVE POLICY — how moves are consumed/kept per action:
@@ -268,8 +281,9 @@ export default function LabyrinthGame() {
     prevX?: number;
     prevY?: number;
   } | null>(null);
-  const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; shieldAbsorbed?: boolean; draculaWeakened?: boolean; monsterWeakened?: boolean; monsterHp?: number; monsterMaxHp?: number; secondAttempt?: boolean }) | null>(null);
+  const [combatResult, setCombatResult] = useState<(CombatResult & { monsterType?: MonsterType; playerIndex?: number; shieldAbsorbed?: boolean; draculaWeakened?: boolean; monsterWeakened?: boolean; monsterHp?: number; monsterMaxHp?: number; secondAttempt?: boolean; bonusReward?: MonsterReward | null }) | null>(null);
   const [combatVictoryPhase, setCombatVictoryPhase] = useState<"hurt" | "defeated">("hurt");
+  const [defeatedMonsterOnCell, setDefeatedMonsterOnCell] = useState<{ x: number; y: number; monsterType: MonsterType } | null>(null);
   const [collisionEffect, setCollisionEffect] = useState<{ x: number; y: number } | null>(null);
   const [turnChangeEffect, setTurnChangeEffect] = useState<number | null>(null);
   const [combatUseShield, setCombatUseShield] = useState(true);
@@ -279,6 +293,9 @@ export default function LabyrinthGame() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playerNames, setPlayerNames] = useState<string[]>(() =>
     Array.from({ length: 3 }, (_, i) => `Player ${i + 1}`)
+  );
+  const [playerAvatars, setPlayerAvatars] = useState<string[]>(() =>
+    Array.from({ length: 10 }, (_, i) => PLAYER_AVATARS[i % PLAYER_AVATARS.length])
   );
   const diceRef = useRef<Dice3DRef>(null);
   const combatDiceRef = useRef<Dice3DRef>(null);
@@ -439,6 +456,7 @@ export default function LabyrinthGame() {
     const collision = lab.checkMonsterCollision(combatState.playerIndex);
     if (!collision) {
       setCombatState(null);
+      setDefeatedMonsterOnCell(null);
       setCombatUseShield(true);
       setCombatUseDiceBonus(true);
     }
@@ -669,6 +687,7 @@ export default function LabyrinthGame() {
     setBombExplosion(null);
     setCombatState(null);
     setCombatResult(null);
+    setDefeatedMonsterOnCell(null);
     setCollisionEffect(null);
     setTurnChangeEffect(null);
     combatHasRolledRef.current = false;
@@ -738,6 +757,7 @@ export default function LabyrinthGame() {
         setBombExplosion(null);
         setCombatState(null);
         setCombatResult(null);
+        setDefeatedMonsterOnCell(null);
       } else {
         setError("Invalid maze from AI, using random maze.");
         newGame();
@@ -768,7 +788,7 @@ export default function LabyrinthGame() {
       // Second attempt: idle/hunt + dice 1-3 on miss = retry, no damage. Attack/angry = HP damage.
       const canSecondAttempt = !result.won && (surpriseState === "idle" || surpriseState === "hunt") && value <= 3;
       if (canSecondAttempt) {
-        setCombatResult({ ...result, monsterType: combat.monsterType, secondAttempt: true });
+        setCombatResult({ ...result, monsterType: combat.monsterType, secondAttempt: true, playerIndex: combat.playerIndex });
         setRolling(false);
         combatSurpriseRef.current = "hunt";
         setTimeout(() => setCombatResult(null), 2600);
@@ -777,7 +797,7 @@ export default function LabyrinthGame() {
 
       const maxHp = getMonsterMaxHp(combat.monsterType);
       const monsterHp = monster?.hp ?? maxHp;
-      setCombatResult({ ...result, monsterType: combat.monsterType, monsterHp, monsterMaxHp: maxHp });
+      setCombatResult({ ...result, monsterType: combat.monsterType, monsterHp, monsterMaxHp: maxHp, playerIndex: combat.playerIndex });
       setRolling(false);
       combatSurpriseRef.current = "hunt"; // reset for next combat
       setLab((prev) => {
@@ -863,7 +883,11 @@ export default function LabyrinthGame() {
               next.webPositions.push([m.x, m.y]);
             }
           }
+          const defeatedX = m.x;
+          const defeatedY = m.y;
           next.monsters.splice(monsterIdx, 1);
+          setDefeatedMonsterOnCell({ x: defeatedX, y: defeatedY, monsterType: combat.monsterType });
+          setCombatResult((r) => r ? { ...r, monsterHp: 0 } : null);
           let totalBonusMoves = 0;
           let totalJumpAdded = 0;
           // Apply primary monster reward
@@ -887,6 +911,7 @@ export default function LabyrinthGame() {
           }
           // 50% chance: extra reward (artifact, bonus moves, shield, jump, catapult, dice bonus)
           const bonusReward = getMonsterBonusReward();
+          if (bonusReward) setCombatResult((r) => r ? { ...r, bonusReward } : null);
           if (p && bonusReward) {
             const r = bonusReward;
             if (r.type === "artifact") {
@@ -978,7 +1003,10 @@ export default function LabyrinthGame() {
       setCombatState(null);
       setCombatUseShield(true);
       setCombatUseDiceBonus(true);
-      setTimeout(() => setCombatResult(null), 2800);
+      setTimeout(() => {
+        setCombatResult(null);
+        setDefeatedMonsterOnCell(null);
+      }, 2800);
       return;
   }, []);
 
@@ -1084,6 +1112,7 @@ export default function LabyrinthGame() {
     movesLeftRef.current--;
     setMovesLeft(movesLeftRef.current);
     setCombatState(null);
+    setDefeatedMonsterOnCell(null);
     setCombatUseShield(true);
     setCombatUseDiceBonus(true);
     setLab((prev) => {
@@ -1882,11 +1911,38 @@ export default function LabyrinthGame() {
               />
             </div>
             <div style={{ ...modalRowStyle, flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
-              <label style={startModalLabelStyle}>Player names</label>
+              <label style={startModalLabelStyle}>Player names & avatars</label>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
-                    <span style={{ color: PLAYER_COLORS[i] ?? "#888", fontWeight: "bold", fontSize: "1rem" }}>●</span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 2, flexShrink: 0, maxWidth: 120 }}>
+                      {PLAYER_AVATARS.map((av) => (
+                        <button
+                          key={av}
+                          type="button"
+                          onClick={() => {
+                            setPlayerAvatars((prev) => {
+                              const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length])];
+                              next[i] = av;
+                              return next;
+                            });
+                          }}
+                          style={{
+                            width: 26,
+                            height: 26,
+                            padding: 0,
+                            fontSize: "0.9rem",
+                            lineHeight: 1,
+                            border: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}` : "1px solid #444",
+                            borderRadius: 4,
+                            background: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? "rgba(0,255,136,0.2)" : "#1a1a24",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {av}
+                        </button>
+                      ))}
+                    </div>
                     <input
                       type="text"
                       value={(playerNames[i] ?? `Player ${i + 1}`).toString()}
@@ -1944,14 +2000,14 @@ export default function LabyrinthGame() {
       <header style={headerStyle}>
         <h1 style={headerTitleStyle}>LABYRINTH</h1>
         <div style={headerStatsStyle}>
-          {winner !== null && (
-            <>
-              <span style={{ ...headerStatItemStyle, color: winner >= 0 ? "#00ff88" : "#ff4444", fontWeight: "bold" }}>
-                {winner >= 0 ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!` : "Monsters win!"}
-              </span>
-              <span style={headerStatDivider}>|</span>
-            </>
-          )}
+          <span style={{ ...headerStatItemStyle, color: winner !== null ? (winner >= 0 ? "#00ff88" : "#ff4444") : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88"), fontWeight: "bold" }}>
+            {winner !== null
+              ? winner >= 0
+                ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
+                : "Monsters win!"
+              : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
+          </span>
+          <span style={headerStatDivider}>|</span>
           <span style={headerStatItemStyle}>
             Moves: {diceResult !== null ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}` : "—/—"}
           </span>
@@ -2043,10 +2099,14 @@ export default function LabyrinthGame() {
                 )}
               </div>
               {(p?.artifactsCollected?.length ?? 0) > 0 && (
-                <div style={{ fontSize: "0.7rem", color: "#888", marginTop: 2, display: "flex", flexWrap: "wrap", gap: 2 }}>
+                <div style={{ fontSize: "0.75rem", color: "#888", marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
                   {(p?.artifactsCollected ?? []).map((a, i) => (
-                    <span key={i} title={a === ARTIFACT_DICE ? "+1 dice" : a === ARTIFACT_SHIELD ? "Shield" : a === ARTIFACT_TELEPORT_CELL ? "Teleport" : a === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}>
-                      {a === ARTIFACT_DICE ? "🎲" : a === ARTIFACT_SHIELD ? "🛡" : a === ARTIFACT_TELEPORT_CELL ? "🌀" : a === ARTIFACT_HEALING ? "❤️" : "👁"}
+                    <span
+                      key={i}
+                      style={{ fontSize: "1.25rem", lineHeight: 1 }}
+                      title={a.startsWith("monster-") ? `From ${getMonsterName(a.replace("monster-", "") as MonsterType)}` : a === ARTIFACT_DICE ? "+1 dice" : a === ARTIFACT_SHIELD ? "Shield" : a === ARTIFACT_TELEPORT_CELL ? "Teleport" : a === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}
+                    >
+                      {getArtifactIcon(a)}
                     </span>
                   ))}
                 </div>
@@ -2116,6 +2176,14 @@ export default function LabyrinthGame() {
         >
           <div style={combatModalStyle} onClick={(e) => e.stopPropagation()}>
             <h2 style={combatModalTitleStyle}>
+              {((combatState || combatResult) && (() => {
+                const pi = combatState?.playerIndex ?? combatResult?.playerIndex ?? 0;
+                return (
+                  <span style={{ marginRight: 12, fontSize: "1.8rem", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, borderRadius: "50%", border: `2px solid ${PLAYER_COLORS[pi] ?? "#00ff88"}`, background: "rgba(0,0,0,0.3)" }}>
+                    {playerAvatars[pi] ?? PLAYER_AVATARS[pi % PLAYER_AVATARS.length]}
+                  </span>
+                );
+              })())}
               {(() => {
                 const mt = combatState?.monsterType ?? combatResult?.monsterType;
                 const idleSrc = mt && getMonsterIdleSprite(mt);
@@ -2157,7 +2225,21 @@ export default function LabyrinthGame() {
                         : combatResult.monsterEffect === "skeleton_shield"
                           ? "💀 Shield broken! Try again next turn."
                           : combatResult.won
-                            ? (combatResult.reward ? `WIN! +${combatResult.reward.type === "jump" ? "1 jump" : combatResult.reward.type === "hp" ? "1 HP" : combatResult.reward.type === "shield" ? "1 shield" : combatResult.reward.type === "attackBonus" ? "1 attack" : "1 move"}` : "You are lucky! Monster defeated!")
+                            ? (combatResult.reward || combatResult.bonusReward
+                                ? `WIN! ${[
+                                    combatResult.reward?.type === "jump" && "⬆️ +1 jump",
+                                    combatResult.reward?.type === "hp" && "❤️ +1 HP",
+                                    combatResult.reward?.type === "shield" && "🛡 +1 shield",
+                                    combatResult.reward?.type === "attackBonus" && "⚔️ +1 attack",
+                                    combatResult.reward?.type === "bonusMoves" && "🎯 +2 moves",
+                                    combatResult.bonusReward?.type === "artifact" && "✨ +1 artifact",
+                                    combatResult.bonusReward?.type === "bonusMoves" && "🎯 +2 moves",
+                                    combatResult.bonusReward?.type === "shield" && "🛡 +1 shield",
+                                    combatResult.bonusReward?.type === "jump" && "⬆️ +1 jump",
+                                    combatResult.bonusReward?.type === "catapult" && "🎯 +1 catapult",
+                                    combatResult.bonusReward?.type === "diceBonus" && "🎲 +1 dice bonus",
+                                  ].filter(Boolean).join("  ") || "Monster defeated!"}`
+                                : "You are lucky! Monster defeated!")
                             : combatResult.shieldAbsorbed
                               ? "🛡 Shield absorbed!"
                               : combatResult.monsterEffect === "ghost_evade"
@@ -2165,7 +2247,22 @@ export default function LabyrinthGame() {
                                 : `✗ -${combatResult.damage} HP`}
                   </span>
                 </div>
-                {(combatResult.monsterMaxHp ?? 0) > 1 && (
+                {combatResult.won && (combatResult.reward || combatResult.bonusReward) && (
+                  <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12, marginTop: 10 }}>
+                    {combatResult.reward?.type === "jump" && <span style={{ fontSize: "1.8rem" }} title="+1 jump">⬆️</span>}
+                    {combatResult.reward?.type === "hp" && <span style={{ fontSize: "1.8rem" }} title="+1 HP">❤️</span>}
+                    {combatResult.reward?.type === "shield" && <span style={{ fontSize: "1.8rem" }} title="+1 shield">🛡</span>}
+                    {combatResult.reward?.type === "attackBonus" && <span style={{ fontSize: "1.8rem" }} title="+1 attack">⚔️</span>}
+                    {combatResult.reward?.type === "bonusMoves" && <span style={{ fontSize: "1.8rem" }} title="+2 moves">🎯</span>}
+                    {combatResult.bonusReward?.type === "artifact" && <span style={{ fontSize: "1.8rem", filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }} title="+1 artifact">✨</span>}
+                    {combatResult.bonusReward?.type === "bonusMoves" && <span style={{ fontSize: "1.8rem" }} title="+2 moves">🎯</span>}
+                    {combatResult.bonusReward?.type === "shield" && <span style={{ fontSize: "1.8rem" }} title="+1 shield">🛡</span>}
+                    {combatResult.bonusReward?.type === "jump" && <span style={{ fontSize: "1.8rem" }} title="+1 jump">⬆️</span>}
+                    {combatResult.bonusReward?.type === "catapult" && <span style={{ fontSize: "1.8rem" }} title="+1 catapult charge">🎯</span>}
+                    {combatResult.bonusReward?.type === "diceBonus" && <span style={{ fontSize: "1.8rem" }} title="+1 dice bonus">🎲</span>}
+                  </div>
+                )}
+                {(combatResult.monsterMaxHp ?? 0) > 0 && (
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, width: "100%", maxWidth: 200 }}>
                     <span style={{ fontSize: "0.85rem", color: "#aaa" }}>Monster HP</span>
                     <div style={{ width: "100%", height: 12, background: "#ff4444", borderRadius: 6, overflow: "hidden", display: "flex", flexDirection: "row" }}>
@@ -2195,6 +2292,31 @@ export default function LabyrinthGame() {
                   <span>= Total: <strong>{combatResult.attackTotal}</strong></span>
                   <span>vs Defense: <strong>{combatResult.monsterDefense}</strong></span>
                 </div>
+                {lab && (() => {
+                  const pi = combatResult.playerIndex ?? combatState?.playerIndex ?? 0;
+                  const ac = lab.players[pi]?.artifactsCollected ?? [];
+                  if (ac.length === 0) return null;
+                  return (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginTop: 12, width: "100%" }}>
+                      <span style={{ fontSize: "0.9rem", color: "#aaa", fontWeight: "bold" }}>Collected artifacts</span>
+                      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12 }}>
+                        {ac.map((a, i) => (
+                          <span
+                            key={i}
+                            style={{
+                              fontSize: "1.8rem",
+                              lineHeight: 1,
+                              filter: a.startsWith("monster-") ? "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" : undefined,
+                            }}
+                            title={a.startsWith("monster-") ? `From ${getMonsterName(a.replace("monster-", "") as MonsterType)}` : a === ARTIFACT_DICE ? "+1 dice" : a === ARTIFACT_SHIELD ? "Shield" : a === ARTIFACT_TELEPORT_CELL ? "Teleport" : a === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}
+                          >
+                            {getArtifactIcon(a)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             ) : combatState ? (
               (() => {
@@ -2302,6 +2424,24 @@ export default function LabyrinthGame() {
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", marginBottom: 14, padding: "10px 12px", background: "rgba(0,0,0,0.4)", borderRadius: 8, border: "1px solid #333" }}>
                   <div style={{ color: "#ffcc00", fontSize: "0.85rem", fontWeight: "bold", marginBottom: 4 }}>Skills & Artifacts</div>
+                  {lab && (lab.players[combatState.playerIndex]?.artifactsCollected?.length ?? 0) > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                      <span style={{ color: "#888", fontSize: "0.85rem", marginRight: 8 }}>Collected:</span>
+                      {(lab.players[combatState.playerIndex]?.artifactsCollected ?? []).map((a, i) => (
+                        <span
+                          key={i}
+                          style={{
+                            fontSize: "1.8rem",
+                            lineHeight: 1,
+                            filter: a.startsWith("monster-") ? "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" : undefined,
+                          }}
+                          title={a.startsWith("monster-") ? `From ${getMonsterName(a.replace("monster-", "") as MonsterType)}` : a === ARTIFACT_DICE ? "+1 dice" : a === ARTIFACT_SHIELD ? "Shield" : a === ARTIFACT_TELEPORT_CELL ? "Teleport" : a === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}
+                        >
+                          {getArtifactIcon(a)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   {lab && (lab.players[combatState.playerIndex]?.shield ?? 0) > 0 && (
                     <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", color: "#ccc", fontSize: "0.95rem" }}>
                       <input
@@ -2481,11 +2621,38 @@ export default function LabyrinthGame() {
               />
             </div>
             <div style={{ ...modalRowStyle, flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-              <label>Player names:</label>
+              <label>Player names & avatars:</label>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
-                    <span style={{ color: PLAYER_COLORS[i] ?? "#888", fontWeight: "bold", minWidth: 20, flexShrink: 0 }}>●</span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 2, flexShrink: 0, maxWidth: 100 }}>
+                      {PLAYER_AVATARS.map((av) => (
+                        <button
+                          key={av}
+                          type="button"
+                          onClick={() => {
+                            setPlayerAvatars((prev) => {
+                              const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length])];
+                              next[i] = av;
+                              return next;
+                            });
+                          }}
+                          style={{
+                            width: 22,
+                            height: 22,
+                            padding: 0,
+                            fontSize: "0.75rem",
+                            lineHeight: 1,
+                            border: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}` : "1px solid #444",
+                            borderRadius: 4,
+                            background: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? "rgba(0,255,136,0.2)" : "#1a1a24",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {av}
+                        </button>
+                      ))}
+                    </div>
                     <input
                       type="text"
                       value={(playerNames[i] ?? `Player ${i + 1}`).toString()}
@@ -2601,17 +2768,24 @@ export default function LabyrinthGame() {
                       transformOrigin: `${catapultDragOffset.dx >= 0 ? "left" : "right"} ${catapultDragOffset.dy >= 0 ? "top" : "bottom"}`,
                     }
                   : {};
+                const avatar = playerAvatars[pi] ?? PLAYER_AVATARS[pi % PLAYER_AVATARS.length];
+                const isActive = pi === currentPlayer;
                 const playerMarker = (
                   <div
-                    className={`marker ${pi === currentPlayer ? "active" : ""} ${isTeleportRise ? "teleport-rise" : ""} ${isJumpLanding ? "jump-landing" : ""}`}
+                    className={`marker ${isActive ? "active" : ""} ${isTeleportRise ? "teleport-rise" : ""} ${isJumpLanding ? "jump-landing" : ""}`}
                     style={{
                       ...markerStyle,
                       ...markerStretchStyle,
-                      background: c,
-                      boxShadow: pi === currentPlayer ? `0 0 8px ${c}, 0 0 12px ${c}` : undefined,
+                      background: "transparent",
+                      fontSize: "1.25rem",
+                      lineHeight: 1,
+                      boxShadow: isActive ? `0 0 8px ${c}, 0 0 12px ${c}` : undefined,
+                      border: isActive ? `2px solid ${c}` : "none",
                       ...(isTeleportRise ? { zIndex: 20, position: "relative" as const } : {}),
                     }}
-                  />
+                  >
+                    {avatar}
+                  </div>
                 );
                 const dirHintStyle: React.CSSProperties = {
                   position: "absolute",
@@ -2903,6 +3077,18 @@ export default function LabyrinthGame() {
                     setCatapultDragOffset({ dx, dy });
                   } : undefined}
                 >
+                  {defeatedMonsterOnCell?.x === x && defeatedMonsterOnCell?.y === y && (() => {
+                    const sprite = getMonsterSprite(defeatedMonsterOnCell.monsterType, "defeated");
+                    return sprite ? (
+                      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 0, pointerEvents: "none" }}>
+                        <img src={sprite} alt={`Defeated ${getMonsterName(defeatedMonsterOnCell.monsterType)}`} style={{ width: 36, height: 36, objectFit: "contain", opacity: 0.9 }} />
+                      </div>
+                    ) : (
+                      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 0, pointerEvents: "none", fontSize: "1.5rem", opacity: 0.8 }}>
+                        {getMonsterIcon(defeatedMonsterOnCell.monsterType)}
+                      </div>
+                    );
+                  })()}
                   {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && (
                     <div className="spider-web" style={{ position: "absolute", inset: 0, zIndex: 0 }}>
                       <svg viewBox="0 0 44 44" preserveAspectRatio="xMidYMid slice">
@@ -2971,70 +3157,29 @@ export default function LabyrinthGame() {
                       />
                     </div>
                   )}
+                  {(() => {
+                    const effectiveFog = cellFog;
+                    if (effectiveFog <= 0) return null;
+                    const baseOpacity = 0.08 + effectiveFog * 0.92;
+                    return (
+                      <div
+                        className="cell-fog"
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          zIndex: 50,
+                          pointerEvents: "none",
+                          background: `radial-gradient(ellipse 90% 90% at 50% 50%, rgba(6,6,14,${baseOpacity * 0.2}) 0%, rgba(4,4,10,${baseOpacity * 0.6}) 50%, rgba(2,2,8,${baseOpacity}) 100%)`,
+                          boxShadow: `inset 0 0 ${8 + effectiveFog * 24}px rgba(0,0,0,${baseOpacity * 0.7})`,
+                        }}
+                      />
+                    );
+                  })()}
                 </div>
               );
             })
           )}
         </div>
-        {/* Fog overlay layer - separate from cells, natural fog on top of maze */}
-        {lab && (() => {
-          const hasTorch = lab.players.some((pl) => pl.hasTorch);
-          const cs = CELL_SIZE * mazeZoom;
-          const fogTiles: { x: number; y: number; intensity: number; visible: boolean }[] = [];
-          for (let y = 0; y < lab.height; y++) {
-            for (let x = 0; x < lab.width; x++) {
-              const fogIntensity = lab.fogZones?.get(`${x},${y}`) ?? 0;
-              const isVisited = lab.visitedCells?.has(`${x},${y}`);
-              const isPlayerCell = lab.players.some((pl, i) => !lab.eliminatedPlayers?.has(i) && pl.x === x && pl.y === y);
-              const isWallCell = lab.getCellAt(x, y) === "#";
-              const adjacentFog = isWallCell && [[x-1,y],[x+1,y],[x,y-1],[x,y+1]].some(([nx,ny]) => (lab.fogZones?.get(`${nx},${ny}`) ?? 0) > 0 && !lab.visitedCells?.has(`${nx},${ny}`));
-              const wouldHaveFog = !hasTorch && !(isVisited || isPlayerCell) && (isWallCell ? adjacentFog : fogIntensity > 0);
-              const inFogZone = fogIntensity > 0 || (isWallCell && [[x-1,y],[x+1,y],[x,y-1],[x,y+1]].some(([nx,ny]) => (lab.fogZones?.get(`${nx},${ny}`) ?? 0) > 0));
-              if (inFogZone) {
-                const effectiveFog = isWallCell ? (adjacentFog ? 0.9 : 0.4) : fogIntensity;
-                fogTiles.push({ x, y, intensity: Math.max(0.35, effectiveFog), visible: wouldHaveFog });
-              }
-            }
-          }
-          if (fogTiles.length === 0) return null;
-          return (
-            <div
-              className="fog-overlay"
-              style={{
-                width: lab.width * cs,
-                height: lab.height * cs,
-                display: "grid",
-                gridTemplateColumns: `repeat(${lab.width}, ${cs}px)`,
-                gridTemplateRows: `repeat(${lab.height}, ${cs}px)`,
-                position: "absolute",
-                top: 0,
-                left: 0,
-              }}
-            >
-              {fogTiles.map(({ x, y, intensity, visible }) => {
-                const baseOpacity = 0.2 + intensity * 0.8;
-                return (
-                  <div
-                    key={`${x}-${y}`}
-                    className={`fog-tile ${!visible ? "fog-clearing" : ""}`}
-                    style={{
-                      gridColumn: x + 1,
-                      gridRow: y + 1,
-                      opacity: visible ? baseOpacity : 0,
-                      width: "150%",
-                      height: "150%",
-                      marginLeft: "-25%",
-                      marginTop: "-25%",
-                    }}
-                  >
-                    <div className="fog-tile-inner" />
-                    <div className="fog-tile-wisp" style={{ transform: `rotate(${(x * 13 + y * 7) % 360}deg)` }} />
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })()}
         {catapultPicker && catapultDragOffset && lab && (catapultDragOffset.dx !== 0 || catapultDragOffset.dy !== 0) && (() => {
           const dx = catapultDragOffset.dx;
           const dy = catapultDragOffset.dy;

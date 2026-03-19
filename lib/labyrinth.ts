@@ -94,7 +94,7 @@ export function getMonsterDamage(type: MonsterType): number {
 
 /** Max HP for multi-hit monsters. Others = 1 (one-shot). */
 export function getMonsterMaxHp(type: MonsterType): number {
-  return type === "V" ? DRACULA_CONFIG.hp : type === "Z" || type === "L" ? 2 : 1;
+  return type === "V" ? DRACULA_CONFIG.hp : type === "Z" ? 2 : 1; // Lava = 1 (one-shot)
 }
 
 /** Min/max damage for variable monster attacks. Returns [min, max] inclusive. */
@@ -710,15 +710,17 @@ export class Labyrinth {
     return true;
   }
 
-  /** Use bomb at player position: explode 3x3 area, kill monsters, destroy walls, clear traps. Returns true if used. */
+  /** Use bomb at player position: explode 3x3 area, kill monsters (except Dracula & Ghost), destroy walls, clear traps. Returns true if used. */
   useBomb(playerIndex: number): { used: boolean; monstersKilled: number; wallsDestroyed: number; trapsCleared: number } {
     const p = this.players[playerIndex];
     if (!p || (p.bombs ?? 0) <= 0) return { used: false, monstersKilled: 0, wallsDestroyed: 0, trapsCleared: 0 };
     const cx = p.x;
     const cy = p.y;
     const inBlast = (mx: number, my: number) => Math.abs(mx - cx) <= 1 && Math.abs(my - cy) <= 1;
-    const monstersKilled = this.monsters.filter((m) => inBlast(m.x, m.y)).length;
-    this.monsters = this.monsters.filter((m) => !inBlast(m.x, m.y));
+    const bombImmune = (m: Monster) => m.type === "V" || m.type === "G"; // Dracula & Ghost survive bombs
+    const toKill = this.monsters.filter((m) => inBlast(m.x, m.y) && !bombImmune(m));
+    const monstersKilled = toKill.length;
+    this.monsters = this.monsters.filter((m) => !inBlast(m.x, m.y) || bombImmune(m));
     let wallsDestroyed = 0;
     let trapsCleared = 0;
     for (let dy = -1; dy <= 1; dy++) {
