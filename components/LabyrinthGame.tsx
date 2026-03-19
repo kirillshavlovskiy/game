@@ -233,6 +233,8 @@ export default function LabyrinthGame() {
   const [jumpAdded, setJumpAdded] = useState<number | null>(null);
   const [shieldAbsorbed, setShieldAbsorbed] = useState<boolean | null>(null);
   const [shieldGained, setShieldGained] = useState<boolean | null>(null);
+  const [catapultGained, setCatapultGained] = useState<boolean | null>(null);
+  const [bonusMovesGained, setBonusMovesGained] = useState<number | null>(null);
   const [healingGained, setHealingGained] = useState<boolean | null>(null);
   const [harmTaken, setHarmTaken] = useState<boolean | null>(null);
   const [bombGained, setBombGained] = useState<boolean | null>(null);
@@ -576,6 +578,16 @@ export default function LabyrinthGame() {
     const t = setTimeout(() => setShieldGained(null), 1500);
     return () => clearTimeout(t);
   }, [shieldGained]);
+  useEffect(() => {
+    if (catapultGained === null) return;
+    const t = setTimeout(() => setCatapultGained(null), 1500);
+    return () => clearTimeout(t);
+  }, [catapultGained]);
+  useEffect(() => {
+    if (bonusMovesGained === null) return;
+    const t = setTimeout(() => setBonusMovesGained(null), 1500);
+    return () => clearTimeout(t);
+  }, [bonusMovesGained]);
 
   useEffect(() => {
     if (healingGained === null) return;
@@ -661,9 +673,11 @@ export default function LabyrinthGame() {
     setError("");
     setBonusAdded(null);
     setJumpAdded(null);
+    setBonusMovesGained(null);
     setShieldAbsorbed(null);
     setWebSlowed(null);
     setShieldGained(null);
+    setCatapultGained(null);
     setHealingGained(null);
     setHarmTaken(null);
     setBombGained(null);
@@ -734,9 +748,11 @@ export default function LabyrinthGame() {
         setError("");
         setBonusAdded(null);
         setJumpAdded(null);
+        setBonusMovesGained(null);
         setShieldAbsorbed(null);
         setWebSlowed(null);
         setShieldGained(null);
+        setCatapultGained(null);
         setHealingGained(null);
         setBombGained(null);
         setHiddenGemTeleport(null);
@@ -923,19 +939,24 @@ export default function LabyrinthGame() {
           if (totalJumpAdded > 0) setJumpAdded(totalJumpAdded);
           if (totalBonusMoves > 0) setBonusMovesGained(totalBonusMoves);
           if (pi === currentPlayerRef.current) {
-            movesLeftRef.current = 0;
-            setMovesLeft(0);
-            setDiceResult(null);
-            let nextP = (pi + 1) % next.numPlayers;
-            while (next.eliminatedPlayers.has(nextP) && nextP !== pi) {
-              nextP = (nextP + 1) % next.numPlayers;
+            if (totalBonusMoves > 0) {
+              movesLeftRef.current = (movesLeftRef.current ?? 0) + totalBonusMoves;
+              setMovesLeft((m) => (m ?? 0) + totalBonusMoves);
+            } else {
+              movesLeftRef.current = 0;
+              setMovesLeft(0);
+              setDiceResult(null);
+              let nextP = (pi + 1) % next.numPlayers;
+              while (next.eliminatedPlayers.has(nextP) && nextP !== pi) {
+                nextP = (nextP + 1) % next.numPlayers;
+              }
+              const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
+              const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+              const roundComplete = living.length <= 1 || nextP === firstLiving;
+              setTurnChangeEffect(nextP);
+              setCurrentPlayer(nextP);
+              if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
             }
-            const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
-            const firstLiving = living.length > 0 ? Math.min(...living) : -1;
-            const roundComplete = living.length <= 1 || nextP === firstLiving;
-            setTurnChangeEffect(nextP);
-            setCurrentPlayer(nextP);
-            if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
           }
         } else if (!result.won && p) {
           const useShield = combatUseShieldRef.current;
