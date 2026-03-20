@@ -15,10 +15,7 @@ export interface CombatResult {
   attackTotal: number;
   monsterEffect?: string;
   reward?: MonsterReward;
-  /**
-   * Raw d6 in 2–4 on a miss: still scratch the monster for 1 HP (not on ghost evade or shield break).
-   * Pass `rawD6` into resolveCombat so this uses the physical die, not effective roll with dice bonus.
-   */
+  /** On a miss: scratch damage to monster scales with die (dice 5 → 4–5 HP, etc.) */
   glancingDamage?: number;
 }
 
@@ -102,13 +99,13 @@ export function getMonsterReward(monsterType: MonsterType): MonsterReward {
 /** Combat hints for each monster type */
 export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
   switch (type) {
-    case "G": return "👻 Ghost: 50% chance your attack misses!";
+    case "G": return "👻 Ghost: Dice 6 = instant win! Otherwise 50% miss.";
     case "K": return hasShield ? "💀 Skeleton: First hit breaks shield, second hit wins." : "💀 Skeleton: Shield broken — one more hit!";
     case "Z": return "🧟 Zombie: Hits hard (2 dmg) if you lose.";
     case "V": return "🧛 Dracula: High defense (5). Defeat for +1 attack.";
     case "S": return "🕷 Spider: Def 3. Win for +1 jump.";
-    case "L": return "🔥 Lava Elemental: High defense (stance changes it). Only clean hits −1 HP — no scratch damage on a miss. Power dice / +1 attack help.";
-    default: return "Each hit that meets defense −1 HP. Dice 2–4 on a miss still scratch 1 HP.";
+    case "L": return "🔥 Lava Elemental: High defense (6). Dice 6 = instant win! Miss: dice 2→1–2, 3→2–3, 4→3–4, 5→4–5 HP.";
+    default: return "Dice 6 = instant win! Miss: 2→1–2, 3→2–3, 4→3–4, 5→4–5 HP. Attack/angry = monster hits you back.";
   }
 }
 
@@ -118,10 +115,25 @@ export function resolveCombat(
   monsterType: MonsterType,
   skeletonHasShield?: boolean,
   surpriseModifier = 0,
-  rawD6?: number
+  rawD6?: number,
+  surpriseState?: MonsterSurpriseState
 ): CombatResult {
   const monsterDefense = getMonsterDefense(monsterType);
   const monsterDamage = getMonsterDamage(monsterType);
+  const physicalDie = rawD6 ?? playerRoll;
+
+  // Dice 6 = ultimate win, no matter what (bypasses ghost evade, defense, etc.)
+  if (physicalDie === 6) {
+    return {
+      won: true,
+      damage: 0,
+      playerRoll,
+      monsterDefense,
+      attackTotal: playerRoll + attackBonus,
+      reward: getMonsterReward(monsterType),
+      glancingDamage: 0,
+    };
+  }
 
   // Ghost: 50% chance attack misses
   if (monsterType === "G" && Math.random() < 0.5) {
@@ -156,13 +168,19 @@ export function resolveCombat(
 
   const won = hit;
   const dieForGlance = rawD6 !== undefined ? rawD6 : playerRoll;
-  // Lava: no glancing chip — only clean hits (attack ≥ defense) deal damage.
-  const glancingDamage =
-    won || dieForGlance < 2 || dieForGlance > 4 || monsterType === "L" ? 0 : 1;
+  // On a miss: glancing damage = (die-1) to die HP. Dice 5 → 4–5, dice 4 → 3–4, etc.
+  const glanceMin = Math.max(0, dieForGlance - 1);
+  const glanceMax = dieForGlance;
+  const glancingDamage = won ? 0 : (glanceMin >= 1 ? glanceMin + Math.floor(Math.random() * (glanceMax - glanceMin + 1)) : 0);
+
+  // Attack/angry mode: monster counter-attacks, player takes extra damage on miss
+  const isAggressive = surpriseState === "attack" || surpriseState === "angry";
+  const counterBonus = !won && isAggressive ? (surpriseState === "angry" ? 2 : 1) : 0;
+  const playerDamage = won ? 0 : monsterDamage + counterBonus;
 
   return {
     won,
-    damage: won ? 0 : monsterDamage,
+    damage: playerDamage,
     playerRoll,
     monsterDefense: effectiveDefense,
     attackTotal,

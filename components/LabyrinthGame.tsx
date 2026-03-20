@@ -76,8 +76,8 @@ function getCombatMonsterRollScale(stance: MonsterSurpriseState): number {
 const FOG_GRANULARITY = 1; // 1 = per-cell (performant); 8 = fine-grained but heavy DOM
 const FOG_CLEARANCE_RADIUS = 2; // Cells within this distance of player/visited get fog cleared
 
-/** Spider web: use local sprite. Download CC0 asset from opengameart.org/content/simple-spider-web and save as public/spider-web.png. Falls back to SVG if missing. */
-const SPIDER_WEB_SPRITE = "/spider-web.png";
+/** Spider web: same asset as ArtifactIcon web variant */
+const SPIDER_WEB_SPRITE = "/artifacts/spider web.PNG";
 
 function SpiderWebCell() {
   const [imgFailed, setImgFailed] = useState(false);
@@ -123,19 +123,38 @@ const PLAYER_AVATARS = ["🧙", "🧛", "🧟", "🦸", "🧚", "🦊", "🐉", 
 function formatMonsterBonusRewardLabel(r: MonsterBonusReward): string {
   switch (r.type) {
     case "artifact":
-      return "✨ +1 artifact";
+      return "+1 artifact";
     case "bonusMoves":
-      return `🎯 +${r.amount} move${r.amount > 1 ? "s" : ""}`;
+      return `+${r.amount} move${r.amount > 1 ? "s" : ""}`;
     case "shield":
-      return "🛡 +1 shield";
+      return "+1 shield";
     case "jump":
-      return `⬆️ +${r.amount} jump${r.amount > 1 ? "s" : ""}`;
+      return `+${r.amount} jump${r.amount > 1 ? "s" : ""}`;
     case "catapult":
-      return "🎯 +1 catapult";
+      return "+1 catapult";
     case "diceBonus":
-      return "🎲 +1 dice bonus";
+      return "+1 dice bonus";
     default:
       return "Bonus";
+  }
+}
+
+function getBonusRewardIcon(r: MonsterBonusReward, size: number): React.ReactNode {
+  switch (r.type) {
+    case "artifact":
+      return <ArtifactIcon variant="magic" size={size} />;
+    case "bonusMoves":
+      return <ArtifactIcon variant="catapult" size={size} />;
+    case "shield":
+      return <ArtifactIcon variant="shield" size={size} />;
+    case "jump":
+      return <ArtifactIcon variant="jump" size={size} />;
+    case "catapult":
+      return <ArtifactIcon variant="catapult" size={size} />;
+    case "diceBonus":
+      return <ArtifactIcon variant="dice" size={size} />;
+    default:
+      return <ArtifactIcon variant="magic" size={size} />;
   }
 }
 
@@ -656,9 +675,10 @@ export default function LabyrinthGame() {
     combatUseDiceBonusRef.current = combatUseDiceBonus;
   }, [combatUseDiceBonus]);
 
-  // Cancel combat if monster was cleared (e.g. by bomb) before player rolled
+  // Cancel combat only if monster was cleared externally (e.g. bomb) — never close while showing victory/defeat result
   useEffect(() => {
     if (!combatState || !lab) return;
+    if (combatResult) return; // Keep modal open while showing combat result (victory or defeat)
     const collision = lab.checkMonsterCollision(combatState.playerIndex);
     if (!collision) {
       setCombatState(null);
@@ -666,7 +686,7 @@ export default function LabyrinthGame() {
       setCombatUseShield(true);
       setCombatUseDiceBonus(true);
     }
-  }, [lab, combatState]);
+  }, [lab, combatState, combatResult]);
 
   // Init combat options when combat starts (default: use if available)
   const prevCombatKeyRef = useRef<string | null>(null);
@@ -1000,7 +1020,7 @@ export default function LabyrinthGame() {
       const skeletonHasShield = combat.monsterType === "K" && (monster?.hasShield ?? true);
       const surpriseState = combatSurpriseRef.current;
       const surpriseModifier = getSurpriseDefenseModifier(surpriseState);
-      const result = resolveCombat(effectiveRoll, attackBonus, combat.monsterType, skeletonHasShield, surpriseModifier, value);
+      const result = resolveCombat(effectiveRoll, attackBonus, combat.monsterType, skeletonHasShield, surpriseModifier, value, surpriseState);
 
       // Second attempt: idle/hunt + dice 1-3 on miss = retry, no damage. Attack/angry = HP damage.
       const canSecondAttempt = !result.won && (surpriseState === "idle" || surpriseState === "hunt") && value <= 3;
@@ -1210,7 +1230,7 @@ export default function LabyrinthGame() {
         setCombatResult(null);
         const glancePart =
           (result.glancingDamage ?? 0) > 0 && !result.won
-            ? `⚔️ Glancing hit — ${getMonsterName(combat.monsterType)} −1 HP! `
+            ? `⚔️ Glancing hit — ${getMonsterName(combat.monsterType)} −${result.glancingDamage} HP! `
             : "";
         const summary = shieldAbsorbedFlag
           ? "🛡 Shield absorbed — monster still fighting!"
@@ -2885,26 +2905,26 @@ export default function LabyrinthGame() {
                                 : `✗ -${combatResult.damage} HP`}
                   </span>
                   {combatResult.won && (combatResult.reward || combatResult.bonusReward) && (
-                    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12, marginTop: 10 }}>
-                      {combatResult.reward?.type === "jump" && <span style={{ display: "inline-flex" }} title="+1 jump"><ArtifactIcon variant="jump" size={28} /></span>}
-                      {combatResult.reward?.type === "hp" && <span style={{ display: "inline-flex" }} title="+1 HP"><ArtifactIcon variant="healing" size={28} /></span>}
-                      {combatResult.reward?.type === "shield" && <span style={{ display: "inline-flex" }} title="+1 shield"><ArtifactIcon variant="shield" size={28} /></span>}
-                      {combatResult.reward?.type === "attackBonus" && <span style={{ display: "inline-flex" }} title="+1 attack"><ArtifactIcon variant="magic" size={28} /></span>}
-                      {combatResult.reward?.type === "movement" && <span style={{ display: "inline-flex" }} title="+1 move"><ArtifactIcon variant="catapult" size={28} /></span>}
+                    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 16, marginTop: 12 }}>
+                      {combatResult.reward?.type === "jump" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 jump"><ArtifactIcon variant="jump" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 jump</span></span>}
+                      {combatResult.reward?.type === "hp" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 HP"><ArtifactIcon variant="healing" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 HP</span></span>}
+                      {combatResult.reward?.type === "shield" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 shield"><ArtifactIcon variant="shield" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 shield</span></span>}
+                      {combatResult.reward?.type === "attackBonus" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 attack"><ArtifactIcon variant="magic" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 attack</span></span>}
+                      {combatResult.reward?.type === "movement" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 move"><ArtifactIcon variant="catapult" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 move</span></span>}
                       {combatResult.bonusReward?.type === "artifact" && (
-                        <span style={{ display: "inline-flex", filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }} title="+1 artifact">
-                          <ArtifactIcon variant="magic" size={28} />
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }} title="+1 artifact">
+                          <ArtifactIcon variant="magic" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 artifact</span>
                         </span>
                       )}
                       {combatResult.bonusReward?.type === "bonusMoves" && (
-                        <span style={{ display: "inline-flex" }} title={`+${combatResult.bonusReward.amount} moves`}>
-                          <ArtifactIcon variant="catapult" size={28} />
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={`+${combatResult.bonusReward.amount} moves`}>
+                          <ArtifactIcon variant="catapult" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+{combatResult.bonusReward.amount} move{combatResult.bonusReward.amount > 1 ? "s" : ""}</span>
                         </span>
                       )}
-                      {combatResult.bonusReward?.type === "shield" && <span style={{ display: "inline-flex" }} title="+1 shield"><ArtifactIcon variant="shield" size={28} /></span>}
-                      {combatResult.bonusReward?.type === "jump" && <span style={{ display: "inline-flex" }} title="+1 jump"><ArtifactIcon variant="jump" size={28} /></span>}
-                      {combatResult.bonusReward?.type === "catapult" && <span style={{ display: "inline-flex" }} title="+1 catapult charge"><ArtifactIcon variant="catapult" size={28} /></span>}
-                      {combatResult.bonusReward?.type === "diceBonus" && <span style={{ display: "inline-flex" }} title="+1 dice bonus"><ArtifactIcon variant="dice" size={28} /></span>}
+                      {combatResult.bonusReward?.type === "shield" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 shield"><ArtifactIcon variant="shield" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 shield</span></span>}
+                      {combatResult.bonusReward?.type === "jump" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 jump"><ArtifactIcon variant="jump" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 jump</span></span>}
+                      {combatResult.bonusReward?.type === "catapult" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 catapult charge"><ArtifactIcon variant="catapult" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 catapult</span></span>}
+                      {combatResult.bonusReward?.type === "diceBonus" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 dice bonus"><ArtifactIcon variant="dice" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 dice bonus</span></span>}
                     </div>
                   )}
                 </div>
@@ -2920,7 +2940,7 @@ export default function LabyrinthGame() {
                   return (
                     <div style={{ ...combatBonusLootPanelStyle, marginTop: 0 }}>
                       <div style={combatBonusLootTitleStyle}>Bonus loot — pick one</div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", width: "100%" }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", width: "100%" }}>
                         {combatResult.bonusRewardOptions!.map((opt, i) => (
                           <button
                             key={`${opt.type}-${i}`}
@@ -2928,17 +2948,25 @@ export default function LabyrinthGame() {
                             onClick={() => handlePickCombatBonusReward(pi, mt, opt)}
                             style={{
                               ...buttonStyle,
-                              minWidth: 128,
+                              minWidth: 140,
                               background: "#0d2818",
                               color: "#00ff88",
                               border: "2px solid #00ff88aa",
-                              fontSize: "0.9rem",
-                              padding: "10px 14px",
+                              fontSize: "0.95rem",
+                              padding: "14px 18px",
                               fontWeight: "bold",
                               flexShrink: 0,
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              gap: 8,
+                              boxShadow: "0 0 12px rgba(0,255,136,0.2)",
                             }}
                           >
-                            {formatMonsterBonusRewardLabel(opt)}
+                            <span style={{ display: "inline-flex", filter: "drop-shadow(0 0 4px rgba(0,255,136,0.5))" }}>
+                              {getBonusRewardIcon(opt, 44)}
+                            </span>
+                            <span>{formatMonsterBonusRewardLabel(opt)}</span>
                           </button>
                         ))}
                         <button
@@ -3361,11 +3389,11 @@ export default function LabyrinthGame() {
                     src={getMonsterIdleSprite(monster.type)!}
                     alt={getMonsterName(monster.type)}
                     className="monster-icon"
-                    style={{ width: 36, height: 36, objectFit: "contain" }}
+                    style={{ width: 42, height: 42, objectFit: "contain" }}
                     title={getMonsterName(monster.type)}
                   />
                 ) : (
-                  <span key="m" className="monster-icon" style={{ fontSize: "1.75rem", lineHeight: 1 }} title={getMonsterName(monster.type)}>
+                  <span key="m" className="monster-icon" style={{ fontSize: "2.1rem", lineHeight: 1 }} title={getMonsterName(monster.type)}>
                     {getMonsterIcon(monster.type)}
                   </span>
                 )
@@ -3467,7 +3495,7 @@ export default function LabyrinthGame() {
                   const title = art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : art === ARTIFACT_HEALING ? "+1 HP" : "Reveal";
                   content = (
                     <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={title}>
-                      {art === ARTIFACT_SHIELD ? <ArtifactIcon variant="shield" size={26} /> : art === ARTIFACT_TELEPORT_CELL ? <ArtifactIcon variant="magic" size={26} /> : art === ARTIFACT_DICE ? <ArtifactIcon variant="dice" size={26} /> : art === ARTIFACT_HEALING ? <ArtifactIcon variant="healing" size={26} /> : <ArtifactIcon variant="reveal" size={26} />}
+                      {art === ARTIFACT_SHIELD ? <ArtifactIcon variant="shield" size={42} /> : art === ARTIFACT_TELEPORT_CELL ? <ArtifactIcon variant="magic" size={42} /> : art === ARTIFACT_DICE ? <ArtifactIcon variant="dice" size={42} /> : art === ARTIFACT_HEALING ? <ArtifactIcon variant="healing" size={42} /> : <ArtifactIcon variant="reveal" size={42} />}
                     </span>
                   );
                 }
@@ -3477,7 +3505,7 @@ export default function LabyrinthGame() {
                   const trap = cellType;
                   content = (
                     <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={trap === TRAP_LOSE_TURN ? "Lose turn" : trap === TRAP_HARM ? "Harm: -1 HP (shield blocks)" : trap === TRAP_TELEPORT ? "Teleport" : "Slow"}>
-                      <ArtifactIcon variant="trap" size={28} />
+                      <ArtifactIcon variant="trap" size={42} />
                     </span>
                   );
                 }
@@ -3486,7 +3514,7 @@ export default function LabyrinthGame() {
                 {
                   content = (
                     <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title="Bomb pickup">
-                      <ArtifactIcon variant="bomb" size={28} />
+                      <ArtifactIcon variant="bomb" size={36} />
                     </span>
                   );
                 }
@@ -3496,7 +3524,7 @@ export default function LabyrinthGame() {
                 {
                   content = (
                     <span className="hole-cell" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", opacity: magicUsed ? 0.4 : 1 }} title={magicUsed ? "Teleport used" : "Teleport: pick destination"}>
-                      <ArtifactIcon variant="magic" size={28} />
+                      <ArtifactIcon variant="magic" size={36} />
                     </span>
                   );
                 }
@@ -3506,7 +3534,7 @@ export default function LabyrinthGame() {
                 {
                   content = (
                     <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", opacity: catapultUsed ? 0.4 : 1 }} title={catapultUsed ? "Catapult used" : "Slingshot"}>
-                      <ArtifactIcon variant="catapult" size={28} />
+                      <ArtifactIcon variant="catapult" size={36} />
                     </span>
                   );
                 }
@@ -3517,7 +3545,7 @@ export default function LabyrinthGame() {
               } else if (showSecretCells && isShieldCell(cellType)) {
                 content = (
                   <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-                    <ArtifactIcon variant="shield" size={28} />
+                    <ArtifactIcon variant="shield" size={36} />
                   </span>
                 );
                 cellClass += " path shield";
@@ -3525,7 +3553,7 @@ export default function LabyrinthGame() {
                 const owner = getCollectibleOwner(cellType);
                 content = (
                   <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-                    <ArtifactIcon variant="diamond" size={28} />
+                    <ArtifactIcon variant="diamond" size={36} />
                   </span>
                 );
                 cellClass += " path collectible";

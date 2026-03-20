@@ -92,9 +92,11 @@ export function getMonsterDamage(type: MonsterType): number {
   return type === "Z" || type === "L" ? 2 : 1; // Zombie, Lava = 2; Dracula, Ghost, Skeleton, Spider = 1
 }
 
-/** Max HP per monster type. Most = 1 (one hit kills). Zombie = 2, Dracula = 3. */
-export function getMonsterMaxHp(type: MonsterType): number {
-  return type === "V" ? 3 : type === "Z" ? 2 : 1;
+/** Max HP for every monster. Each hit that meets defense −1 HP. */
+export const MONSTER_HP_MAX = 5;
+
+export function getMonsterMaxHp(_type: MonsterType): number {
+  return MONSTER_HP_MAX;
 }
 
 /** Min/max damage for variable monster attacks. Returns [min, max] inclusive. */
@@ -1017,7 +1019,7 @@ export class Labyrinth {
     for (let y = 0; y < this.height; y++)
       for (let x = 0; x < this.width; x++)
         if (
-          this.grid[y][x] === MAGIC &&
+          this.getCellAt(x, y) === MAGIC &&
           (x !== p.x || y !== p.y) &&
           dist(x, y) <= effectiveMaxDist &&
           !this.hasUsedTeleportFrom(playerIndex, x, y) &&
@@ -1048,7 +1050,7 @@ export class Labyrinth {
   teleportToCell(playerIndex: number, destX: number, destY: number): boolean {
     const p = this.players[playerIndex];
     if (!p) return false;
-    if (this.grid[destY]?.[destX] !== MAGIC) return false;
+    if (this.getCellAt(destX, destY) !== MAGIC) return false;
     if (destX === p.x && destY === p.y) return false;
     p.x = destX;
     p.y = destY;
