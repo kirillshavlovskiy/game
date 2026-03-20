@@ -1,0 +1,27 @@
+{
+  "name": "labyrinth-game",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node node_modules/next/dist/bin/next dev",
+    "validate-scenarios": "npx tsx scripts/validate-scenarios.ts",
+    "build": "next build",
+    "clean": "rm -rf .next node_modules package-lock.json && npm install",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@3d-dice/dice-box-threejs": "^0.0.12",
+    "next": "^14.2.35",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "eslint": "^8",
+    "eslint-config-next": "^14.2.35",
+    "typescript": "^5"
+  }
+}

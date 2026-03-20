@@ -20,17 +20,15 @@ export const TRAP_HARM = "!";
 export const TRAP_TELEPORT = "P";
 export const TRAP_SLOW = "Q"; // Q for slow (S conflicts with Start display)
 
-/** Artifact cell types (A1-A7) */
+/** Artifact cell types (A1-A5) */
 export const ARTIFACT_DICE = "A1";
 export const ARTIFACT_SHIELD = "A2";
 export const ARTIFACT_TELEPORT = "A3";
 export const ARTIFACT_REVEAL = "A4";
 export const ARTIFACT_HEALING = "A5";
-export const ARTIFACT_HOLY_SWORD = "A6";
-export const ARTIFACT_HOLY_CROSS = "A7";
 
 export const MAX_ROUNDS = 15;
-export const DEFAULT_PLAYER_HP = 5;
+export const DEFAULT_PLAYER_HP = 3;
 
 export type MonsterType = "V" | "Z" | "S" | "G" | "K" | "L"; // Vampire/Dracula, Zombie, Spider, Ghost, Skeleton, Lava Elemental
 
@@ -68,7 +66,7 @@ export interface Monster {
   spawnY?: number;
   /** Skeleton only: first hit removes shield, second kills */
   hasShield?: boolean;
-  /** Current HP in combat (all monsters; max from getMonsterMaxHp) */
+  /** Dracula only: boss with 2 HP */
   hp?: number;
   /** Dracula only: state machine */
   draculaState?: DraculaState;
@@ -87,16 +85,16 @@ export function getMonsterName(type: MonsterType): string {
 }
 
 export function getMonsterDefense(type: MonsterType): number {
-  return type === "V" ? 5 : type === "Z" || type === "K" ? 4 : type === "L" ? 6 : 3; // Spider, Ghost = 3; Lava = 6 (+ surprise mod in combat)
+  return type === "V" ? 5 : type === "Z" || type === "K" || type === "L" ? 4 : 3; // Spider, Ghost = 3; Lava = 4
 }
 
 export function getMonsterDamage(type: MonsterType): number {
   return type === "Z" || type === "L" ? 2 : 1; // Zombie, Lava = 2; Dracula, Ghost, Skeleton, Spider = 1
 }
 
-/** Max HP per monster type. Most = 1 (one hit kills). Zombie = 2, Dracula = 3. */
+/** Max HP for multi-hit monsters. Others = 1 (one-shot). */
 export function getMonsterMaxHp(type: MonsterType): number {
-  return type === "V" ? 3 : type === "Z" ? 2 : 1;
+  return type === "V" ? DRACULA_CONFIG.hp : type === "Z" || type === "L" ? 2 : 1;
 }
 
 /** Min/max damage for variable monster attacks. Returns [min, max] inclusive. */
@@ -105,50 +103,12 @@ export function getMonsterDamageRange(type: MonsterType): [number, number] {
   return [base, base + 1]; // e.g. 1→1-2, 2→2-3
 }
 
-/** Extra d6 attack from holy sword relics vs physical/fiery foes (total = +2 per A6 collected). */
-export function getHolySwordAttackBonusVsMonster(
-  monsterType: MonsterType,
-  holySwordAttackBonus: number | undefined
-): number {
-  const b = holySwordAttackBonus ?? 0;
-  if (b <= 0) return 0;
-  if (monsterType === "Z" || monsterType === "S" || monsterType === "K" || monsterType === "L") return b;
-  return 0;
-}
-
-/** Extra d6 attack from holy cross relics vs undead/spirits (total = +3 per A7 collected). */
-export function getHolyCrossAttackBonusVsMonster(
-  monsterType: MonsterType,
-  holyCrossAttackBonus: number | undefined
-): number {
-  const b = holyCrossAttackBonus ?? 0;
-  if (b <= 0) return 0;
-  if (monsterType === "V" || monsterType === "G") return b;
-  return 0;
-}
-
-export function getRelicAttackBonusForMonster(
-  monsterType: MonsterType,
-  holySwordAttackBonus: number | undefined,
-  holyCrossAttackBonus: number | undefined
-): number {
-  return getHolySwordAttackBonusVsMonster(monsterType, holySwordAttackBonus) + getHolyCrossAttackBonusVsMonster(monsterType, holyCrossAttackBonus);
-}
-
 export function isTrapCell(cell: string): boolean {
   return cell === TRAP_LOSE_TURN || cell === TRAP_HARM || cell === TRAP_TELEPORT || cell === TRAP_SLOW;
 }
 
 export function isArtifactCell(cell: string): boolean {
-  return (
-    cell === ARTIFACT_DICE ||
-    cell === ARTIFACT_SHIELD ||
-    cell === ARTIFACT_TELEPORT ||
-    cell === ARTIFACT_REVEAL ||
-    cell === ARTIFACT_HEALING ||
-    cell === ARTIFACT_HOLY_SWORD ||
-    cell === ARTIFACT_HOLY_CROSS
-  );
+  return cell === ARTIFACT_DICE || cell === ARTIFACT_SHIELD || cell === ARTIFACT_TELEPORT || cell === ARTIFACT_REVEAL || cell === ARTIFACT_HEALING;
 }
 
 export function isMultiplierCell(cell: string): cell is "2" | "3" | "4" {
@@ -219,12 +179,7 @@ export class Labyrinth {
     artifacts: number;
     artifactsCollected?: string[];
     diceBonus?: number; // +1 to next roll from A1
-    attackBonus?: number; // +1 attack from defeating Dracula (capped at 1 in combat)
-    /** Stacked +2 per holy sword (A6) pickup; applies vs Zombie, Spider, Skeleton, Lava in combat */
-    holySwordAttackBonus?: number;
-    /** Stacked +3 per holy cross (A7) pickup; applies vs Dracula, Ghost in combat */
-    holyCrossAttackBonus?: number;
-    catapultCharges?: number; // bonus from monster defeat - launch without standing on C cell
+    attackBonus?: number; // +1 attack from defeating Dracula
     hasTeleportArtifact?: boolean; // A3
     hasTorch?: boolean; // from hidden gem - clears fog zones
     loseNextMove?: boolean; // Zombie won: lose 1 movement next turn
@@ -277,11 +232,8 @@ export class Labyrinth {
       artifacts: 0,
       artifactsCollected: [] as string[],
       diceBonus: 0,
-      catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
-      holySwordAttackBonus: 0,
-      holyCrossAttackBonus: 0,
     }));
     this.goalX = width - 1;
     this.goalY = height - 1;
@@ -459,18 +411,10 @@ export class Labyrinth {
     }
     const rest3d = rest3c.filter((c) => !trapCells.some((t) => t[0] === c[0] && t[1] === c[1]));
     const artifactCells = this._pickSpread(rest3d, Math.min(artifactCount, rest3d.length));
-    const artifactTypes = [
-      ARTIFACT_DICE,
-      ARTIFACT_SHIELD,
-      ARTIFACT_TELEPORT,
-      ARTIFACT_REVEAL,
-      ARTIFACT_HEALING,
-      ARTIFACT_HOLY_SWORD,
-      ARTIFACT_HOLY_CROSS,
-    ];
+    const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL, ARTIFACT_HEALING];
     for (let i = 0; i < artifactCells.length; i++) {
       const [x, y] = artifactCells[i];
-      this.grid[y][x] = artifactTypes[i % artifactTypes.length];
+      this.grid[y][x] = artifactTypes[i % 5];
     }
 
     for (let i = 0; i < multCells.length; i++) {
@@ -622,12 +566,14 @@ export class Labyrinth {
             spawnX: x,
             spawnY: y,
             hasShield: mType === "K",
-            hp: getMonsterMaxHp(mType),
           };
           if (mType === "V") {
+            m.hp = DRACULA_CONFIG.hp;
             m.draculaState = "idle";
             m.draculaCooldowns = { teleport: 0, attack: 0 };
             m.targetPlayerIndex = null;
+          } else if (mType === "Z" || mType === "L") {
+            m.hp = 2;
           }
           this.monsters.push(m);
         }
@@ -748,17 +694,15 @@ export class Labyrinth {
     return true;
   }
 
-  /** Use bomb at player position: explode 3x3 area, kill monsters (except Dracula & Ghost), destroy walls, clear traps. Returns true if used. */
+  /** Use bomb at player position: explode 3x3 area, kill monsters, destroy walls, clear traps. Returns true if used. */
   useBomb(playerIndex: number): { used: boolean; monstersKilled: number; wallsDestroyed: number; trapsCleared: number } {
     const p = this.players[playerIndex];
     if (!p || (p.bombs ?? 0) <= 0) return { used: false, monstersKilled: 0, wallsDestroyed: 0, trapsCleared: 0 };
     const cx = p.x;
     const cy = p.y;
     const inBlast = (mx: number, my: number) => Math.abs(mx - cx) <= 1 && Math.abs(my - cy) <= 1;
-    const bombImmune = (m: Monster) => m.type === "V" || m.type === "G"; // Dracula & Ghost survive bombs
-    const toKill = this.monsters.filter((m) => inBlast(m.x, m.y) && !bombImmune(m));
-    const monstersKilled = toKill.length;
-    this.monsters = this.monsters.filter((m) => !inBlast(m.x, m.y) || bombImmune(m));
+    const monstersKilled = this.monsters.filter((m) => inBlast(m.x, m.y)).length;
+    this.monsters = this.monsters.filter((m) => !inBlast(m.x, m.y));
     let wallsDestroyed = 0;
     let trapsCleared = 0;
     for (let dy = -1; dy <= 1; dy++) {
@@ -835,11 +779,8 @@ export class Labyrinth {
       artifacts: 0,
       artifactsCollected: [] as string[],
       diceBonus: 0,
-      catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
-      holySwordAttackBonus: 0,
-      holyCrossAttackBonus: 0,
     }));
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
@@ -892,11 +833,8 @@ export class Labyrinth {
       artifacts: 0,
       artifactsCollected: [] as string[],
       diceBonus: 0,
-      catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
-      holySwordAttackBonus: 0,
-      holyCrossAttackBonus: 0,
     }));
     this.monsters = [];
     this.eliminatedPlayers = new Set();

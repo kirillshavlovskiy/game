@@ -1,0 +1,5 @@
+{
+  "id": "zombie",
+  "monsterType": "Z",
+  "states": ["idle", "hunt", "attack", "hurt", "recover", "defeated"]
+}
