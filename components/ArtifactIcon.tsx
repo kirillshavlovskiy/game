@@ -1,6 +1,6 @@
 "use client";
 
-/** Artifact icon variants mapped to /artifacts/*.png assets */
+/** Artifact icon variants mapped to /artifacts/* assets */
 export type ArtifactIconVariant =
   | "bomb"
   | "diamond"
@@ -11,7 +11,9 @@ export type ArtifactIconVariant =
   | "dice"
   | "healing"
   | "reveal"
-  | "jump";
+  | "jump"
+  | "torch"
+  | "trap";
 
 const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
   bomb: "/artifacts/bmb.PNG",
@@ -24,6 +26,8 @@ const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
   healing: "/artifacts/shield.png",
   reveal: "/artifacts/teleport.PNG",
   jump: "/artifacts/ctplt.PNG",
+  torch: "/artifacts/torch.PNG",
+  trap: "/artifacts/trap.PNG",
 };
 
 interface ArtifactIconProps {
