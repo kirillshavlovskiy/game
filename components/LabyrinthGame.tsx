@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
+import { ArtifactIcon } from "@/components/ArtifactIcon";
 import {
   Labyrinth,
   PATH,
@@ -49,14 +50,14 @@ const FOG_CLEARANCE_RADIUS = 2; // Cells within this distance of player/visited 
 /** Avatar options for player selection (emoji) */
 const PLAYER_AVATARS = ["🧙", "🧛", "🧟", "🦸", "🧚", "🦊", "🐉", "🦉", "🐺", "🦋"] as const;
 
-function getArtifactIcon(a: string): string {
-  if (a.startsWith("monster-")) return "✨";
-  if (a === ARTIFACT_DICE) return "🎲";
-  if (a === ARTIFACT_SHIELD) return "🛡";
-  if (a === ARTIFACT_TELEPORT_CELL) return "🌀";
-  if (a === ARTIFACT_HEALING) return "❤️";
-  if (a === ARTIFACT_REVEAL) return "👁";
-  return "✨";
+function getArtifactIcon(a: string): React.ReactNode {
+  if (a.startsWith("monster-")) return <ArtifactIcon variant="magic" size={20} />;
+  if (a === ARTIFACT_DICE) return <ArtifactIcon variant="dice" size={20} />;
+  if (a === ARTIFACT_SHIELD) return <ArtifactIcon variant="shield" size={20} />;
+  if (a === ARTIFACT_TELEPORT_CELL) return <ArtifactIcon variant="magic" size={20} />;
+  if (a === ARTIFACT_HEALING) return <ArtifactIcon variant="healing" size={20} />;
+  if (a === ARTIFACT_REVEAL) return <ArtifactIcon variant="reveal" size={20} />;
+  return <ArtifactIcon variant="magic" size={20} />;
 }
 
 /**
@@ -2011,7 +2012,7 @@ export default function LabyrinthGame() {
                   textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
                 }}
               >
-                {playerNames[i] ?? `P${i + 1}`}:💎{p?.diamonds ?? 0}
+                {playerNames[i] ?? `P${i + 1}`}: <ArtifactIcon variant="diamond" size={16} style={{ marginLeft: 2, marginRight: 2, verticalAlign: "middle" }} />{p?.diamonds ?? 0}
               </span>
             ))}
           </span>
@@ -2093,14 +2094,14 @@ export default function LabyrinthGame() {
                   ))}
                 </div>
               )}
-              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
-                Diamonds: {p?.diamonds ?? 0}
+              <div style={{ fontSize: "0.75rem", color: "#aaa", display: "flex", alignItems: "center", gap: 4 }}>
+                <ArtifactIcon variant="diamond" size={14} /> Diamonds: {p?.diamonds ?? 0}
               </div>
-              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
-                Shield: {p?.shield ?? 0}
+              <div style={{ fontSize: "0.75rem", color: "#aaa", display: "flex", alignItems: "center", gap: 4 }}>
+                <ArtifactIcon variant="shield" size={14} /> Shield: {p?.shield ?? 0}
               </div>
-              <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
-                Bombs: {p?.bombs ?? 0}
+              <div style={{ fontSize: "0.75rem", color: "#aaa", display: "flex", alignItems: "center", gap: 4 }}>
+                <ArtifactIcon variant="bomb" size={14} /> Bombs: {p?.bombs ?? 0}
               </div>
             </div>
           ))}
@@ -2231,17 +2232,17 @@ export default function LabyrinthGame() {
                 </div>
                 {combatResult.won && (combatResult.reward || combatResult.bonusReward) && (
                   <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12, marginTop: 10 }}>
-                    {combatResult.reward?.type === "jump" && <span style={{ fontSize: "1.8rem" }} title="+1 jump">⬆️</span>}
-                    {combatResult.reward?.type === "hp" && <span style={{ fontSize: "1.8rem" }} title="+1 HP">❤️</span>}
-                    {combatResult.reward?.type === "shield" && <span style={{ fontSize: "1.8rem" }} title="+1 shield">🛡</span>}
-                    {combatResult.reward?.type === "attackBonus" && <span style={{ fontSize: "1.8rem" }} title="+1 attack">⚔️</span>}
-                    {combatResult.reward?.type === "movement" && <span style={{ fontSize: "1.8rem" }} title="+1 move">🎯</span>}
-                    {combatResult.bonusReward?.type === "artifact" && <span style={{ fontSize: "1.8rem", filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }} title="+1 artifact">✨</span>}
-                    {combatResult.bonusReward?.type === "bonusMoves" && <span style={{ fontSize: "1.8rem" }} title="+2 moves">🎯</span>}
-                    {combatResult.bonusReward?.type === "shield" && <span style={{ fontSize: "1.8rem" }} title="+1 shield">🛡</span>}
-                    {combatResult.bonusReward?.type === "jump" && <span style={{ fontSize: "1.8rem" }} title="+1 jump">⬆️</span>}
-                    {combatResult.bonusReward?.type === "catapult" && <span style={{ fontSize: "1.8rem" }} title="+1 catapult charge">🎯</span>}
-                    {combatResult.bonusReward?.type === "diceBonus" && <span style={{ fontSize: "1.8rem" }} title="+1 dice bonus">🎲</span>}
+                    {combatResult.reward?.type === "jump" && <span style={{ display: "inline-flex" }} title="+1 jump"><ArtifactIcon variant="jump" size={28} /></span>}
+                    {combatResult.reward?.type === "hp" && <span style={{ display: "inline-flex" }} title="+1 HP"><ArtifactIcon variant="healing" size={28} /></span>}
+                    {combatResult.reward?.type === "shield" && <span style={{ display: "inline-flex" }} title="+1 shield"><ArtifactIcon variant="shield" size={28} /></span>}
+                    {combatResult.reward?.type === "attackBonus" && <span style={{ display: "inline-flex" }} title="+1 attack"><ArtifactIcon variant="magic" size={28} /></span>}
+                    {combatResult.reward?.type === "movement" && <span style={{ display: "inline-flex" }} title="+1 move"><ArtifactIcon variant="catapult" size={28} /></span>}
+                    {combatResult.bonusReward?.type === "artifact" && <span style={{ display: "inline-flex", filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }} title="+1 artifact"><ArtifactIcon variant="magic" size={28} /></span>}
+                    {combatResult.bonusReward?.type === "bonusMoves" && <span style={{ display: "inline-flex" }} title="+2 moves"><ArtifactIcon variant="catapult" size={28} /></span>}
+                    {combatResult.bonusReward?.type === "shield" && <span style={{ display: "inline-flex" }} title="+1 shield"><ArtifactIcon variant="shield" size={28} /></span>}
+                    {combatResult.bonusReward?.type === "jump" && <span style={{ display: "inline-flex" }} title="+1 jump"><ArtifactIcon variant="jump" size={28} /></span>}
+                    {combatResult.bonusReward?.type === "catapult" && <span style={{ display: "inline-flex" }} title="+1 catapult charge"><ArtifactIcon variant="catapult" size={28} /></span>}
+                    {combatResult.bonusReward?.type === "diceBonus" && <span style={{ display: "inline-flex" }} title="+1 dice bonus"><ArtifactIcon variant="dice" size={28} /></span>}
                   </div>
                 )}
                 {(combatResult.monsterMaxHp ?? 0) > 0 && (
@@ -2424,7 +2425,7 @@ export default function LabyrinthGame() {
                         onChange={(e) => setCombatUseShield(e.target.checked)}
                         style={{ width: 20, height: 20, accentColor: "#44ff88" }}
                       />
-                      <span>🛡 Shield — block damage if I lose</span>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="shield" size={18} /> Shield — block damage if I lose</span>
                     </label>
                   )}
                   {lab && (lab.players[combatState.playerIndex]?.diceBonus ?? 0) > 0 && (
@@ -2435,7 +2436,7 @@ export default function LabyrinthGame() {
                         onChange={(e) => setCombatUseDiceBonus(e.target.checked)}
                         style={{ width: 20, height: 20, accentColor: "#ffcc00" }}
                       />
-                      <span>🎲 Power — +1 to attack roll</span>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="dice" size={18} /> Power — +1 to attack roll</span>
                     </label>
                   )}
                   {lab && (lab.players[combatState.playerIndex]?.shield ?? 0) <= 0 && (lab.players[combatState.playerIndex]?.diceBonus ?? 0) <= 0 && (
@@ -2444,7 +2445,7 @@ export default function LabyrinthGame() {
                 </div>
                 </>
                 )}
-                <div style={{ color: "#ffcc00", fontSize: "1rem", fontWeight: "bold", marginBottom: 8, marginTop: 4 }}>🎲 {rolling ? "Rolling..." : "Roll dice to attack"}</div>
+                <div style={{ color: "#ffcc00", fontSize: "1rem", fontWeight: "bold", marginBottom: 8, marginTop: 4, display: "flex", alignItems: "center", gap: 8 }}><ArtifactIcon variant="dice" size={24} /> {rolling ? "Rolling..." : "Roll dice to attack"}</div>
                 <div
                   className="combat-dice"
                   onClick={handleCombatRollClick}
@@ -2512,7 +2513,9 @@ export default function LabyrinthGame() {
             <span style={{ color: "#ffcc00" }}>×{bonusAdded / diceResult} moves!</span>
           )}
           {webSlowed !== null && (
-            <span style={{ color: "#aaaacc", marginLeft: bonusAdded ? 12 : 0 }}>🕸 Spider web: costs 2 moves</span>
+            <span style={{ color: "#aaaacc", marginLeft: bonusAdded ? 12 : 0, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <ArtifactIcon variant="web" size={20} /> Spider web: costs 2 moves
+            </span>
           )}
           {jumpAdded !== null && (
             <span style={{ color: "#66aaff", marginLeft: bonusAdded ? 12 : 0 }}>
@@ -2520,31 +2523,37 @@ export default function LabyrinthGame() {
             </span>
           )}
           {shieldAbsorbed !== null && (
-            <span style={{ color: "#44ff88", marginLeft: 12 }}>🛡 Shield absorbed attack!</span>
+            <span style={{ color: "#44ff88", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <ArtifactIcon variant="shield" size={20} /> Shield absorbed attack!
+            </span>
           )}
           {harmTaken !== null && (
             <span style={{ color: "#ff4444", fontWeight: "bold" }}>⚠ -1 HP (trap)</span>
           )}
           {shieldGained !== null && (
-            <span style={{ color: "#44ff88", marginLeft: 12 }}>🛡 +1 Shield!</span>
+            <span style={{ color: "#44ff88", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <ArtifactIcon variant="shield" size={20} /> +1 Shield!
+            </span>
           )}
           {healingGained !== null && (
-            <span style={{ color: "#44ff88", marginLeft: 12 }}>❤️ +1 HP!</span>
+            <span style={{ color: "#44ff88", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="healing" size={20} /> +1 HP!</span>
           )}
           {draculaAttacked !== null && (
             <span style={{ color: "#ff4444", marginLeft: 12 }}>🧛 Dracula bit you! -1 HP</span>
           )}
           {bombGained !== null && (
-            <span style={{ color: "#ff8844", marginLeft: 12 }}>💣 +1 Bomb!</span>
+            <span style={{ color: "#ff8844", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <ArtifactIcon variant="bomb" size={20} /> +1 Bomb!
+            </span>
           )}
           {hiddenGemTeleport !== null && (
-            <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ Hidden gem: Teleport!</span>
+            <span style={{ color: "#aa66ff", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="magic" size={20} /> Hidden gem: Teleport!</span>
           )}
           {torchGained !== null && (
             <span style={{ color: "#ffcc66", marginLeft: 12 }}>🔦 Torch! Fog zones cleared</span>
           )}
           {cellsRevealed !== null && (
-            <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ {cellsRevealed} hidden cells revealed!</span>
+            <span style={{ color: "#aa66ff", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="reveal" size={20} /> {cellsRevealed} hidden cells revealed!</span>
           )}
         </div>
       )}
@@ -2819,9 +2828,10 @@ export default function LabyrinthGame() {
                 const showArtifact = !isHidden && !isFogged;
                 if (showArtifact) {
                   const art = cellType;
+                  const title = art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : art === ARTIFACT_HEALING ? "+1 HP" : "Reveal";
                   content = (
-                    <span style={{ fontSize: "1.1rem" }} title={art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : art === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}>
-                      {art === ARTIFACT_DICE ? "🎲" : art === ARTIFACT_SHIELD ? "🛡" : art === ARTIFACT_TELEPORT_CELL ? "🌀" : art === ARTIFACT_HEALING ? "❤️" : "👁"}
+                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={title}>
+                      {art === ARTIFACT_SHIELD ? <ArtifactIcon variant="shield" size={26} /> : art === ARTIFACT_TELEPORT_CELL ? <ArtifactIcon variant="magic" size={26} /> : art === ARTIFACT_DICE ? <ArtifactIcon variant="dice" size={26} /> : art === ARTIFACT_HEALING ? <ArtifactIcon variant="healing" size={26} /> : <ArtifactIcon variant="reveal" size={26} />}
                     </span>
                   );
                 }
@@ -2847,8 +2857,8 @@ export default function LabyrinthGame() {
               } else if (isBombCell(cellType)) {
                 {
                   content = (
-                    <span style={{ fontSize: "1.1rem" }} title="Bomb pickup">
-                      💣
+                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title="Bomb pickup">
+                      <ArtifactIcon variant="bomb" size={28} />
                     </span>
                   );
                 }
@@ -2857,8 +2867,8 @@ export default function LabyrinthGame() {
                 const magicUsed = lab.hasUsedTeleportFrom(currentPlayer, x, y);
                 {
                   content = (
-                    <span className="hole-cell" style={{ fontSize: "1.1rem", opacity: magicUsed ? 0.4 : 1 }} title={magicUsed ? "Teleport used" : "Teleport: pick destination"}>
-                      🌀
+                    <span className="hole-cell" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", opacity: magicUsed ? 0.4 : 1 }} title={magicUsed ? "Teleport used" : "Teleport: pick destination"}>
+                      <ArtifactIcon variant="magic" size={28} />
                     </span>
                   );
                 }
@@ -2867,12 +2877,8 @@ export default function LabyrinthGame() {
                 const catapultUsed = lab.hasUsedCatapultFrom(currentPlayer, x, y);
                 {
                   content = (
-                    <span style={{ fontSize: "1.2rem", display: "inline-flex", alignItems: "center", justifyContent: "center", opacity: catapultUsed ? 0.4 : 1 }} title={catapultUsed ? "Catapult used" : "Slingshot"}>
-                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M5 4v4a7 7 0 0 0 14 0V4" />
-                        <path d="M5 8h14" />
-                        <ellipse cx="12" cy="14" rx="3" ry="2" fill="#ffcc0044" stroke="#ffcc00" />
-                      </svg>
+                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", opacity: catapultUsed ? 0.4 : 1 }} title={catapultUsed ? "Catapult used" : "Slingshot"}>
+                      <ArtifactIcon variant="catapult" size={28} />
                     </span>
                   );
                 }
@@ -2881,11 +2887,19 @@ export default function LabyrinthGame() {
                 content = "J";
                 cellClass += " path jump";
               } else if (showSecretCells && isShieldCell(cellType)) {
-                content = "🛡";
+                content = (
+                  <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                    <ArtifactIcon variant="shield" size={28} />
+                  </span>
+                );
                 cellClass += " path shield";
               } else if (showSecretCells && isDiamondCell(cellType)) {
                 const owner = getCollectibleOwner(cellType);
-                content = "💎";
+                content = (
+                  <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                    <ArtifactIcon variant="diamond" size={28} />
+                  </span>
+                );
                 cellClass += " path collectible";
                 if (owner !== null) cellClass += " collectible-p" + owner;
                 if (owner === currentPlayer) cellClass += " collectible-mine";
@@ -3400,7 +3414,7 @@ export default function LabyrinthGame() {
             style={{ ...buttonStyle, width: "100%", background: (cp?.bombs ?? 0) > 0 ? "#ff8844" : "#444", color: "#fff" }}
             title={combatState ? "Explode 3×3 to clear monster (no move cost)" : "Explode 3×3 area (uses 1 move)"}
           >
-            💣 Use Bomb
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="bomb" size={18} /> Use Bomb</span>
           </button>
         </div>
 
