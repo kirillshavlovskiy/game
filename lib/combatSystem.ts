@@ -15,6 +15,11 @@ export interface CombatResult {
   attackTotal: number;
   monsterEffect?: string;
   reward?: MonsterReward;
+  /**
+   * Raw d6 in 2–4 on a miss: still scratch the monster for 1 HP (not on ghost evade or shield break).
+   * Pass `rawD6` into resolveCombat so this uses the physical die, not effective roll with dice bonus.
+   */
+  glancingDamage?: number;
 }
 
 export type MonsterReward =
@@ -48,6 +53,21 @@ export function getMonsterBonusReward(): MonsterBonusReward | null {
   return BONUS_REWARDS[Math.floor(Math.random() * BONUS_REWARDS.length)]!;
 }
 
+/** Shuffled bonus options for post-combat player choice (up to `count`, unique types). */
+export function getMonsterBonusRewardChoices(count = 3): MonsterBonusReward[] {
+  const shuffled = [...BONUS_REWARDS].sort(() => Math.random() - 0.5);
+  const seen = new Set<string>();
+  const out: MonsterBonusReward[] = [];
+  for (const r of shuffled) {
+    const key = r.type;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+    if (out.length >= count) break;
+  }
+  return out;
+}
+
 /** Surprise state affects monster defense: idle=easier, angry=harder */
 export function getSurpriseDefenseModifier(state: MonsterSurpriseState): number {
   switch (state) {
@@ -60,7 +80,7 @@ export function getSurpriseDefenseModifier(state: MonsterSurpriseState): number 
 }
 
 export function getMonsterDefense(type: MonsterType): number {
-  return type === "V" ? 5 : type === "Z" || type === "K" || type === "L" ? 4 : 3;
+  return type === "V" ? 5 : type === "Z" || type === "K" ? 4 : type === "L" ? 6 : 3; // Lava: high base; surprise still shifts effective DEF
 }
 
 function getMonsterDamage(type: MonsterType): number {
@@ -87,8 +107,8 @@ export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
     case "Z": return "🧟 Zombie: Hits hard (2 dmg) if you lose.";
     case "V": return "🧛 Dracula: High defense (5). Defeat for +1 attack.";
     case "S": return "🕷 Spider: Def 3. Win for +1 jump.";
-    case "L": return "🔥 Lava Elemental: Def 4, hits hard. Win for +1 move.";
-    default: return "Roll dice + attack bonus ≥ defense to win.";
+    case "L": return "🔥 Lava Elemental: High defense (stance changes it). Only clean hits −1 HP — no scratch damage on a miss. Power dice / +1 attack help.";
+    default: return "Each hit that meets defense −1 HP. Dice 2–4 on a miss still scratch 1 HP.";
   }
 }
 
@@ -97,7 +117,8 @@ export function resolveCombat(
   attackBonus: number,
   monsterType: MonsterType,
   skeletonHasShield?: boolean,
-  surpriseModifier = 0
+  surpriseModifier = 0,
+  rawD6?: number
 ): CombatResult {
   const monsterDefense = getMonsterDefense(monsterType);
   const monsterDamage = getMonsterDamage(monsterType);
@@ -111,13 +132,12 @@ export function resolveCombat(
       monsterDefense,
       attackTotal: 0,
       monsterEffect: "ghost_evade",
+      glancingDamage: 0,
     };
   }
 
-  // Lava Elemental: no surprise modifier (always def 4) — dice 5+ always hits
   const effectiveDefense = Math.max(0,
-    (monsterType === "K" && skeletonHasShield ? 0 : monsterDefense) +
-    (monsterType === "L" ? 0 : surpriseModifier)
+    (monsterType === "K" && skeletonHasShield ? 0 : monsterDefense) + surpriseModifier
   );
   const attackTotal = playerRoll + attackBonus;
   const hit = attackTotal >= effectiveDefense;
@@ -130,10 +150,16 @@ export function resolveCombat(
       monsterDefense: effectiveDefense,
       attackTotal,
       monsterEffect: "skeleton_shield",
+      glancingDamage: 0,
     };
   }
 
   const won = hit;
+  const dieForGlance = rawD6 !== undefined ? rawD6 : playerRoll;
+  // Lava: no glancing chip — only clean hits (attack ≥ defense) deal damage.
+  const glancingDamage =
+    won || dieForGlance < 2 || dieForGlance > 4 || monsterType === "L" ? 0 : 1;
+
   return {
     won,
     damage: won ? 0 : monsterDamage,
@@ -149,5 +175,6 @@ export function resolveCombat(
             ? "lava_burn"
             : undefined,
     reward: won ? getMonsterReward(monsterType) : undefined,
+    glancingDamage,
   };
 }

@@ -7,15 +7,23 @@ export type ArtifactIconVariant =
   | "shield"
   | "magic"
   | "web"
-  | "catapult";
+  | "catapult"
+  | "dice"
+  | "healing"
+  | "reveal"
+  | "jump";
 
 const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
-  bomb: "/artifacts/bomb.png",
+  bomb: "/artifacts/bmb.PNG",
   diamond: "/artifacts/diamond.png",
   shield: "/artifacts/shield.png",
-  magic: "/artifacts/magic.png",
-  web: "/artifacts/web.png",
-  catapult: "/artifacts/catapult.png",
+  magic: "/artifacts/teleport.PNG",
+  web: "/artifacts/spider web.PNG",
+  catapult: "/artifacts/ctplt.PNG",
+  dice: "/artifacts/teleport.PNG",
+  healing: "/artifacts/shield.png",
+  reveal: "/artifacts/teleport.PNG",
+  jump: "/artifacts/ctplt.PNG",
 };
 
 interface ArtifactIconProps {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useImperativeHandle, forwardRef } from "react";
+import { useEffect, useRef, useImperativeHandle, forwardRef, type CSSProperties } from "react";
 
 export interface Dice3DRef {
   roll: () => Promise<number>;
@@ -9,6 +9,10 @@ export interface Dice3DRef {
 export interface Dice3DProps {
   onRollComplete: (value: number) => void;
   disabled?: boolean;
+  /** Fill parent (needs explicit parent height); avoids gap below fixed 120px canvas */
+  fitContainer?: boolean;
+  /** Hide overlay hint (e.g. when parent shows instructions) */
+  hideHint?: boolean;
 }
 
 function getValueFromResult(result: unknown): number {
@@ -34,7 +38,7 @@ function getValueFromResult(result: unknown): number {
 }
 
 const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
-  function Dice3D({ onRollComplete, disabled = false }, ref) {
+  function Dice3D({ onRollComplete, disabled = false, fitContainer = false, hideHint = false }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const diceBoxRef = useRef<{
       roll: (notation: string) => Promise<unknown>;
@@ -136,37 +140,50 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
       };
     }, []);
 
+    const trayStyle: React.CSSProperties = fitContainer
+      ? {
+          position: "relative",
+          width: "100%",
+          minWidth: 0,
+          height: "100%",
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+        }
+      : { position: "relative", width: "100%", minWidth: 0 };
+
+    const containerStyle: CSSProperties = {
+      width: "100%",
+      minWidth: 0,
+      borderRadius: 12,
+      overflow: "hidden",
+      background: "#0d0d12",
+      pointerEvents: disabled ? "none" : "auto",
+      opacity: disabled ? 0.6 : 1,
+      ...(fitContainer
+        ? { flex: 1, minHeight: 100, height: "100%" }
+        : { minHeight: 120, height: 120 }),
+    };
+
     return (
-      <div className="dice-tray" style={{ position: "relative", width: "100%", minWidth: 0 }}>
-        <div
-          ref={containerRef}
-          className="dice-container"
-          style={{
-            width: "100%",
-            minWidth: 0,
-            minHeight: 120,
-            height: 120,
-            borderRadius: 12,
-            overflow: "hidden",
-            background: "#0d0d12",
-            pointerEvents: disabled ? "none" : "auto",
-            opacity: disabled ? 0.6 : 1,
-          }}
-        />
-        <span
-          className="hint"
-          style={{
-            position: "absolute",
-            bottom: "0.5rem",
-            left: 0,
-            right: 0,
-            textAlign: "center",
-            fontSize: "0.7rem",
-            color: "#555",
-          }}
-        >
-          Click dice area or &quot;Roll dice&quot; button
-        </span>
+      <div className="dice-tray" style={trayStyle}>
+        <div ref={containerRef} className="dice-container" style={containerStyle} />
+        {!hideHint && (
+          <span
+            className="hint"
+            style={{
+              position: "absolute",
+              bottom: "0.5rem",
+              left: 0,
+              right: 0,
+              textAlign: "center",
+              fontSize: "0.7rem",
+              color: "#555",
+            }}
+          >
+            Click dice area or &quot;Roll dice&quot; button
+          </span>
+        )}
       </div>
     );
   }

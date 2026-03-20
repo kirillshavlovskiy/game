@@ -28,7 +28,7 @@ export const ARTIFACT_REVEAL = "A4";
 export const ARTIFACT_HEALING = "A5";
 
 export const MAX_ROUNDS = 15;
-export const DEFAULT_PLAYER_HP = 3;
+export const DEFAULT_PLAYER_HP = 5;
 
 export type MonsterType = "V" | "Z" | "S" | "G" | "K" | "L"; // Vampire/Dracula, Zombie, Spider, Ghost, Skeleton, Lava Elemental
 
@@ -66,7 +66,7 @@ export interface Monster {
   spawnY?: number;
   /** Skeleton only: first hit removes shield, second kills */
   hasShield?: boolean;
-  /** Dracula only: boss with 2 HP */
+  /** Current HP in combat (all monsters; max from getMonsterMaxHp) */
   hp?: number;
   /** Dracula only: state machine */
   draculaState?: DraculaState;
@@ -85,16 +85,16 @@ export function getMonsterName(type: MonsterType): string {
 }
 
 export function getMonsterDefense(type: MonsterType): number {
-  return type === "V" ? 5 : type === "Z" || type === "K" || type === "L" ? 4 : 3; // Spider, Ghost = 3; Lava = 4
+  return type === "V" ? 5 : type === "Z" || type === "K" ? 4 : type === "L" ? 6 : 3; // Spider, Ghost = 3; Lava = 6 (+ surprise mod in combat)
 }
 
 export function getMonsterDamage(type: MonsterType): number {
   return type === "Z" || type === "L" ? 2 : 1; // Zombie, Lava = 2; Dracula, Ghost, Skeleton, Spider = 1
 }
 
-/** Max HP for multi-hit monsters. Others = 1 (one-shot). */
+/** Max HP per monster type. Most = 1 (one hit kills). Zombie = 2, Dracula = 3. */
 export function getMonsterMaxHp(type: MonsterType): number {
-  return type === "V" ? DRACULA_CONFIG.hp : type === "Z" ? 2 : 1; // Lava = 1 (one-shot)
+  return type === "V" ? 3 : type === "Z" ? 2 : 1;
 }
 
 /** Min/max damage for variable monster attacks. Returns [min, max] inclusive. */
@@ -568,14 +568,12 @@ export class Labyrinth {
             spawnX: x,
             spawnY: y,
             hasShield: mType === "K",
+            hp: getMonsterMaxHp(mType),
           };
           if (mType === "V") {
-            m.hp = DRACULA_CONFIG.hp;
             m.draculaState = "idle";
             m.draculaCooldowns = { teleport: 0, attack: 0 };
             m.targetPlayerIndex = null;
-          } else if (mType === "Z" || mType === "L") {
-            m.hp = 2;
           }
           this.monsters.push(m);
         }
