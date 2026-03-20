@@ -20,12 +20,14 @@ export const TRAP_HARM = "!";
 export const TRAP_TELEPORT = "P";
 export const TRAP_SLOW = "Q"; // Q for slow (S conflicts with Start display)
 
-/** Artifact cell types (A1-A5) */
+/** Artifact cell types (A1-A7) */
 export const ARTIFACT_DICE = "A1";
 export const ARTIFACT_SHIELD = "A2";
 export const ARTIFACT_TELEPORT = "A3";
 export const ARTIFACT_REVEAL = "A4";
 export const ARTIFACT_HEALING = "A5";
+export const ARTIFACT_HOLY_SWORD = "A6";
+export const ARTIFACT_HOLY_CROSS = "A7";
 
 export const MAX_ROUNDS = 15;
 export const DEFAULT_PLAYER_HP = 5;
@@ -103,12 +105,50 @@ export function getMonsterDamageRange(type: MonsterType): [number, number] {
   return [base, base + 1]; // e.g. 1→1-2, 2→2-3
 }
 
+/** Extra d6 attack from holy sword relics vs physical/fiery foes (total = +2 per A6 collected). */
+export function getHolySwordAttackBonusVsMonster(
+  monsterType: MonsterType,
+  holySwordAttackBonus: number | undefined
+): number {
+  const b = holySwordAttackBonus ?? 0;
+  if (b <= 0) return 0;
+  if (monsterType === "Z" || monsterType === "S" || monsterType === "K" || monsterType === "L") return b;
+  return 0;
+}
+
+/** Extra d6 attack from holy cross relics vs undead/spirits (total = +3 per A7 collected). */
+export function getHolyCrossAttackBonusVsMonster(
+  monsterType: MonsterType,
+  holyCrossAttackBonus: number | undefined
+): number {
+  const b = holyCrossAttackBonus ?? 0;
+  if (b <= 0) return 0;
+  if (monsterType === "V" || monsterType === "G") return b;
+  return 0;
+}
+
+export function getRelicAttackBonusForMonster(
+  monsterType: MonsterType,
+  holySwordAttackBonus: number | undefined,
+  holyCrossAttackBonus: number | undefined
+): number {
+  return getHolySwordAttackBonusVsMonster(monsterType, holySwordAttackBonus) + getHolyCrossAttackBonusVsMonster(monsterType, holyCrossAttackBonus);
+}
+
 export function isTrapCell(cell: string): boolean {
   return cell === TRAP_LOSE_TURN || cell === TRAP_HARM || cell === TRAP_TELEPORT || cell === TRAP_SLOW;
 }
 
 export function isArtifactCell(cell: string): boolean {
-  return cell === ARTIFACT_DICE || cell === ARTIFACT_SHIELD || cell === ARTIFACT_TELEPORT || cell === ARTIFACT_REVEAL || cell === ARTIFACT_HEALING;
+  return (
+    cell === ARTIFACT_DICE ||
+    cell === ARTIFACT_SHIELD ||
+    cell === ARTIFACT_TELEPORT ||
+    cell === ARTIFACT_REVEAL ||
+    cell === ARTIFACT_HEALING ||
+    cell === ARTIFACT_HOLY_SWORD ||
+    cell === ARTIFACT_HOLY_CROSS
+  );
 }
 
 export function isMultiplierCell(cell: string): cell is "2" | "3" | "4" {
@@ -179,7 +219,11 @@ export class Labyrinth {
     artifacts: number;
     artifactsCollected?: string[];
     diceBonus?: number; // +1 to next roll from A1
-    attackBonus?: number; // +1 attack from defeating Dracula
+    attackBonus?: number; // +1 attack from defeating Dracula (capped at 1 in combat)
+    /** Stacked +2 per holy sword (A6) pickup; applies vs Zombie, Spider, Skeleton, Lava in combat */
+    holySwordAttackBonus?: number;
+    /** Stacked +3 per holy cross (A7) pickup; applies vs Dracula, Ghost in combat */
+    holyCrossAttackBonus?: number;
     catapultCharges?: number; // bonus from monster defeat - launch without standing on C cell
     hasTeleportArtifact?: boolean; // A3
     hasTorch?: boolean; // from hidden gem - clears fog zones
@@ -236,6 +280,8 @@ export class Labyrinth {
       catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
+      holySwordAttackBonus: 0,
+      holyCrossAttackBonus: 0,
     }));
     this.goalX = width - 1;
     this.goalY = height - 1;
@@ -413,10 +459,18 @@ export class Labyrinth {
     }
     const rest3d = rest3c.filter((c) => !trapCells.some((t) => t[0] === c[0] && t[1] === c[1]));
     const artifactCells = this._pickSpread(rest3d, Math.min(artifactCount, rest3d.length));
-    const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL, ARTIFACT_HEALING];
+    const artifactTypes = [
+      ARTIFACT_DICE,
+      ARTIFACT_SHIELD,
+      ARTIFACT_TELEPORT,
+      ARTIFACT_REVEAL,
+      ARTIFACT_HEALING,
+      ARTIFACT_HOLY_SWORD,
+      ARTIFACT_HOLY_CROSS,
+    ];
     for (let i = 0; i < artifactCells.length; i++) {
       const [x, y] = artifactCells[i];
-      this.grid[y][x] = artifactTypes[i % 5];
+      this.grid[y][x] = artifactTypes[i % artifactTypes.length];
     }
 
     for (let i = 0; i < multCells.length; i++) {
@@ -784,6 +838,8 @@ export class Labyrinth {
       catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
+      holySwordAttackBonus: 0,
+      holyCrossAttackBonus: 0,
     }));
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
@@ -839,6 +895,8 @@ export class Labyrinth {
       catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
+      holySwordAttackBonus: 0,
+      holyCrossAttackBonus: 0,
     }));
     this.monsters = [];
     this.eliminatedPlayers = new Set();

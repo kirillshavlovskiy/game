@@ -102,12 +102,12 @@ export function getMonsterReward(monsterType: MonsterType): MonsterReward {
 /** Combat hints for each monster type */
 export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
   switch (type) {
-    case "G": return "👻 Ghost: 50% chance your attack misses!";
-    case "K": return hasShield ? "💀 Skeleton: First hit breaks shield, second hit wins." : "💀 Skeleton: Shield broken — one more hit!";
-    case "Z": return "🧟 Zombie: Hits hard (2 dmg) if you lose.";
-    case "V": return "🧛 Dracula: High defense (5). Defeat for +1 attack.";
-    case "S": return "🕷 Spider: Def 3. Win for +1 jump.";
-    case "L": return "🔥 Lava Elemental: High defense (stance changes it). Only clean hits −1 HP — no scratch damage on a miss. Power dice / +1 attack help.";
+    case "G": return "👻 Ghost: 50% chance your attack misses! Holy cross adds +3 to your attack when it lands.";
+    case "K": return hasShield ? "💀 Skeleton: First hit breaks shield, second hit wins. Holy sword +2 attack." : "💀 Skeleton: Shield broken — one more hit! Holy sword +2 attack.";
+    case "Z": return "🧟 Zombie: Hits hard (2 dmg) if you lose. Holy sword +2 attack.";
+    case "V": return "🧛 Dracula: High defense (5). Defeat for +1 attack. Holy cross adds +3 to your roll vs him.";
+    case "S": return "🕷 Spider: Def 3. Win for +1 jump. Holy sword +2 attack.";
+    case "L": return "🔥 Lava Elemental: High defense (stance changes it). Only clean hits −1 HP — no scratch damage on a miss. Holy sword adds +2 to your attack.";
     default: return "Each hit that meets defense −1 HP. Dice 2–4 on a miss still scratch 1 HP.";
   }
 }

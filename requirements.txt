@@ -1,2 +1,0 @@
-# Labyrinth - DOS-like maze game
-anthropic>=0.39.0

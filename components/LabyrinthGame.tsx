@@ -27,6 +27,7 @@ import {
   isArtifactCell,
   isTrapCell,
   isWalkable,
+  getRelicAttackBonusForMonster,
   TRAP_LOSE_TURN,
   TRAP_HARM,
   TRAP_TELEPORT,
@@ -35,6 +36,8 @@ import {
   ARTIFACT_TELEPORT as ARTIFACT_TELEPORT_CELL,
   ARTIFACT_REVEAL,
   ARTIFACT_HEALING,
+  ARTIFACT_HOLY_SWORD,
+  ARTIFACT_HOLY_CROSS,
   type MonsterType,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
@@ -139,14 +142,39 @@ function formatMonsterBonusRewardLabel(r: MonsterBonusReward): string {
   }
 }
 
-function getArtifactIcon(a: string): React.ReactNode {
-  if (a.startsWith("monster-")) return <ArtifactIcon variant="magic" size={20} />;
-  if (a === ARTIFACT_DICE) return <ArtifactIcon variant="dice" size={20} />;
-  if (a === ARTIFACT_SHIELD) return <ArtifactIcon variant="shield" size={20} />;
-  if (a === ARTIFACT_TELEPORT_CELL) return <ArtifactIcon variant="magic" size={20} />;
-  if (a === ARTIFACT_HEALING) return <ArtifactIcon variant="healing" size={20} />;
-  if (a === ARTIFACT_REVEAL) return <ArtifactIcon variant="reveal" size={20} />;
-  return <ArtifactIcon variant="magic" size={20} />;
+function getArtifactIcon(a: string, size = 20): React.ReactNode {
+  if (a.startsWith("monster-")) return <ArtifactIcon variant="magic" size={size} />;
+  if (a === ARTIFACT_DICE) return <ArtifactIcon variant="dice" size={size} />;
+  if (a === ARTIFACT_SHIELD) return <ArtifactIcon variant="shield" size={size} />;
+  if (a === ARTIFACT_TELEPORT_CELL) return <ArtifactIcon variant="magic" size={size} />;
+  if (a === ARTIFACT_HEALING) return <ArtifactIcon variant="healing" size={size} />;
+  if (a === ARTIFACT_REVEAL) return <ArtifactIcon variant="reveal" size={size} />;
+  if (a === ARTIFACT_HOLY_SWORD) return <ArtifactIcon variant="holySword" size={size} />;
+  if (a === ARTIFACT_HOLY_CROSS) return <ArtifactIcon variant="holyCross" size={size} />;
+  return <ArtifactIcon variant="magic" size={size} />;
+}
+
+function getCollectedArtifactTitle(a: string): string {
+  if (a.startsWith("monster-")) return `From ${getMonsterName(a.replace("monster-", "") as MonsterType)}`;
+  if (a === ARTIFACT_DICE) return "+1 dice";
+  if (a === ARTIFACT_SHIELD) return "Shield";
+  if (a === ARTIFACT_TELEPORT_CELL) return "Teleport";
+  if (a === ARTIFACT_HEALING) return "+1 HP";
+  if (a === ARTIFACT_REVEAL) return "Reveal";
+  if (a === ARTIFACT_HOLY_SWORD) return "Holy sword (+2 vs Zombie, Spider, Skeleton, Lava)";
+  if (a === ARTIFACT_HOLY_CROSS) return "Holy cross (+3 vs Dracula, Ghost)";
+  return a;
+}
+
+function getArtifactCellTitle(art: string): string {
+  if (art === ARTIFACT_DICE) return "+1 dice";
+  if (art === ARTIFACT_SHIELD) return "Shield";
+  if (art === ARTIFACT_TELEPORT_CELL) return "Teleport";
+  if (art === ARTIFACT_HEALING) return "+1 HP";
+  if (art === ARTIFACT_REVEAL) return "Reveal";
+  if (art === ARTIFACT_HOLY_SWORD) return "Holy sword (+2 vs Zombie, Spider, Skeleton, Lava)";
+  if (art === ARTIFACT_HOLY_CROSS) return "Holy cross (+3 vs Dracula, Ghost)";
+  return "Artifact";
 }
 
 /**
@@ -207,7 +235,7 @@ function getMonsterSprite(type: MonsterType, state: MonsterSpriteState): string 
   if (type === "V") {
     if (state === "neutral" || state === "idle") return "/monsters/dracula/idle.png";
     if (state === "hunt") return "/monsters/dracula/hunt.png";
-    if (state === "attack" || state === "rolling") return "/monsters/dracula/attack.png";
+    if (state === "attack" || state === "rolling") return "/monsters/dracula/1.PNG";
     if (state === "angry") return "/monsters/dracula/hunt.png";
     if (state === "hurt" || state === "recover") return "/monsters/dracula/hurt.png";
     if (state === "defeated") return "/monsters/dracula/defeated.png";
@@ -992,7 +1020,13 @@ export default function LabyrinthGame() {
     if (!combat) return;
       // Combat roll: resolve and update state (dice always rolled before fight)
       const p = lab?.players[combat.playerIndex];
-      const attackBonus = Math.min(1, p?.attackBonus ?? 0); // 0-1 from defeating Dracula
+      const draculaAttackBonus = Math.min(1, p?.attackBonus ?? 0); // 0–1 from defeating Dracula
+      const relicAttackBonus = getRelicAttackBonusForMonster(
+        combat.monsterType,
+        p?.holySwordAttackBonus,
+        p?.holyCrossAttackBonus
+      );
+      const attackBonus = draculaAttackBonus + relicAttackBonus;
       const diceBonus = p?.diceBonus ?? 0;
       const useDiceBonus = combatUseDiceBonusRef.current && diceBonus > 0;
       const effectiveRoll = value + (useDiceBonus ? 1 : 0);
@@ -1771,6 +1805,12 @@ export default function LabyrinthGame() {
               p.hp = Math.min(DEFAULT_PLAYER_HP, (p.hp ?? 3) + 1);
               setHealingGained(true);
             }
+            if (cell === ARTIFACT_HOLY_SWORD) {
+              p.holySwordAttackBonus = (p.holySwordAttackBonus ?? 0) + 2;
+            }
+            if (cell === ARTIFACT_HOLY_CROSS) {
+              p.holyCrossAttackBonus = (p.holyCrossAttackBonus ?? 0) + 3;
+            }
             next.grid[p.y][p.x] = PATH;
           }
           if (cell && isJumpCell(cell)) {
@@ -2468,7 +2508,7 @@ export default function LabyrinthGame() {
                     <span
                       key={i}
                       style={{ fontSize: "1.25rem", lineHeight: 1 }}
-                      title={a.startsWith("monster-") ? `From ${getMonsterName(a.replace("monster-", "") as MonsterType)}` : a === ARTIFACT_DICE ? "+1 dice" : a === ARTIFACT_SHIELD ? "Shield" : a === ARTIFACT_TELEPORT_CELL ? "Teleport" : a === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}
+                      title={getCollectedArtifactTitle(a)}
                     >
                       {getArtifactIcon(a)}
                     </span>
@@ -3122,7 +3162,22 @@ export default function LabyrinthGame() {
             )}
             {combatState && !combatResult && lab && (() => {
               const [dMin, dMax] = getMonsterDamageRange(combatState.monsterType);
-              const atk = lab.players[combatState.playerIndex]?.attackBonus ?? 0;
+              const cp = lab.players[combatState.playerIndex];
+              const draculaAtk = Math.min(1, cp?.attackBonus ?? 0);
+              const relicAtk = getRelicAttackBonusForMonster(
+                combatState.monsterType,
+                cp?.holySwordAttackBonus,
+                cp?.holyCrossAttackBonus
+              );
+              const atkTotal = draculaAtk + relicAtk;
+              const atkTitle =
+                draculaAtk > 0 && relicAtk > 0
+                  ? `Dracula reward +${draculaAtk}, holy relics +${relicAtk}`
+                  : draculaAtk > 0
+                    ? "From defeating Dracula"
+                    : relicAtk > 0
+                      ? "Holy sword / cross vs this foe"
+                      : "";
               return (
                 <div style={combatModalFooterDiceStyle}>
                   <div style={combatModalFooterDiceRowStyle}>
@@ -3133,10 +3188,12 @@ export default function LabyrinthGame() {
                     <span style={combatModalFooterDiceItemStyle}>
                       Damage: {dMin}–{dMax}
                     </span>
-                    {atk > 0 ? (
+                    {atkTotal > 0 ? (
                       <>
                         <span style={combatModalFooterDiceSepStyle}>·</span>
-                        <span style={combatModalFooterDiceItemStyle}>Attack +{atk}</span>
+                        <span style={combatModalFooterDiceItemStyle} title={atkTitle || undefined}>
+                          Attack +{atkTotal}
+                        </span>
                       </>
                     ) : null}
                   </div>
@@ -3464,10 +3521,9 @@ export default function LabyrinthGame() {
                 const showArtifact = !isHidden && !isFogged;
                 if (showArtifact) {
                   const art = cellType;
-                  const title = art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : art === ARTIFACT_HEALING ? "+1 HP" : "Reveal";
                   content = (
-                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={title}>
-                      {art === ARTIFACT_SHIELD ? <ArtifactIcon variant="shield" size={26} /> : art === ARTIFACT_TELEPORT_CELL ? <ArtifactIcon variant="magic" size={26} /> : art === ARTIFACT_DICE ? <ArtifactIcon variant="dice" size={26} /> : art === ARTIFACT_HEALING ? <ArtifactIcon variant="healing" size={26} /> : <ArtifactIcon variant="reveal" size={26} />}
+                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={getArtifactCellTitle(art)}>
+                      {getArtifactIcon(art, 26)}
                     </span>
                   );
                 }

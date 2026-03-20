@@ -13,7 +13,9 @@ export type ArtifactIconVariant =
   | "reveal"
   | "jump"
   | "torch"
-  | "trap";
+  | "trap"
+  | "holySword"
+  | "holyCross";
 
 const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
   bomb: "/artifacts/bmb.PNG",
@@ -28,6 +30,8 @@ const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
   jump: "/artifacts/ctplt.PNG",
   torch: "/artifacts/torch.PNG",
   trap: "/artifacts/trap.PNG",
+  holySword: "/artifacts/holy-sword.png",
+  holyCross: "/artifacts/holy-cross.png",
 };
 
 interface ArtifactIconProps {
