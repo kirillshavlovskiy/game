@@ -52,11 +52,11 @@ const PLAYER_AVATARS = ["🧙", "🧛", "🧟", "🦸", "🧚", "🦊", "🐉", 
 
 function getArtifactIcon(a: string): React.ReactNode {
   if (a.startsWith("monster-")) return <ArtifactIcon variant="magic" size={20} />;
-  if (a === ARTIFACT_DICE) return <ArtifactIcon variant="dice" size={20} />;
+  if (a === ARTIFACT_DICE) return "🎲";
   if (a === ARTIFACT_SHIELD) return <ArtifactIcon variant="shield" size={20} />;
   if (a === ARTIFACT_TELEPORT_CELL) return <ArtifactIcon variant="magic" size={20} />;
-  if (a === ARTIFACT_HEALING) return <ArtifactIcon variant="healing" size={20} />;
-  if (a === ARTIFACT_REVEAL) return <ArtifactIcon variant="reveal" size={20} />;
+  if (a === ARTIFACT_HEALING) return "❤️";
+  if (a === ARTIFACT_REVEAL) return "👁";
   return <ArtifactIcon variant="magic" size={20} />;
 }
 
@@ -2232,17 +2232,17 @@ export default function LabyrinthGame() {
                 </div>
                 {combatResult.won && (combatResult.reward || combatResult.bonusReward) && (
                   <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12, marginTop: 10 }}>
-                    {combatResult.reward?.type === "jump" && <span style={{ display: "inline-flex" }} title="+1 jump"><ArtifactIcon variant="jump" size={28} /></span>}
-                    {combatResult.reward?.type === "hp" && <span style={{ display: "inline-flex" }} title="+1 HP"><ArtifactIcon variant="healing" size={28} /></span>}
+                    {combatResult.reward?.type === "jump" && <span style={{ display: "inline-flex" }} title="+1 jump">⬆️</span>}
+                    {combatResult.reward?.type === "hp" && <span style={{ display: "inline-flex" }} title="+1 HP">❤️</span>}
                     {combatResult.reward?.type === "shield" && <span style={{ display: "inline-flex" }} title="+1 shield"><ArtifactIcon variant="shield" size={28} /></span>}
-                    {combatResult.reward?.type === "attackBonus" && <span style={{ display: "inline-flex" }} title="+1 attack"><ArtifactIcon variant="magic" size={28} /></span>}
-                    {combatResult.reward?.type === "movement" && <span style={{ display: "inline-flex" }} title="+1 move"><ArtifactIcon variant="catapult" size={28} /></span>}
+                    {combatResult.reward?.type === "attackBonus" && <span style={{ display: "inline-flex" }} title="+1 attack">⚔️</span>}
+                    {combatResult.reward?.type === "movement" && <span style={{ display: "inline-flex" }} title="+1 move">🎯</span>}
                     {combatResult.bonusReward?.type === "artifact" && <span style={{ display: "inline-flex", filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }} title="+1 artifact"><ArtifactIcon variant="magic" size={28} /></span>}
-                    {combatResult.bonusReward?.type === "bonusMoves" && <span style={{ display: "inline-flex" }} title="+2 moves"><ArtifactIcon variant="catapult" size={28} /></span>}
+                    {combatResult.bonusReward?.type === "bonusMoves" && <span style={{ display: "inline-flex" }} title="+2 moves">🎯</span>}
                     {combatResult.bonusReward?.type === "shield" && <span style={{ display: "inline-flex" }} title="+1 shield"><ArtifactIcon variant="shield" size={28} /></span>}
-                    {combatResult.bonusReward?.type === "jump" && <span style={{ display: "inline-flex" }} title="+1 jump"><ArtifactIcon variant="jump" size={28} /></span>}
+                    {combatResult.bonusReward?.type === "jump" && <span style={{ display: "inline-flex" }} title="+1 jump">⬆️</span>}
                     {combatResult.bonusReward?.type === "catapult" && <span style={{ display: "inline-flex" }} title="+1 catapult charge"><ArtifactIcon variant="catapult" size={28} /></span>}
-                    {combatResult.bonusReward?.type === "diceBonus" && <span style={{ display: "inline-flex" }} title="+1 dice bonus"><ArtifactIcon variant="dice" size={28} /></span>}
+                    {combatResult.bonusReward?.type === "diceBonus" && <span style={{ display: "inline-flex" }} title="+1 dice bonus">🎲</span>}
                   </div>
                 )}
                 {(combatResult.monsterMaxHp ?? 0) > 0 && (
@@ -2436,7 +2436,7 @@ export default function LabyrinthGame() {
                         onChange={(e) => setCombatUseDiceBonus(e.target.checked)}
                         style={{ width: 20, height: 20, accentColor: "#ffcc00" }}
                       />
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="dice" size={18} /> Power — +1 to attack roll</span>
+                      <span>🎲 Power — +1 to attack roll</span>
                     </label>
                   )}
                   {lab && (lab.players[combatState.playerIndex]?.shield ?? 0) <= 0 && (lab.players[combatState.playerIndex]?.diceBonus ?? 0) <= 0 && (
@@ -2445,7 +2445,7 @@ export default function LabyrinthGame() {
                 </div>
                 </>
                 )}
-                <div style={{ color: "#ffcc00", fontSize: "1rem", fontWeight: "bold", marginBottom: 8, marginTop: 4, display: "flex", alignItems: "center", gap: 8 }}><ArtifactIcon variant="dice" size={24} /> {rolling ? "Rolling..." : "Roll dice to attack"}</div>
+                <div style={{ color: "#ffcc00", fontSize: "1rem", fontWeight: "bold", marginBottom: 8, marginTop: 4 }}>🎲 {rolling ? "Rolling..." : "Roll dice to attack"}</div>
                 <div
                   className="combat-dice"
                   onClick={handleCombatRollClick}
@@ -2536,7 +2536,7 @@ export default function LabyrinthGame() {
             </span>
           )}
           {healingGained !== null && (
-            <span style={{ color: "#44ff88", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="healing" size={20} /> +1 HP!</span>
+            <span style={{ color: "#44ff88", marginLeft: 12 }}>❤️ +1 HP!</span>
           )}
           {draculaAttacked !== null && (
             <span style={{ color: "#ff4444", marginLeft: 12 }}>🧛 Dracula bit you! -1 HP</span>
@@ -2547,13 +2547,13 @@ export default function LabyrinthGame() {
             </span>
           )}
           {hiddenGemTeleport !== null && (
-            <span style={{ color: "#aa66ff", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="magic" size={20} /> Hidden gem: Teleport!</span>
+            <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ Hidden gem: Teleport!</span>
           )}
           {torchGained !== null && (
             <span style={{ color: "#ffcc66", marginLeft: 12 }}>🔦 Torch! Fog zones cleared</span>
           )}
           {cellsRevealed !== null && (
-            <span style={{ color: "#aa66ff", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="reveal" size={20} /> {cellsRevealed} hidden cells revealed!</span>
+            <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ {cellsRevealed} hidden cells revealed!</span>
           )}
         </div>
       )}
@@ -2831,7 +2831,7 @@ export default function LabyrinthGame() {
                   const title = art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : art === ARTIFACT_HEALING ? "+1 HP" : "Reveal";
                   content = (
                     <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={title}>
-                      {art === ARTIFACT_SHIELD ? <ArtifactIcon variant="shield" size={26} /> : art === ARTIFACT_TELEPORT_CELL ? <ArtifactIcon variant="magic" size={26} /> : art === ARTIFACT_DICE ? <ArtifactIcon variant="dice" size={26} /> : art === ARTIFACT_HEALING ? <ArtifactIcon variant="healing" size={26} /> : <ArtifactIcon variant="reveal" size={26} />}
+                      {art === ARTIFACT_SHIELD ? <ArtifactIcon variant="shield" size={26} /> : art === ARTIFACT_TELEPORT_CELL ? <ArtifactIcon variant="magic" size={26} /> : art === ARTIFACT_DICE ? "🎲" : art === ARTIFACT_HEALING ? "❤️" : "👁"}
                     </span>
                   );
                 }
