@@ -1,21 +1,25 @@
 "use client";
 
-/** Artifact icon variants mapped to /artifacts/*.png assets */
+/** Artifact icon variants mapped to /artifacts/* assets */
 export type ArtifactIconVariant =
   | "bomb"
   | "diamond"
   | "shield"
   | "magic"
   | "web"
-  | "catapult";
+  | "catapult"
+  | "torch"
+  | "trap";
 
 const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
-  bomb: "/artifacts/bomb.png",
+  bomb: "/artifacts/bmb.png",
   diamond: "/artifacts/diamond.png",
   shield: "/artifacts/shield.png",
   magic: "/artifacts/magic.png",
   web: "/artifacts/web.png",
-  catapult: "/artifacts/catapult.png",
+  catapult: "/artifacts/ctplt.png",
+  torch: "/artifacts/torch.PNG",
+  trap: "/artifacts/trap.PNG",
 };
 
 interface ArtifactIconProps {

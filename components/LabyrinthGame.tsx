@@ -2103,6 +2103,11 @@ export default function LabyrinthGame() {
               <div style={{ fontSize: "0.75rem", color: "#aaa", display: "flex", alignItems: "center", gap: 4 }}>
                 <ArtifactIcon variant="bomb" size={14} /> Bombs: {p?.bombs ?? 0}
               </div>
+              {p?.hasTorch && (
+                <div style={{ fontSize: "0.75rem", color: "#ffcc66", display: "flex", alignItems: "center", gap: 4 }} title="Torch: fog cleared">
+                  <ArtifactIcon variant="torch" size={14} />
+                </div>
+              )}
             </div>
           ))}
         </aside>
@@ -2550,7 +2555,9 @@ export default function LabyrinthGame() {
             <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ Hidden gem: Teleport!</span>
           )}
           {torchGained !== null && (
-            <span style={{ color: "#ffcc66", marginLeft: 12 }}>🔦 Torch! Fog zones cleared</span>
+            <span style={{ color: "#ffcc66", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <ArtifactIcon variant="torch" size={20} /> Torch! Fog zones cleared
+            </span>
           )}
           {cellsRevealed !== null && (
             <span style={{ color: "#aa66ff", marginLeft: 12 }}>✨ {cellsRevealed} hidden cells revealed!</span>
@@ -2840,16 +2847,8 @@ export default function LabyrinthGame() {
                 {
                   const trap = cellType;
                   content = (
-                    <span style={{ fontSize: "1rem", display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={trap === TRAP_LOSE_TURN ? "Lose turn" : trap === TRAP_HARM ? "Harm: -1 HP (shield blocks)" : trap === TRAP_TELEPORT ? "Teleport" : "Slow"}>
-                      {trap === TRAP_LOSE_TURN ? "⏸" : trap === TRAP_HARM ? (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ff4444" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
-                          <circle cx="12" cy="9" r="5" />
-                          <path d="M7 14c-1.5 1.5-2 3.5-2 5h14c0-1.5-.5-3.5-2-5" />
-                          <circle cx="9" cy="8" r="1" fill="#ff4444" />
-                          <circle cx="15" cy="8" r="1" fill="#ff4444" />
-                          <path d="M10 12h4" />
-                        </svg>
-                      ) : trap === TRAP_TELEPORT ? "🌀" : "⏱"}
+                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={trap === TRAP_LOSE_TURN ? "Lose turn" : trap === TRAP_HARM ? "Harm: -1 HP (shield blocks)" : trap === TRAP_TELEPORT ? "Teleport" : "Slow"}>
+                      <ArtifactIcon variant="trap" size={28} />
                     </span>
                   );
                 }
