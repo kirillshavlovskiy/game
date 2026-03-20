@@ -1,3 +1,5 @@
+.DS_Store
+
 # Environment variables - never commit secrets
 local.env
 .env
@@ -7,6 +9,9 @@ local.env
 # Next.js
 .next/
 out/
+
+# TypeScript incremental build cache
+tsconfig.tsbuildinfo
 
 # Dependencies
 node_modules/
