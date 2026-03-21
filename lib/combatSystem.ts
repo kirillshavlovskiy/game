@@ -3,7 +3,7 @@
  * Player attack (d6 + attack bonus) vs monster defense.
  */
 
-import type { MonsterType } from "./labyrinth";
+import { type MonsterType, getMonsterMaxHp } from "./labyrinth";
 
 export type MonsterSurpriseState = "idle" | "hunt" | "attack" | "angry";
 
@@ -15,6 +15,12 @@ export interface CombatResult {
   attackTotal: number;
   monsterEffect?: string;
   reward?: MonsterReward;
+  /** On a miss: scratch damage to monster scales with die (dice 5 → 4–5 HP, etc.) */
+  glancingDamage?: number;
+  /** True when dice 6 = instant kill (bypasses normal −1 HP per strike) */
+  instantWin?: boolean;
+  /** On a clean hit (won, not instant): HP removed from monster; default 1 when omitted */
+  monsterHpLoss?: number;
 }
 
 export type MonsterReward =
@@ -23,6 +29,45 @@ export type MonsterReward =
   | { type: "hp"; amount: number }
   | { type: "shield"; amount: number }
   | { type: "attackBonus"; amount: number };
+
+/** Bonus reward types (50% chance on monster defeat) */
+export type MonsterBonusReward =
+  | { type: "artifact"; amount: number }
+  | { type: "bonusMoves"; amount: number }
+  | { type: "shield"; amount: number }
+  | { type: "jump"; amount: number }
+  | { type: "catapult"; amount: number }
+  | { type: "diceBonus"; amount: number };
+
+const BONUS_REWARDS: MonsterBonusReward[] = [
+  { type: "artifact", amount: 1 },
+  { type: "bonusMoves", amount: 1 },
+  { type: "shield", amount: 1 },
+  { type: "jump", amount: 1 },
+  { type: "catapult", amount: 1 },
+  { type: "diceBonus", amount: 1 },
+];
+
+/** 50% chance to return a random bonus reward on monster defeat */
+export function getMonsterBonusReward(): MonsterBonusReward | null {
+  if (Math.random() >= 0.5) return null;
+  return BONUS_REWARDS[Math.floor(Math.random() * BONUS_REWARDS.length)]!;
+}
+
+/** Shuffled bonus options for post-combat player choice (up to `count`, unique types). */
+export function getMonsterBonusRewardChoices(count = 3): MonsterBonusReward[] {
+  const shuffled = [...BONUS_REWARDS].sort(() => Math.random() - 0.5);
+  const seen = new Set<string>();
+  const out: MonsterBonusReward[] = [];
+  for (const r of shuffled) {
+    const key = r.type;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+    if (out.length >= count) break;
+  }
+  return out;
+}
 
 /** Surprise state affects monster defense: idle=easier, angry=harder */
 export function getSurpriseDefenseModifier(state: MonsterSurpriseState): number {
@@ -36,7 +81,7 @@ export function getSurpriseDefenseModifier(state: MonsterSurpriseState): number 
 }
 
 export function getMonsterDefense(type: MonsterType): number {
-  return type === "V" ? 5 : type === "Z" || type === "K" || type === "L" ? 4 : 3;
+  return type === "V" ? 5 : type === "Z" || type === "K" ? 4 : type === "L" ? 6 : 3; // Lava: high base; surprise still shifts effective DEF
 }
 
 function getMonsterDamage(type: MonsterType): number {
@@ -58,13 +103,17 @@ export function getMonsterReward(monsterType: MonsterType): MonsterReward {
 /** Combat hints for each monster type */
 export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
   switch (type) {
-    case "G": return "👻 Ghost: 50% chance your attack misses!";
+    case "G": return "👻 Ghost: Dice 6 = instant win! Otherwise 50% miss.";
     case "K": return hasShield ? "💀 Skeleton: First hit breaks shield, second hit wins." : "💀 Skeleton: Shield broken — one more hit!";
-    case "Z": return "🧟 Zombie: Hits hard (2 dmg) if you lose.";
+    case "Z": {
+      const zm = getMonsterMaxHp("Z");
+      const half = Math.max(1, Math.floor(zm / 2));
+      return `🧟 Zombie: Dice 6 = instant win! Dice 5 = −4 HP. Dice 3–4 = half max HP (−${half}). Dice 1–2 = −1 HP. Miss: glancing by die. Lose: 2+ dmg.`;
+    }
     case "V": return "🧛 Dracula: High defense (5). Defeat for +1 attack.";
     case "S": return "🕷 Spider: Def 3. Win for +1 jump.";
-    case "L": return "🔥 Lava Elemental: Def 4, hits hard. Win for +1 move.";
-    default: return "Roll dice + attack bonus ≥ defense to win.";
+    case "L": return "🔥 Lava Elemental: High defense (6). Dice 6 = instant win! Miss: dice 2→1–2, 3→2–3, 4→3–4, 5→4–5 HP.";
+    default: return "Dice 6 = instant win! Miss: 2→1–2, 3→2–3, 4→3–4, 5→4–5 HP. Attack/angry = monster hits you back.";
   }
 }
 
@@ -73,10 +122,27 @@ export function resolveCombat(
   attackBonus: number,
   monsterType: MonsterType,
   skeletonHasShield?: boolean,
-  surpriseModifier = 0
+  surpriseModifier = 0,
+  rawD6?: number,
+  surpriseState?: MonsterSurpriseState
 ): CombatResult {
   const monsterDefense = getMonsterDefense(monsterType);
   const monsterDamage = getMonsterDamage(monsterType);
+  const physicalDie = rawD6 ?? playerRoll;
+
+  // Dice 6 = ultimate win, no matter what (bypasses ghost evade, defense, etc.) — instant kill
+  if (physicalDie === 6) {
+    return {
+      won: true,
+      damage: 0,
+      playerRoll,
+      monsterDefense,
+      attackTotal: playerRoll + attackBonus,
+      reward: getMonsterReward(monsterType),
+      glancingDamage: 0,
+      instantWin: true,
+    };
+  }
 
   // Ghost: 50% chance attack misses
   if (monsterType === "G" && Math.random() < 0.5) {
@@ -87,6 +153,7 @@ export function resolveCombat(
       monsterDefense,
       attackTotal: 0,
       monsterEffect: "ghost_evade",
+      glancingDamage: 0,
     };
   }
 
@@ -104,22 +171,48 @@ export function resolveCombat(
       monsterDefense: effectiveDefense,
       attackTotal,
       monsterEffect: "skeleton_shield",
+      glancingDamage: 0,
     };
   }
 
   const won = hit;
+  const dieForGlance = rawD6 !== undefined ? rawD6 : playerRoll;
+  // On a miss: glancing damage = (die-1) to die HP. Dice 5 → 4–5, dice 4 → 3–4, etc.
+  const glanceMin = Math.max(0, dieForGlance - 1);
+  const glanceMax = dieForGlance;
+  const glancingDamage = won ? 0 : (glanceMin >= 1 ? glanceMin + Math.floor(Math.random() * (glanceMax - glanceMin + 1)) : 0);
+
+  // Zombie: 6 = instant win above; 5 = heavy; 3–4 = half max HP; 1–2 = 1 HP.
+  let monsterHpLoss: number | undefined;
+  if (won && monsterType === "Z" && physicalDie >= 1 && physicalDie <= 5) {
+    const zMax = getMonsterMaxHp("Z");
+    const halfLife = Math.max(1, Math.floor(zMax / 2));
+    if (physicalDie === 5) monsterHpLoss = 4;
+    else if (physicalDie >= 3 && physicalDie <= 4) monsterHpLoss = halfLife;
+    else monsterHpLoss = 1;
+  }
+
+  // Attack/angry mode: monster counter-attacks, player takes extra damage on miss
+  const isAggressive = surpriseState === "attack" || surpriseState === "angry";
+  const counterBonus = !won && isAggressive ? (surpriseState === "angry" ? 2 : 1) : 0;
+  const playerDamage = won ? 0 : monsterDamage + counterBonus;
+
   return {
     won,
-    damage: won ? 0 : monsterDamage,
+    damage: playerDamage,
     playerRoll,
     monsterDefense: effectiveDefense,
     attackTotal,
+    monsterHpLoss,
     monsterEffect:
       !won && monsterType === "Z"
         ? "zombie_slow"
         : !won && monsterType === "V"
           ? "dracula_lifesteal"
-          : undefined,
+          : !won && monsterType === "L"
+            ? "lava_burn"
+            : undefined,
     reward: won ? getMonsterReward(monsterType) : undefined,
+    glancingDamage,
   };
 }

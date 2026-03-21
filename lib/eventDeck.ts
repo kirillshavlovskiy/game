@@ -40,7 +40,12 @@ export function drawEvent(): GameEvent {
   return events[Math.floor(Math.random() * events.length)];
 }
 
-export function applyEvent(lab: Labyrinth, event: GameEvent, activePlayerIndex = 0): void {
+export function applyEvent(
+  lab: Labyrinth,
+  event: GameEvent,
+  activePlayerIndex = 0,
+  opts?: { skipMonsterMove?: boolean }
+): void {
   const pathCells: [number, number][] = [];
   for (let y = 1; y < lab.height - 1; y++)
     for (let x = 1; x < lab.width - 1; x++)
@@ -67,6 +72,7 @@ export function applyEvent(lab: Labyrinth, event: GameEvent, activePlayerIndex =
       break;
     }
     case "monsters_move": {
+      if (opts?.skipMonsterMove) break;
       const firstLiving = [...Array(lab.numPlayers).keys()].find((i) => !lab.eliminatedPlayers.has(i));
       lab.moveMonsters(firstLiving ?? activePlayerIndex);
       break;

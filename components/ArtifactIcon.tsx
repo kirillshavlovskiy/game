@@ -15,7 +15,8 @@ export type ArtifactIconVariant =
   | "torch"
   | "trap"
   | "holySword"
-  | "holyCross";
+  | "holyCross"
+  | "artifact"; // Generic artifact/box (treasure from monster bonus)
 
 const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
   bomb: "/artifacts/bmb.PNG",
@@ -32,6 +33,7 @@ const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
   trap: "/artifacts/trap.PNG",
   holySword: "/artifacts/holy-sword.png",
   holyCross: "/artifacts/holy-cross.png",
+  artifact: "/artifacts/diamond.png",
 };
 
 interface ArtifactIconProps {
@@ -44,6 +46,30 @@ interface ArtifactIconProps {
 }
 
 export function ArtifactIcon({ variant, size = 28, style, title, opacity = 1, className }: ArtifactIconProps) {
+  // Dice: use emoji 🎲 (clear combat affordance; dice asset may be shared placeholder)
+  if (variant === "dice") {
+    return (
+      <span
+        role="img"
+        aria-label="dice"
+        title={title}
+        className={className}
+        style={{
+          fontSize: size * 0.9,
+          lineHeight: 1,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: size,
+          height: size,
+          opacity,
+          ...style,
+        }}
+      >
+        🎲
+      </span>
+    );
+  }
   return (
     <img
       src={ARTIFACT_PATHS[variant]}

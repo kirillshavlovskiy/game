@@ -28,7 +28,7 @@ export const ARTIFACT_REVEAL = "A4";
 export const ARTIFACT_HEALING = "A5";
 
 export const MAX_ROUNDS = 15;
-export const DEFAULT_PLAYER_HP = 3;
+export const DEFAULT_PLAYER_HP = 5;
 
 export type MonsterType = "V" | "Z" | "S" | "G" | "K" | "L"; // Vampire/Dracula, Zombie, Spider, Ghost, Skeleton, Lava Elemental
 
@@ -66,7 +66,7 @@ export interface Monster {
   spawnY?: number;
   /** Skeleton only: first hit removes shield, second kills */
   hasShield?: boolean;
-  /** Dracula only: boss with 2 HP */
+  /** Current HP in combat (all monsters; max from getMonsterMaxHp) */
   hp?: number;
   /** Dracula only: state machine */
   draculaState?: DraculaState;
@@ -85,16 +85,18 @@ export function getMonsterName(type: MonsterType): string {
 }
 
 export function getMonsterDefense(type: MonsterType): number {
-  return type === "V" ? 5 : type === "Z" || type === "K" || type === "L" ? 4 : 3; // Spider, Ghost = 3; Lava = 4
+  return type === "V" ? 5 : type === "Z" || type === "K" ? 4 : type === "L" ? 6 : 3; // Spider, Ghost = 3; Lava = 6 (+ surprise mod in combat)
 }
 
 export function getMonsterDamage(type: MonsterType): number {
   return type === "Z" || type === "L" ? 2 : 1; // Zombie, Lava = 2; Dracula, Ghost, Skeleton, Spider = 1
 }
 
-/** Max HP for multi-hit monsters. Others = 1 (one-shot). */
-export function getMonsterMaxHp(type: MonsterType): number {
-  return type === "V" ? DRACULA_CONFIG.hp : type === "Z" || type === "L" ? 2 : 1;
+/** Max HP for every monster. Each hit that meets defense −1 HP. */
+export const MONSTER_HP_MAX = 5;
+
+export function getMonsterMaxHp(_type: MonsterType): number {
+  return MONSTER_HP_MAX;
 }
 
 /** Min/max damage for variable monster attacks. Returns [min, max] inclusive. */
@@ -180,6 +182,7 @@ export class Labyrinth {
     artifactsCollected?: string[];
     diceBonus?: number; // +1 to next roll from A1
     attackBonus?: number; // +1 attack from defeating Dracula
+    catapultCharges?: number; // bonus from monster defeat - launch without standing on C cell
     hasTeleportArtifact?: boolean; // A3
     hasTorch?: boolean; // from hidden gem - clears fog zones
     loseNextMove?: boolean; // Zombie won: lose 1 movement next turn
@@ -232,6 +235,7 @@ export class Labyrinth {
       artifacts: 0,
       artifactsCollected: [] as string[],
       diceBonus: 0,
+      catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
     }));
@@ -566,14 +570,12 @@ export class Labyrinth {
             spawnX: x,
             spawnY: y,
             hasShield: mType === "K",
+            hp: getMonsterMaxHp(mType),
           };
           if (mType === "V") {
-            m.hp = DRACULA_CONFIG.hp;
             m.draculaState = "idle";
             m.draculaCooldowns = { teleport: 0, attack: 0 };
             m.targetPlayerIndex = null;
-          } else if (mType === "Z" || mType === "L") {
-            m.hp = 2;
           }
           this.monsters.push(m);
         }
@@ -694,15 +696,17 @@ export class Labyrinth {
     return true;
   }
 
-  /** Use bomb at player position: explode 3x3 area, kill monsters, destroy walls, clear traps. Returns true if used. */
+  /** Use bomb at player position: explode 3x3 area, kill monsters (except Dracula & Ghost), destroy walls, clear traps. Returns true if used. */
   useBomb(playerIndex: number): { used: boolean; monstersKilled: number; wallsDestroyed: number; trapsCleared: number } {
     const p = this.players[playerIndex];
     if (!p || (p.bombs ?? 0) <= 0) return { used: false, monstersKilled: 0, wallsDestroyed: 0, trapsCleared: 0 };
     const cx = p.x;
     const cy = p.y;
     const inBlast = (mx: number, my: number) => Math.abs(mx - cx) <= 1 && Math.abs(my - cy) <= 1;
-    const monstersKilled = this.monsters.filter((m) => inBlast(m.x, m.y)).length;
-    this.monsters = this.monsters.filter((m) => !inBlast(m.x, m.y));
+    const bombImmune = (m: Monster) => m.type === "V" || m.type === "G"; // Dracula & Ghost survive bombs
+    const toKill = this.monsters.filter((m) => inBlast(m.x, m.y) && !bombImmune(m));
+    const monstersKilled = toKill.length;
+    this.monsters = this.monsters.filter((m) => !inBlast(m.x, m.y) || bombImmune(m));
     let wallsDestroyed = 0;
     let trapsCleared = 0;
     for (let dy = -1; dy <= 1; dy++) {
@@ -779,24 +783,26 @@ export class Labyrinth {
       artifacts: 0,
       artifactsCollected: [] as string[],
       diceBonus: 0,
+      catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
     }));
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
 
-    // TEMPORARY: Lava at (1,0) next to spawn for testing - remove when done
+    // Zombie at (1,0) adjacent to start — triggers combat as soon as player moves toward it
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "L",
+          type: "Z",
           patrolArea,
           visionRadius: 3,
           spawnX: 1,
           spawnY: 0,
+          hp: getMonsterMaxHp("Z"),
         });
       }
     }
@@ -833,6 +839,7 @@ export class Labyrinth {
       artifacts: 0,
       artifactsCollected: [] as string[],
       diceBonus: 0,
+      catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
     }));
@@ -848,18 +855,19 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
-    // TEMPORARY: Lava at (1,0) next to spawn for testing - remove when done
+    // Zombie at (1,0) adjacent to start — triggers combat as soon as player moves toward it
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "L",
+          type: "Z",
           patrolArea,
           visionRadius: 3,
           spawnX: 1,
           spawnY: 0,
+          hp: getMonsterMaxHp("Z"),
         });
       }
     }
@@ -1013,7 +1021,7 @@ export class Labyrinth {
     for (let y = 0; y < this.height; y++)
       for (let x = 0; x < this.width; x++)
         if (
-          this.grid[y][x] === MAGIC &&
+          this.getCellAt(x, y) === MAGIC &&
           (x !== p.x || y !== p.y) &&
           dist(x, y) <= effectiveMaxDist &&
           !this.hasUsedTeleportFrom(playerIndex, x, y) &&
@@ -1044,7 +1052,7 @@ export class Labyrinth {
   teleportToCell(playerIndex: number, destX: number, destY: number): boolean {
     const p = this.players[playerIndex];
     if (!p) return false;
-    if (this.grid[destY]?.[destX] !== MAGIC) return false;
+    if (this.getCellAt(destX, destY) !== MAGIC) return false;
     if (destX === p.x && destY === p.y) return false;
     p.x = destX;
     p.y = destY;
