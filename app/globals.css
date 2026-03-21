@@ -44,6 +44,52 @@ button {
   display: none;
 }
 
+/* Bonus loot picker — panel lifts in; title / carousel / skip stagger (no double-fade on panel) */
+@keyframes combatBonusLootReveal {
+  from {
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes combatBonusLootItemIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.combat-bonus-loot-panel {
+  animation: combatBonusLootReveal 0.48s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.combat-bonus-loot-panel .combat-bonus-loot-title {
+  animation: combatBonusLootItemIn 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both;
+}
+
+.combat-bonus-loot-panel .combat-bonus-loot-carousel {
+  animation: combatBonusLootItemIn 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.16s both;
+}
+
+.combat-bonus-loot-panel .combat-bonus-loot-skip {
+  animation: combatBonusLootItemIn 0.36s cubic-bezier(0.22, 1, 0.36, 1) 0.26s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .combat-bonus-loot-panel,
+  .combat-bonus-loot-panel .combat-bonus-loot-title,
+  .combat-bonus-loot-panel .combat-bonus-loot-carousel,
+  .combat-bonus-loot-panel .combat-bonus-loot-skip {
+    animation: none;
+  }
+}
+
 /* Teleport: ball falls into hole */
 @keyframes teleportFall {
   0% {

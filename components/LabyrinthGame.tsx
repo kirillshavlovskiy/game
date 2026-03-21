@@ -3379,7 +3379,7 @@ export default function LabyrinthGame() {
                 border: "1px solid #444",
                 borderRadius: 8,
                 boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
-                zIndex: 200,
+                zIndex: HEADER_Z_INDEX + 1,
                 display: "flex",
                 flexDirection: "column",
                 gap: 12,
@@ -4565,9 +4565,12 @@ export default function LabyrinthGame() {
                   const idx = Math.max(0, Math.min(bonusLootSelectedIndex, n - 1));
                   const current = opts[idx];
                   return (
-                    <div style={combatBonusLootPanelStyle}>
-                      <div style={combatBonusLootTitleStyle}>Bonus loot — pick one</div>
+                    <div className="combat-bonus-loot-panel" style={combatBonusLootPanelStyle}>
+                      <div className="combat-bonus-loot-title" style={combatBonusLootTitleStyle}>
+                        Bonus loot — pick one
+                      </div>
                       <div
+                        className="combat-bonus-loot-carousel"
                         style={{
                           display: "flex",
                           alignItems: "center",
@@ -4666,6 +4669,7 @@ export default function LabyrinthGame() {
                       </div>
                       <button
                         type="button"
+                        className="combat-bonus-loot-skip"
                         onClick={() => handlePickCombatBonusReward(pi, mt, "skip")}
                         style={{
                           ...buttonStyle,
@@ -5580,7 +5584,8 @@ export default function LabyrinthGame() {
         style={{
           ...controlsPanelStyle,
           position: "fixed",
-          left: "50%",
+          /** Viewport center misses the maze when the stats aside is visible — center in main column instead. */
+          left: isMobile ? "50%" : `calc(${STATS_PANEL_WIDTH / 2}px + 50vw)`,
           transform: "translateX(-50%)",
           bottom: isMobile ? 10 : 16,
           zIndex: 99,
@@ -6064,6 +6069,8 @@ export default function LabyrinthGame() {
 }
 
 const HEADER_HEIGHT = 64;
+/** Above maze sticky zoom (200), below modals (≥1000) */
+const HEADER_Z_INDEX = 250;
 
 const gameOverOverlayStyle: React.CSSProperties = {
   position: "fixed",
@@ -6167,7 +6174,7 @@ const headerStyle: React.CSSProperties = {
   background: "#1a1a24",
   borderBottom: "1px solid #333",
   position: "relative",
-  zIndex: 10,
+  zIndex: HEADER_Z_INDEX,
 };
 
 const headerTitleStyle: React.CSSProperties = {
