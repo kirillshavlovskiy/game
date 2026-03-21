@@ -30,6 +30,113 @@ export const ARTIFACT_HEALING = "A5";
 export const MAX_ROUNDS = 15;
 export const DEFAULT_PLAYER_HP = 5;
 
+/** Clickable stored artifacts (inventory); order used in UI lists. */
+export type StoredArtifactKind = "dice" | "shield" | "teleport" | "reveal" | "healing";
+
+export const STORED_ARTIFACT_ORDER: StoredArtifactKind[] = ["dice", "shield", "teleport", "reveal", "healing"];
+
+/** Short name — matches Diamonds / Bombs sidebar rows (`Name: n`). */
+export const STORED_ARTIFACT_TITLE: Record<StoredArtifactKind, string> = {
+  dice: "Dice",
+  shield: "Shield",
+  teleport: "Teleport",
+  reveal: "Reveal",
+  healing: "Heal",
+};
+
+/** One-line entry for `artifactsCollected` / logs (same wording everywhere). */
+export const STORED_ARTIFACT_LINE: Record<StoredArtifactKind, string> = {
+  dice: "Dice — roll d6 on map (+moves); in combat +1 attack roll",
+  shield: "Shield — +1 block charge (combat)",
+  teleport: "Teleport — map only (after combat)",
+  reveal: "Reveal — hidden cells (map only)",
+  healing: "Healing — +1 HP (map only)",
+};
+
+export const STORED_ARTIFACT_TOOLTIP: Record<StoredArtifactKind, string> = {
+  dice: "Spend on map: roll d6 and add that many moves to your current pool. In combat: +1 to your next attack roll.",
+  shield: "Spend: +1 shield charge. In combat, toggle the shield slot to block a hit.",
+  teleport: "Spend: open teleport picker. Only on the map, not during combat.",
+  reveal: "Spend: reveal a batch of hidden cells. Only on the map, not during combat.",
+  healing: "Spend: restore 1 HP if below max. Only on the map, not during combat.",
+};
+
+export function storedArtifactKindFromCell(cell: string): StoredArtifactKind | null {
+  if (cell === ARTIFACT_DICE) return "dice";
+  if (cell === ARTIFACT_SHIELD) return "shield";
+  if (cell === ARTIFACT_TELEPORT) return "teleport";
+  if (cell === ARTIFACT_REVEAL) return "reveal";
+  if (cell === ARTIFACT_HEALING) return "healing";
+  return null;
+}
+
+/** Upper bound on how many cells `revealHiddenCells` would reveal (same formula, no mutation). */
+export function peekRevealBatchSize(lab: { hiddenCells: Map<unknown, unknown>; numPlayers: number }, totalDiamonds: number): number {
+  const perTrigger = 2 * Math.max(1, lab.numPlayers);
+  const totalAllowed = Math.max(0, totalDiamonds * 2);
+  return Math.min(lab.hiddenCells.size, perTrigger, totalAllowed);
+}
+
+/** True if this kind is only meant for the maze phase, not inside the combat modal. */
+export function isStoredArtifactMapOnly(kind: StoredArtifactKind): boolean {
+  return kind === "teleport" || kind === "reveal" || kind === "healing";
+}
+
+/** One stored artifact per player at maze start — shows under combat "Skills & Artifacts" (cycles by seat). */
+export function getDefaultStarterArtifacts(playerIndex: number): {
+  artifacts: number;
+  artifactsCollected: string[];
+  artifactDice: number;
+  artifactShield: number;
+  artifactTeleport: number;
+  artifactReveal: number;
+  artifactHealing: number;
+} {
+  const base = {
+    artifacts: 1,
+    artifactsCollected: [] as string[],
+    artifactDice: 0,
+    artifactShield: 0,
+    artifactTeleport: 0,
+    artifactReveal: 0,
+    artifactHealing: 0,
+  };
+  switch (playerIndex % 5) {
+    case 0:
+      return {
+        ...base,
+        artifactDice: 1,
+        artifactsCollected: [STORED_ARTIFACT_LINE.dice],
+      };
+    case 1:
+      return {
+        ...base,
+        artifactShield: 1,
+        artifactsCollected: [STORED_ARTIFACT_LINE.shield],
+      };
+    case 2:
+      return {
+        ...base,
+        artifactHealing: 1,
+        artifactsCollected: [STORED_ARTIFACT_LINE.healing],
+      };
+    case 3:
+      return {
+        ...base,
+        artifactTeleport: 1,
+        artifactsCollected: [STORED_ARTIFACT_LINE.teleport],
+      };
+    case 4:
+      return {
+        ...base,
+        artifactReveal: 1,
+        artifactsCollected: [STORED_ARTIFACT_LINE.reveal],
+      };
+    default:
+      return { ...base, artifactDice: 1, artifactsCollected: [STORED_ARTIFACT_LINE.dice] };
+  }
+}
+
 export type MonsterType = "V" | "Z" | "S" | "G" | "K" | "L"; // Vampire/Dracula, Zombie, Spider, Ghost, Skeleton, Lava Elemental
 
 export type DraculaState =
@@ -180,6 +287,12 @@ export class Labyrinth {
     hp: number;
     artifacts: number;
     artifactsCollected?: string[];
+    /** Stored artifacts (click to use, like bombs) */
+    artifactDice?: number;
+    artifactShield?: number;
+    artifactTeleport?: number;
+    artifactReveal?: number;
+    artifactHealing?: number;
     diceBonus?: number; // +1 to next roll from A1
     attackBonus?: number; // +1 attack from defeating Dracula
     catapultCharges?: number; // bonus from monster defeat - launch without standing on C cell
@@ -232,12 +345,11 @@ export class Labyrinth {
       shield: 0,
       bombs: 0,
       hp: DEFAULT_PLAYER_HP,
-      artifacts: 0,
-      artifactsCollected: [] as string[],
       diceBonus: 0,
       catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
+      ...getDefaultStarterArtifacts(i),
     }));
     this.goalX = width - 1;
     this.goalY = height - 1;
@@ -487,9 +599,11 @@ export class Labyrinth {
     }
   }
 
-  /** Reveal hidden cells based on total diamonds collected by all players. Returns number revealed. */
+  /** Reveal hidden cells progressively: each trigger reveals at most (2 * numPlayers) cells. Prevents revealing all cells on a single collection. totalDiamonds ensures we never reveal more than earned. Returns number revealed. */
   revealHiddenCells(totalDiamonds: number): number {
-    const toReveal = Math.min(this.hiddenCells.size, Math.max(0, totalDiamonds * 2));
+    const perTrigger = 2 * Math.max(1, this.numPlayers);
+    const totalAllowed = Math.max(0, totalDiamonds * 2);
+    const toReveal = Math.min(this.hiddenCells.size, perTrigger, totalAllowed);
     if (toReveal <= 0) return 0;
     const entries = Array.from(this.hiddenCells.entries());
     const shuffled = shuffle(entries);
@@ -780,29 +894,31 @@ export class Labyrinth {
       x: spawns[i]?.[0] ?? p.x,
       y: spawns[i]?.[1] ?? p.y,
       hp: DEFAULT_PLAYER_HP,
-      artifacts: 0,
-      artifactsCollected: [] as string[],
       diceBonus: 0,
       catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
+      ...getDefaultStarterArtifacts(i),
     }));
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
 
-    // Zombie at (1,0) adjacent to start — triggers combat as soon as player moves toward it
+    // Dracula at (1,0) adjacent to start — triggers combat as soon as player moves toward it
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "Z",
+          type: "V",
           patrolArea,
-          visionRadius: 3,
+          visionRadius: DRACULA_CONFIG.vision,
           spawnX: 1,
           spawnY: 0,
-          hp: getMonsterMaxHp("Z"),
+          hp: getMonsterMaxHp("V"),
+          draculaState: "idle",
+          draculaCooldowns: { teleport: 0, attack: 0 },
+          targetPlayerIndex: null,
         });
       }
     }
@@ -836,12 +952,11 @@ export class Labyrinth {
       shield: 0,
       bombs: 0,
       hp: DEFAULT_PLAYER_HP,
-      artifacts: 0,
-      artifactsCollected: [] as string[],
       diceBonus: 0,
       catapultCharges: 0,
       hasTeleportArtifact: false,
       hasTorch: false,
+      ...getDefaultStarterArtifacts(i),
     }));
     this.monsters = [];
     this.eliminatedPlayers = new Set();
@@ -855,19 +970,22 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
-    // Zombie at (1,0) adjacent to start — triggers combat as soon as player moves toward it
+    // Dracula at (1,0) adjacent to start — triggers combat as soon as player moves toward it
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "Z",
+          type: "V",
           patrolArea,
-          visionRadius: 3,
+          visionRadius: DRACULA_CONFIG.vision,
           spawnX: 1,
           spawnY: 0,
-          hp: getMonsterMaxHp("Z"),
+          hp: getMonsterMaxHp("V"),
+          draculaState: "idle",
+          draculaCooldowns: { teleport: 0, attack: 0 },
+          targetPlayerIndex: null,
         });
       }
     }

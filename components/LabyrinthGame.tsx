@@ -6,7 +6,7 @@ const combatLog = (...args: unknown[]) => {
   if (COMBAT_LOG) console.log("[COMBAT]", ...args);
 };
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import { ArtifactIcon } from "@/components/ArtifactIcon";
@@ -42,7 +42,16 @@ import {
   ARTIFACT_TELEPORT as ARTIFACT_TELEPORT_CELL,
   ARTIFACT_REVEAL,
   ARTIFACT_HEALING,
+  DRACULA_CONFIG,
+  STORED_ARTIFACT_ORDER,
+  STORED_ARTIFACT_TITLE,
+  STORED_ARTIFACT_LINE,
+  STORED_ARTIFACT_TOOLTIP,
+  storedArtifactKindFromCell,
+  peekRevealBatchSize,
+  isStoredArtifactMapOnly,
   type MonsterType,
+  type StoredArtifactKind,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
 import {
@@ -58,37 +67,105 @@ import {
 } from "@/lib/combatSystem";
 import { drawEvent, applyEvent } from "@/lib/eventDeck";
 import { applyDraculaTeleport, applyDraculaAttack } from "@/lib/draculaAI";
-import { DRACULA_CONFIG } from "@/lib/labyrinth";
 
 const CELL_SIZE = 44;
+/** Viewport at or below this width: hide sidebar, bottom dock = mobile (select + Use). */
+const MOBILE_BREAKPOINT_PX = 768;
+/** Desktop: auto-hide move pad after no interaction (ms). */
+const MOVE_PAD_AUTO_HIDE_MS = 5200;
+
+type MobileDockAction = "bomb" | StoredArtifactKind;
+
 /** Let catapult / teleport visuals finish before turn change or clearing flight overlay */
 const SPECIAL_MOVE_SETTLE_MS = 2000;
-/** Player + monster portraits in combat header (px) */
-const COMBAT_FACEOFF_SPRITE_PX = 256;
-/** Player portrait in combat modal — smaller than monster art to avoid overlap in the vs row */
-const COMBAT_PLAYER_AVATAR_PX = 196;
-/** Dice panel + aligned controls — same width so buttons stay under the widget */
-const COMBAT_DICE_WIDGET_PX = 220;
+/** Player + monster portraits in combat header */
+const COMBAT_FACEOFF_SPRITE_PX = 200;
+/** Player portrait in combat modal — matches monster column height */
+const COMBAT_PLAYER_AVATAR_PX = 200;
+/** Combat attack row: buttons row height */
+const COMBAT_ROLL_BUTTON_H_PX = 84;
+const COMBAT_ROLL_ROW_MIN_PX = 112;
+const COMBAT_ROLL_ROW_PAD_Y = 18;
+/** 3D dice viewport: full modal width; height range so WebGL canvas scales (avoid 120px fallback in Dice3D) */
+const COMBAT_ROLL_DICE_VIEWPORT_MIN_H = 140;
+const COMBAT_ROLL_DICE_VIEWPORT_MAX_H = 220;
+/** Combat: lower strip is Roll / Run only — 3D dice mounts above (Skills slot) while rolling */
+const COMBAT_RESULT_SLOT_COMBAT_ROLL_STRIP_PX = 240;
+/** Fixed combat hint row — same height empty or full so roll buttons / Skills don’t jump */
+const COMBAT_HINT_STRIP_PX = 56;
+/** Skills & artifacts card — fixed height so the rolling dice swaps into the same column footprint */
+const COMBAT_SKILLS_PANEL_PX = 85;
+/** Matches parent `gap` between skills card and hint strip */
+const COMBAT_SKILLS_HINT_GAP_PX = 3;
+/** One block: skills card + gap + hint — dice replaces this whole stack while rolling */
+const COMBAT_SKILLS_HINT_STACK_TOTAL_PX =
+  COMBAT_SKILLS_PANEL_PX + COMBAT_SKILLS_HINT_GAP_PX + COMBAT_HINT_STRIP_PX;
+/** Dice frame, hint strip, Roll / Run — one radius so combat roll UI aligns */
+const COMBAT_ROLL_UI_RADIUS_PX = 10;
 
-/** Extra scale on monster while combat dice roll — stronger for attack / angry (scarier). */
-function getCombatMonsterRollScale(stance: MonsterSurpriseState): number {
-  switch (stance) {
-    case "angry":
-      return 1.4;
-    case "attack":
-      return 1.3;
-    case "hunt":
-      return 1.18;
-    case "idle":
-    default:
-      return 1.12;
-  }
-}
+/** Auto-dismiss durations — single effect uses toast.seq so overlapping timers never clear a newer toast */
+const COMBAT_TOAST_AUTO_DISMISS_MS: Record<"hint" | "secondAttempt" | "footer", number> = {
+  hint: 3500,
+  secondAttempt: 2500,
+  footer: 4000,
+};
+
+/** Combat sprites never scale — prevents layout jumping. */
+/** Combat modal max width on large screens; narrows with viewport on mobile */
+const COMBAT_MODAL_WIDTH = 600;
+/** Taller to fit bonus loot picker without clipping the fixed result/roll slot */
+const COMBAT_MODAL_HEIGHT = 900;
+/** Bonus loot carousel — native img size (artifact uses diamond asset) */
+const COMBAT_BONUS_LOOT_ICON_PX = 88;
+/** Bonus loot strip — room for larger reward icons */
+const COMBAT_RESULT_SLOT_BONUS_LOOT_PX = 300;
 const FOG_GRANULARITY = 1; // 1 = per-cell (performant); 8 = fine-grained but heavy DOM
 const FOG_CLEARANCE_RADIUS = 2; // Cells within this distance of player/visited get fog cleared
 
 /** Spider web: same asset as ArtifactIcon web variant */
 const SPIDER_WEB_SPRITE = "/artifacts/spider web.PNG";
+
+function storedArtifactCount(
+  p:
+    | {
+        artifactDice?: number;
+        artifactShield?: number;
+        artifactTeleport?: number;
+        artifactReveal?: number;
+        artifactHealing?: number;
+      }
+    | undefined
+    | null,
+  kind: StoredArtifactKind
+): number {
+  if (!p) return 0;
+  switch (kind) {
+    case "dice":
+      return p.artifactDice ?? 0;
+    case "shield":
+      return p.artifactShield ?? 0;
+    case "teleport":
+      return p.artifactTeleport ?? 0;
+    case "reveal":
+      return p.artifactReveal ?? 0;
+    case "healing":
+      return p.artifactHealing ?? 0;
+  }
+}
+
+function storedArtifactIconVariant(kind: StoredArtifactKind): "dice" | "shield" | "magic" | "reveal" | "healing" {
+  if (kind === "teleport") return "magic";
+  return kind;
+}
+
+/** Bottom-panel button accent per stored artifact (consistent layout). */
+const STORED_ARTIFACT_BUTTON_STYLE: Record<StoredArtifactKind, { background: string; color: string }> = {
+  dice: { background: "#ffcc00", color: "#111" },
+  shield: { background: "#44ff88", color: "#111" },
+  teleport: { background: "#aa66ff", color: "#fff" },
+  reveal: { background: "#6688ff", color: "#fff" },
+  healing: { background: "#44aa88", color: "#fff" },
+};
 
 function SpiderWebCell() {
   const [imgFailed, setImgFailed] = useState(false);
@@ -130,11 +207,31 @@ function SpiderWebCell() {
 
 /** Avatar options for player selection (emoji) */
 const PLAYER_AVATARS = ["🧙", "🧛", "🧟", "🦸", "🧚", "🦊", "🐉", "🦉", "🐺", "🦋"] as const;
+/** Emoji avatar buttons in start / settings modals */
+const AVATAR_PICKER_BTN_PX = 40;
+const AVATAR_PICKER_FONT = "1.28rem";
+const AVATAR_PICKER_WRAP_MAX_W = 280;
+
+/** Skip game hotkeys while focus is in a text field / select (Setup & in-game Settings name inputs, etc.) */
+function isKeyboardEventFromEditableField(target: EventTarget | null): boolean {
+  if (typeof document === "undefined" || !target || !(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "INPUT") {
+    const t = (target as HTMLInputElement).type;
+    if (t === "button" || t === "submit" || t === "checkbox" || t === "radio" || t === "range" || t === "file") return false;
+    return true;
+  }
+  return target.closest("input:not([type=button]):not([type=submit]):not([type=checkbox]):not([type=radio]), textarea, select, [contenteditable='true']") != null;
+}
 
 function formatMonsterBonusRewardLabel(r: MonsterBonusReward): string {
   switch (r.type) {
     case "artifact":
-      return "+1 artifact";
+      return r.amount > 1
+        ? `+${r.amount} stored artifacts (random type each)`
+        : "+1 stored artifact (random type)";
     case "bonusMoves":
       return `+${r.amount} move${r.amount > 1 ? "s" : ""}`;
     case "shield":
@@ -169,14 +266,149 @@ function getBonusRewardIcon(r: MonsterBonusReward, size: number): React.ReactNod
   }
 }
 
-function getArtifactIcon(a: string): React.ReactNode {
-  if (a === "artifact" || a.startsWith("monster-")) return <ArtifactIcon variant="artifact" size={20} />;
-  if (a === ARTIFACT_DICE) return <ArtifactIcon variant="dice" size={20} />;
-  if (a === ARTIFACT_SHIELD) return <ArtifactIcon variant="shield" size={20} />;
-  if (a === ARTIFACT_TELEPORT_CELL) return <ArtifactIcon variant="magic" size={20} />;
-  if (a === ARTIFACT_HEALING) return <ArtifactIcon variant="healing" size={20} />;
-  if (a === ARTIFACT_REVEAL) return <ArtifactIcon variant="reveal" size={20} />;
-  return <ArtifactIcon variant="artifact" size={20} />;
+/** Combat skill slots — outer box must be ≥ icon + border or dice 🎲 is clipped */
+const COMBAT_SKILL_SLOT_PX = 56;
+const COMBAT_SKILL_IMG_PX = 48;
+const COMBAT_SKILL_IMG_LOCKED_PX = 38;
+
+/** Combat Skills row: one round slot per item — icon only; tooltips carry full meaning */
+function CombatSkillItemIcon({
+  title,
+  variant,
+  mode,
+  selected,
+  disabled,
+  onClick,
+  stackCount,
+}: {
+  title: string;
+  variant: "shield" | "dice" | "magic" | "reveal" | "healing";
+  mode: "toggle" | "consume" | "locked";
+  selected?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+  stackCount?: number;
+}) {
+  const accent = variant === "shield" ? "#44ff88" : variant === "dice" ? "#ffcc00" : "#8877bb";
+  /** Dice emoji uses a square span; keep ≤ slot minus border so it sits inside the outline */
+  const rawPx = mode === "locked" ? COMBAT_SKILL_IMG_LOCKED_PX : COMBAT_SKILL_IMG_PX;
+  const borderAllowance = mode === "locked" ? 2 : 4;
+  const imgPx = Math.min(rawPx, Math.max(28, COMBAT_SKILL_SLOT_PX - borderAllowance));
+  const active =
+    mode === "consume" || (mode === "toggle" && selected) || (mode === "locked" && false);
+  const border =
+    mode === "locked"
+      ? "1px solid rgba(255,255,255,0.1)"
+      : mode === "toggle" && !selected
+        ? "2px solid rgba(100,100,110,0.5)"
+        : `2px solid ${accent}`;
+  const bg =
+    mode === "locked"
+      ? "rgba(25,20,35,0.5)"
+      : mode === "toggle" && !selected
+        ? "rgba(0,0,0,0.25)"
+        : mode === "toggle" && selected
+          ? variant === "shield"
+            ? "rgba(68,255,136,0.12)"
+            : "rgba(255,204,0,0.1)"
+          : variant === "shield"
+            ? "rgba(68,255,136,0.1)"
+            : "rgba(255,204,0,0.1)";
+  const opacity = mode === "locked" ? 0.55 : disabled ? 0.45 : mode === "toggle" && !selected ? 0.72 : 1;
+  const inner = (
+    <>
+      <span
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: "100%",
+          height: "100%",
+          lineHeight: 0,
+          pointerEvents: "none",
+        }}
+      >
+        <ArtifactIcon variant={variant} size={imgPx} opacity={mode === "locked" ? 0.85 : 1} />
+      </span>
+      {stackCount != null && stackCount > 1 ? (
+        <span
+          style={{
+            position: "absolute",
+            top: -3,
+            right: -3,
+            minWidth: 15,
+            height: 15,
+            padding: "0 3px",
+            borderRadius: 8,
+            background: "#2a2a32",
+            border: "1px solid rgba(255,255,255,0.2)",
+            fontSize: "0.6rem",
+            fontWeight: 800,
+            color: "#ddd",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            lineHeight: 1,
+          }}
+        >
+          {stackCount > 9 ? "9+" : stackCount}
+        </span>
+      ) : null}
+    </>
+  );
+  if (mode === "locked") {
+    return (
+      <span
+        title={title}
+        style={{
+          position: "relative",
+          width: COMBAT_SKILL_SLOT_PX,
+          height: COMBAT_SKILL_SLOT_PX,
+          borderRadius: 10,
+          border,
+          background: bg,
+          opacity,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          boxSizing: "border-box",
+          overflow: "hidden",
+          lineHeight: 0,
+        }}
+      >
+        {inner}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-pressed={mode === "toggle" ? selected : undefined}
+      title={title}
+      onClick={onClick}
+      style={{
+        position: "relative",
+        width: COMBAT_SKILL_SLOT_PX,
+        height: COMBAT_SKILL_SLOT_PX,
+        padding: 0,
+        borderRadius: 10,
+        border,
+        background: bg,
+        opacity,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        boxSizing: "border-box",
+        overflow: "hidden",
+        lineHeight: 0,
+        cursor: disabled ? "default" : "pointer",
+        boxShadow: active ? `0 0 10px ${variant === "shield" ? "rgba(68,255,136,0.25)" : variant === "dice" ? "rgba(255,204,0,0.2)" : "rgba(136,119,187,0.2)"}` : "none",
+      }}
+    >
+      {inner}
+    </button>
+  );
 }
 
 /**
@@ -223,6 +455,13 @@ function getMonsterSpriteWhileRolling(_type: MonsterType, stance: MonsterSurpris
   return "angry";
 }
 
+/** Calm portrait between rolls (matches monster HP bar bands): idle above ⅓ max, recover in red band. */
+function monsterCalmPortraitFromHp(curHp: number, maxHp: number): "idle" | "recover" {
+  const mMax = Math.max(1, maxHp);
+  const curClamped = Math.min(mMax, Math.max(0, curHp));
+  return curClamped / mMax > 1 / 3 ? "idle" : "recover";
+}
+
 /** Unified monster sprite: returns image path for monsters with assets, null for emoji fallback. */
 function getMonsterSprite(type: MonsterType, state: MonsterSpriteState): string | null {
   if (type === "L") {
@@ -239,7 +478,8 @@ function getMonsterSprite(type: MonsterType, state: MonsterSpriteState): string 
     if (state === "hunt") return "/monsters/dracula/hunt.png";
     if (state === "attack" || state === "rolling") return "/monsters/dracula/attack.png";
     if (state === "angry") return "/monsters/dracula/hunt.png";
-    if (state === "hurt" || state === "recover") return "/monsters/dracula/hurt.png";
+    if (state === "hurt") return "/monsters/dracula/hurt.png";
+    if (state === "recover") return "/monsters/dracula/recover.png";
     if (state === "defeated") return "/monsters/dracula/defeated.png";
     return "/monsters/dracula/idle.png";
   }
@@ -433,6 +673,7 @@ export default function LabyrinthGame() {
   const [healingGained, setHealingGained] = useState<boolean | null>(null);
   const [harmTaken, setHarmTaken] = useState<boolean | null>(null);
   const [bombGained, setBombGained] = useState<boolean | null>(null);
+  const [artifactGained, setArtifactGained] = useState<string | null>(null);
   const [hiddenGemTeleport, setHiddenGemTeleport] = useState<boolean | null>(null);
   const [torchGained, setTorchGained] = useState<boolean | null>(null);
   const [cellsRevealed, setCellsRevealed] = useState<number | null>(null);
@@ -451,7 +692,7 @@ export default function LabyrinthGame() {
     playerIndex: number;
     from: [number, number];
     options: [number, number][];
-    sourceType: "magic" | "gem";
+    sourceType: "magic" | "gem" | "artifact";
   } | null>(null);
   const [catapultMode, setCatapultMode] = useState(false);
   const [catapultPicker, setCatapultPicker] = useState<{ playerIndex: number; from: [number, number] } | null>(null);
@@ -492,6 +733,8 @@ export default function LabyrinthGame() {
         bonusRewardApplied?: boolean;
         /** True when player died in combat — show defeat screen with Close button */
         playerDefeated?: boolean;
+        /** Snapshot after lethal hit — lab is respawned so bars must not read live player HP */
+        playerHpAtEnd?: number;
       })
     | null
   >(null);
@@ -513,14 +756,45 @@ export default function LabyrinthGame() {
     monsterDefense: number;
     summary: string;
   } | null>(null);
+  /** Monster sprite phase after taking damage: hurt → recover → ready (before next roll) */
+  const [combatRecoveryPhase, setCombatRecoveryPhase] = useState<"hurt" | "recover" | "ready">("ready");
+  /** Temporary combat toast — `seq` invalidates older timeouts when a new toast is shown */
+  const [combatToast, setCombatToast] = useState<{
+    seq: number;
+    message: string;
+    style: "hint" | "secondAttempt" | "footer";
+  } | null>(null);
+  const combatToastSeqRef = useRef(0);
   const [defeatedMonsterOnCell, setDefeatedMonsterOnCell] = useState<{ x: number; y: number; monsterType: MonsterType } | null>(null);
   const [collisionEffect, setCollisionEffect] = useState<{ x: number; y: number } | null>(null);
   const [turnChangeEffect, setTurnChangeEffect] = useState<number | null>(null);
   const [combatUseShield, setCombatUseShield] = useState(true);
   const [combatUseDiceBonus, setCombatUseDiceBonus] = useState(true);
   const [mazeZoom, setMazeZoom] = useState(1);
+  const [isMobile, setIsMobile] = useState(false);
+  /** Result/roll strip height — combat: dice moves to Skills+hint slot while rolling; lower strip is buttons only (same all breakpoints). */
+  const combatResultSlotHeightPx =
+    combatState
+      ? COMBAT_RESULT_SLOT_COMBAT_ROLL_STRIP_PX
+      : pendingCombatBonusPick && bonusLootRevealed
+        ? COMBAT_RESULT_SLOT_BONUS_LOOT_PX
+        : 140;
+  /** Mobile: turn / moves / round / diamonds in slide-down panel (☰). */
+  const [mobileGameSummaryOpen, setMobileGameSummaryOpen] = useState(false);
+  /** Desktop only: move arrow pad hidden until keyboard move / successful step / “Moves” button. */
+  const [movePadOpenDesktop, setMovePadOpenDesktop] = useState(false);
+  const movePadAutoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Mobile: selected item in bottom dock before tapping Use. */
+  const [mobileDockAction, setMobileDockAction] = useState<MobileDockAction | null>(null);
+  /** Mobile: full Move & items vs compact artifacts-only strip. */
+  const [mobileDockExpanded, setMobileDockExpanded] = useState(false);
+  /** Measured height of fixed bottom dock — maze scroll padding so map can clear above it. */
+  const mobileDockRef = useRef<HTMLDivElement>(null);
+  const [mobileDockInsetPx, setMobileDockInsetPx] = useState(0);
   const [gameStarted, setGameStarted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const headerMenuRef = useRef<HTMLDivElement>(null);
   const [showDiceModal, setShowDiceModal] = useState(false);
   const [playerNames, setPlayerNames] = useState<string[]>(() =>
     Array.from({ length: 3 }, (_, i) => `Player ${i + 1}`)
@@ -552,6 +826,95 @@ export default function LabyrinthGame() {
   const handleTeleportSelectRef = useRef<(destX: number, destY: number) => void>(() => {});
   const triggerRoundEndRef = useRef<() => void>(() => {});
   const currentPlayerCellRef = useRef<HTMLDivElement | null>(null);
+  const openMovePadDesktopWithTimerRef = useRef<() => void>(() => {});
+
+  const openMovePadDesktopWithTimer = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT_PX}px)`).matches) return;
+    setMovePadOpenDesktop(true);
+    if (movePadAutoHideTimerRef.current) clearTimeout(movePadAutoHideTimerRef.current);
+    movePadAutoHideTimerRef.current = setTimeout(() => {
+      setMovePadOpenDesktop(false);
+      movePadAutoHideTimerRef.current = null;
+    }, MOVE_PAD_AUTO_HIDE_MS);
+  }, []);
+  openMovePadDesktopWithTimerRef.current = openMovePadDesktopWithTimer;
+
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT_PX}px)`);
+    const sync = () => setIsMobile(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isMobile) {
+      setMobileDockInsetPx(0);
+      return;
+    }
+    const el = mobileDockRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => setMobileDockInsetPx(Math.ceil(el.getBoundingClientRect().height));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [isMobile]);
+
+  useEffect(
+    () => () => {
+      if (movePadAutoHideTimerRef.current) clearTimeout(movePadAutoHideTimerRef.current);
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (combatState) setMovePadOpenDesktop(false);
+  }, [combatState]);
+
+  useEffect(() => {
+    if (!isMobile) setMobileGameSummaryOpen(false);
+  }, [isMobile]);
+
+  useEffect(() => {
+    if (settingsOpen) setMobileGameSummaryOpen(false);
+  }, [settingsOpen]);
+
+  /** Mobile dock: keep a valid selection when inventory changes. */
+  useEffect(() => {
+    if (!isMobile || !lab || winner !== null) {
+      setMobileDockAction(null);
+      return;
+    }
+    const p = lab.players[currentPlayer];
+    if (!p || lab.eliminatedPlayers.has(currentPlayer)) {
+      setMobileDockAction(null);
+      return;
+    }
+    const actions: MobileDockAction[] = [];
+    if ((p.bombs ?? 0) > 0) actions.push("bomb");
+    for (const k of STORED_ARTIFACT_ORDER) {
+      if (storedArtifactCount(p, k) > 0) actions.push(k);
+    }
+    if (actions.length === 0) {
+      setMobileDockAction(null);
+      return;
+    }
+    setMobileDockAction((prev) => {
+      if (prev != null && actions.includes(prev)) return prev;
+      /** Collapsed strip is artifact-only — do not auto-select bomb. */
+      if (!mobileDockExpanded) {
+        const nonBomb = actions.find((a) => a !== "bomb");
+        return nonBomb ?? null;
+      }
+      return actions[0]!;
+    });
+  }, [isMobile, lab, currentPlayer, winner, mobileDockExpanded]);
 
   const fogIntensityMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -633,7 +996,7 @@ export default function LabyrinthGame() {
             if (targetIdx !== null && targetIdx === currentPlayerRef.current) {
               const p = next2.players[targetIdx];
               if (p) {
-                p.hp = Math.max(0, (p.hp ?? 3) - 1);
+                p.hp = Math.max(0, (p.hp ?? DEFAULT_PLAYER_HP) - 1);
                 if ((p.artifacts ?? 0) > 0) {
                   d.hp = Math.min(getMonsterMaxHp("V"), (d.hp ?? getMonsterMaxHp("V")) + 1);
                 }
@@ -642,7 +1005,15 @@ export default function LabyrinthGame() {
                   p.x = 0;
                   p.y = 0;
                   p.hp = DEFAULT_PLAYER_HP;
-                  if (p.artifacts > 0) {
+                  const hasStored = (p.artifactDice ?? 0) > 0 || (p.artifactShield ?? 0) > 0 || (p.artifactTeleport ?? 0) > 0 || (p.artifactReveal ?? 0) > 0 || (p.artifactHealing ?? 0) > 0;
+                  if (hasStored) {
+                    if ((p.artifactDice ?? 0) > 0) p.artifactDice!--;
+                    else if ((p.artifactShield ?? 0) > 0) p.artifactShield!--;
+                    else if ((p.artifactTeleport ?? 0) > 0) p.artifactTeleport!--;
+                    else if ((p.artifactReveal ?? 0) > 0) p.artifactReveal!--;
+                    else if ((p.artifactHealing ?? 0) > 0) p.artifactHealing!--;
+                    p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
+                  } else if (p.artifacts > 0) {
                     p.artifacts--;
                     const ac = p.artifactsCollected ?? [];
                     if (ac.length > 0) p.artifactsCollected = ac.slice(0, -1);
@@ -695,6 +1066,23 @@ export default function LabyrinthGame() {
   useEffect(() => {
     combatResultRef.current = combatResult;
   }, [combatResult]);
+  useEffect(() => {
+    if (!headerMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (headerMenuRef.current && !headerMenuRef.current.contains(e.target as Node)) {
+        setHeaderMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHeaderMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [headerMenuOpen]);
   useEffect(() => {
     combatUseShieldRef.current = combatUseShield;
   }, [combatUseShield]);
@@ -854,14 +1242,19 @@ export default function LabyrinthGame() {
     return () => clearTimeout(t);
   }, [diceBonusApplied]);
 
+  // Reveal bonus loot only after monster shows defeated/collapsed sprite (hurt→defeated is 1400ms)
   useEffect(() => {
     if (!pendingCombatBonusPick) {
       setBonusLootRevealed(false);
       return;
     }
-    const t = setTimeout(() => setBonusLootRevealed(true), 700);
+    if (combatVictoryPhase !== "defeated") {
+      setBonusLootRevealed(false);
+      return;
+    }
+    const t = setTimeout(() => setBonusLootRevealed(true), 500);
     return () => clearTimeout(t);
-  }, [pendingCombatBonusPick]);
+  }, [pendingCombatBonusPick, combatVictoryPhase]);
 
   useEffect(() => {
     if (healingGained === null) return;
@@ -880,6 +1273,12 @@ export default function LabyrinthGame() {
     const t = setTimeout(() => setBombGained(null), 1500);
     return () => clearTimeout(t);
   }, [bombGained]);
+
+  useEffect(() => {
+    if (artifactGained === null) return;
+    const t = setTimeout(() => setArtifactGained(null), 1500);
+    return () => clearTimeout(t);
+  }, [artifactGained]);
 
   useEffect(() => {
     if (hiddenGemTeleport === null) return;
@@ -956,6 +1355,7 @@ export default function LabyrinthGame() {
     setHealingGained(null);
     setHarmTaken(null);
     setBombGained(null);
+    setArtifactGained(null);
     setHiddenGemTeleport(null);
     setTorchGained(null);
     setCellsRevealed(null);
@@ -1103,7 +1503,7 @@ export default function LabyrinthGame() {
 
       const maxHp = getMonsterMaxHp(combat.monsterType);
       const monsterHp = monster?.hp ?? maxHp;
-      setRolling(false);
+      /** Do not setRolling(false) before flushSync(setLab) — one frame would show rolling=false with stale monster HP (idle at full) then recover after lab updates. */
       combatContinuesAfterRollRef.current = false;
       let shieldAbsorbedFlag = false;
 
@@ -1262,11 +1662,22 @@ export default function LabyrinthGame() {
             p.hp = (p.hp ?? DEFAULT_PLAYER_HP) - result.damage;
             if (combat.monsterType === "Z") p.loseNextMove = true; // Zombie slow: lose next movement point
             if (p.hp <= 0) {
+              const defeatMonsterMaxHp = getMonsterMaxHp(combat.monsterType);
+              const defeatMonsterHp = m ? Math.min(defeatMonsterMaxHp, Math.max(0, m.hp ?? defeatMonsterMaxHp)) : defeatMonsterMaxHp;
+              const defeatPlayerHp = p.hp;
               // Respawn at start, lose 1 artifact (instead of elimination)
               p.x = 0;
               p.y = 0;
               p.hp = DEFAULT_PLAYER_HP;
-              if (p.artifacts > 0) {
+              const hasStored = (p.artifactDice ?? 0) > 0 || (p.artifactShield ?? 0) > 0 || (p.artifactTeleport ?? 0) > 0 || (p.artifactReveal ?? 0) > 0 || (p.artifactHealing ?? 0) > 0;
+              if (hasStored) {
+                if ((p.artifactDice ?? 0) > 0) p.artifactDice!--;
+                else if ((p.artifactShield ?? 0) > 0) p.artifactShield!--;
+                else if ((p.artifactTeleport ?? 0) > 0) p.artifactTeleport!--;
+                else if ((p.artifactReveal ?? 0) > 0) p.artifactReveal!--;
+                else if ((p.artifactHealing ?? 0) > 0) p.artifactHealing!--;
+                p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
+              } else if (p.artifacts > 0) {
                 p.artifacts--;
                 const ac = p.artifactsCollected ?? [];
                 if (ac.length > 0) p.artifactsCollected = ac.slice(0, -1);
@@ -1280,6 +1691,9 @@ export default function LabyrinthGame() {
                 playerIndex: pi,
                 damage: result.damage,
                 playerDefeated: true,
+                monsterHp: defeatMonsterHp,
+                monsterMaxHp: defeatMonsterMaxHp,
+                playerHpAtEnd: defeatPlayerHp,
               });
               // Always pass turn after combat respawn — do not gate on currentPlayerRef (it can lag useEffect during flushSync and skip advance).
               movesLeftRef.current = 0;
@@ -1338,6 +1752,7 @@ export default function LabyrinthGame() {
           monsterDefense: result.monsterDefense,
           summary,
         });
+        setCombatRecoveryPhase("hurt");
         combatHasRolledRef.current = false;
         const stance = rollCombatSurprise();
         combatSurpriseRef.current = stance;
@@ -1349,6 +1764,7 @@ export default function LabyrinthGame() {
       }
       setCombatUseShield(true);
       setCombatUseDiceBonus(true);
+      setRolling(false);
       return;
   }, []);
 
@@ -1360,6 +1776,7 @@ export default function LabyrinthGame() {
     const wasSecondAttempt = cr?.secondAttempt && combatStateRef.current;
     setCombatResult(null);
     setCombatFooterSnapshot(null);
+    setCombatRecoveryPhase("ready");
     setDefeatedMonsterOnCell(null);
     setCombatVictoryPhase("hurt");
     setShieldAbsorbed(null);
@@ -1380,6 +1797,7 @@ export default function LabyrinthGame() {
     setCombatResult(null);
     setEliminatedByMonster(null);
     setCombatFooterSnapshot(null);
+    setCombatRecoveryPhase("ready");
     setDefeatedMonsterOnCell(null);
     setCombatVictoryPhase("hurt");
     setShieldAbsorbed(null);
@@ -1433,6 +1851,38 @@ export default function LabyrinthGame() {
   }, [combatFooterSnapshot]);
 
   useEffect(() => {
+    if (!combatFooterSnapshot || combatRecoveryPhase === "ready") return;
+    const ms = combatRecoveryPhase === "hurt" ? 450 : 550;
+    const t = setTimeout(() => {
+      setCombatRecoveryPhase((p) => (p === "hurt" ? "recover" : "ready"));
+    }, ms);
+    return () => clearTimeout(t);
+  }, [combatFooterSnapshot, combatRecoveryPhase]);
+
+  useEffect(() => {
+    if (combatResult?.secondAttempt) {
+      const seq = ++combatToastSeqRef.current;
+      setCombatToast({
+        seq,
+        message: "🎲 Second attempt! Roll again — monster was caught off guard!",
+        style: "secondAttempt",
+      });
+    } else {
+      setCombatToast((prev) => (prev?.style === "secondAttempt" ? null : prev));
+    }
+  }, [!!combatResult?.secondAttempt]);
+
+  useEffect(() => {
+    if (!combatToast) return;
+    const { seq, style } = combatToast;
+    const ms = COMBAT_TOAST_AUTO_DISMISS_MS[style];
+    const t = setTimeout(() => {
+      setCombatToast((cur) => (cur?.seq === seq ? null : cur));
+    }, ms);
+    return () => clearTimeout(t);
+  }, [combatToast]);
+
+  useEffect(() => {
     setBonusLootSelectedIndex(0);
   }, [combatResult?.bonusRewardOptions]);
 
@@ -1443,6 +1893,12 @@ export default function LabyrinthGame() {
         return;
       }
       const br = chosen;
+      const artifactTypePicked: StoredArtifactKind | null =
+        br.type === "artifact"
+          ? (["dice", "shield", "teleport", "reveal", "healing"] as StoredArtifactKind[])[Math.floor(Math.random() * 5)]!
+          : null;
+      /** Commit lab before dismiss so labRef / UI see new artifacts (avoids race with modal close + effects). */
+      flushSync(() => {
       setLab((prev) => {
         if (!prev || winnerRef.current !== null) return prev;
         const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
@@ -1453,8 +1909,14 @@ export default function LabyrinthGame() {
           diamonds: pl.diamonds ?? 0,
           shield: pl.shield ?? 0,
           bombs: pl.bombs ?? 0,
-          hp: pl.hp ?? 3,
+          hp: pl.hp ?? DEFAULT_PLAYER_HP,
           artifacts: pl.artifacts ?? 0,
+          artifactDice: pl.artifactDice ?? 0,
+          artifactShield: pl.artifactShield ?? 0,
+          artifactTeleport: pl.artifactTeleport ?? 0,
+          artifactReveal: pl.artifactReveal ?? 0,
+          artifactHealing: pl.artifactHealing ?? 0,
+          artifactsCollected: pl.artifactsCollected ?? [],
           diceBonus: pl.diceBonus ?? 0,
         }));
         next.hiddenCells = new Map(prev.hiddenCells);
@@ -1478,10 +1940,15 @@ export default function LabyrinthGame() {
         next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
         const p = next.players[pi];
         if (!p) return next;
-        if (br.type === "artifact") {
+        if (br.type === "artifact" && artifactTypePicked) {
           p.artifacts = Math.min(3, (p.artifacts ?? 0) + br.amount);
           const ac = p.artifactsCollected ?? [];
-          p.artifactsCollected = [...ac, "artifact"];
+          p.artifactsCollected = [...ac, STORED_ARTIFACT_LINE[artifactTypePicked]];
+          if (artifactTypePicked === "dice") p.artifactDice = (p.artifactDice ?? 0) + br.amount;
+          else if (artifactTypePicked === "shield") p.artifactShield = (p.artifactShield ?? 0) + br.amount;
+          else if (artifactTypePicked === "teleport") p.artifactTeleport = (p.artifactTeleport ?? 0) + br.amount;
+          else if (artifactTypePicked === "reveal") p.artifactReveal = (p.artifactReveal ?? 0) + br.amount;
+          else p.artifactHealing = (p.artifactHealing ?? 0) + br.amount;
         }
         if (br.type === "shield") {
           p.shield = (p.shield ?? 0) + br.amount;
@@ -1497,6 +1964,7 @@ export default function LabyrinthGame() {
         }
         return next;
       });
+      });
       if (br.type === "bonusMoves" && pi === currentPlayerRef.current) {
         movesLeftRef.current = (movesLeftRef.current ?? 0) + br.amount;
         setMovesLeft((m) => (m ?? 0) + br.amount);
@@ -1505,6 +1973,7 @@ export default function LabyrinthGame() {
       if (br.type === "shield") setShieldGained(true);
       if (br.type === "jump") setJumpAdded(br.amount);
       if (br.type === "catapult") setCatapultGained(true);
+      if (br.type === "artifact" && artifactTypePicked) setArtifactGained(artifactTypePicked);
       handleDismissCombatResult(true);
     },
     [handleDismissCombatResult]
@@ -1553,8 +2022,14 @@ export default function LabyrinthGame() {
           diamonds: pl.diamonds ?? 0,
           shield: pl.shield ?? 0,
           bombs: pl.bombs ?? 0,
-          hp: pl.hp ?? 3,
+          hp: pl.hp ?? DEFAULT_PLAYER_HP,
           artifacts: pl.artifacts ?? 0,
+          artifactsCollected: pl.artifactsCollected ?? [],
+          artifactDice: pl.artifactDice ?? 0,
+          artifactShield: pl.artifactShield ?? 0,
+          artifactTeleport: pl.artifactTeleport ?? 0,
+          artifactReveal: pl.artifactReveal ?? 0,
+          artifactHealing: pl.artifactHealing ?? 0,
           diceBonus: i === currentPlayerRef.current ? 0 : pl.diceBonus ?? 0,
         }));
         next.goalX = prev.goalX;
@@ -1597,15 +2072,20 @@ export default function LabyrinthGame() {
   const handleCombatRollClick = useCallback(() => {
     if (rolling) return;
     setCombatFooterSnapshot(null);
+    setCombatRecoveryPhase("ready");
     combatHasRolledRef.current = true; // Stance already chosen when combat opened (matches defense modifier)
     setRolling(true);
-    const rollResult = combatDiceRef.current?.roll();
-    if (rollResult) {
-      rollResult.catch(() => setRolling(false));
-    } else {
-      const v = Math.floor(Math.random() * 6) + 1;
-      handleCombatRollComplete(v);
-    }
+    const runRoll = () => {
+      const rollResult = combatDiceRef.current?.roll();
+      if (rollResult) {
+        rollResult.catch(() => setRolling(false));
+      } else {
+        const v = Math.floor(Math.random() * 6) + 1;
+        handleCombatRollComplete(v);
+      }
+    };
+    /** Lower viewport is height 0 until rolling; dice mounts in upper slot — wait for layout so Dice3D / WebGL has a real box. */
+    requestAnimationFrame(() => requestAnimationFrame(runRoll));
   }, [rolling, handleCombatRollComplete]);
 
   const handleRunAway = useCallback(() => {
@@ -1774,6 +2254,106 @@ export default function LabyrinthGame() {
     setTimeout(() => setBombExplosion(null), 600);
   }, [lab, winner, currentPlayer]);
 
+  const handleUseArtifact = useCallback(
+    (type: StoredArtifactKind) => {
+      if (!lab || winner !== null || lab.eliminatedPlayers.has(currentPlayer)) return;
+      const cp = lab.players[currentPlayer];
+      const inCombat = !!combatStateRef.current;
+      if (!cp) return;
+      const n = storedArtifactCount(cp, type);
+      if (n <= 0) return;
+      /** Map-phase items: teleport / reveal / healing are not spent during combat. */
+      if (inCombat && isStoredArtifactMapOnly(type)) return;
+      if (type === "healing" && (cp.hp ?? DEFAULT_PLAYER_HP) >= DEFAULT_PLAYER_HP) return;
+      if (type === "reveal") {
+        const totalDiamonds = lab.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
+        if (peekRevealBatchSize(lab, totalDiamonds) <= 0) return;
+      }
+      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
+      next.grid = lab.grid.map((r) => [...r]);
+      next.players = lab.players.map((p) => ({
+        ...p,
+        jumps: p.jumps ?? 0,
+        diamonds: p.diamonds ?? 0,
+        shield: p.shield ?? 0,
+        bombs: p.bombs ?? 0,
+        artifactDice: p.artifactDice ?? 0,
+        artifactShield: p.artifactShield ?? 0,
+        artifactTeleport: p.artifactTeleport ?? 0,
+        artifactReveal: p.artifactReveal ?? 0,
+        artifactHealing: p.artifactHealing ?? 0,
+      }));
+      next.hiddenCells = new Map(lab.hiddenCells);
+      next.webPositions = [...(lab.webPositions || [])];
+      next.fogZones = new Map(lab.fogZones || new Map());
+      next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.teleportUsedTo = new Map([...(lab.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.catapultUsedFrom = new Map([...(lab.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
+      next.visitedCells = new Set(lab.visitedCells || []);
+      next.goalX = lab.goalX;
+      next.goalY = lab.goalY;
+      next.monsters = lab.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
+      next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
+      const p = next.players[currentPlayer]!;
+      if (type === "dice") {
+        p.artifactDice!--;
+        p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
+        if (inCombat) {
+          /** In combat: +1 to next attack roll (same as before). */
+          p.diceBonus = (p.diceBonus ?? 0) + 1;
+          setDiceBonusApplied(true);
+          combatUseDiceBonusRef.current = true;
+          setCombatUseDiceBonus(true);
+        } else {
+          /** On map: roll d6 and add that many moves to the current pool. */
+          const roll = Math.floor(Math.random() * 6) + 1;
+          movesLeftRef.current = (movesLeftRef.current ?? 0) + roll;
+          setMovesLeft(movesLeftRef.current);
+          setBonusMovesGained(roll);
+        }
+      } else if (type === "shield") {
+        p.artifactShield!--;
+        p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
+        p.shield = (p.shield ?? 0) + 1;
+        setShieldGained(true);
+        if (inCombat) {
+          combatUseShieldRef.current = true;
+          setCombatUseShield(true);
+        }
+      } else if (type === "teleport") {
+        const options = next.getTeleportOptions(currentPlayer, 6);
+        if (options.length > 0) {
+          p.artifactTeleport!--;
+          p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
+          setLab(next);
+          setTeleportPicker({ playerIndex: currentPlayer, from: [cp.x, cp.y], options, sourceType: "artifact" });
+        }
+        return;
+      } else if (type === "reveal") {
+        const totalDiamonds = next.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
+        const revealed = next.revealHiddenCells(totalDiamonds);
+        if (revealed <= 0) return;
+        p.artifactReveal!--;
+        p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
+        setCellsRevealed(revealed);
+      } else if (type === "healing") {
+        p.artifactHealing!--;
+        p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
+        p.hp = Math.min(DEFAULT_PLAYER_HP, (p.hp ?? DEFAULT_PLAYER_HP) + 1);
+        setHealingGained(true);
+      }
+      setLab(next);
+    },
+    [lab, winner, currentPlayer, setCombatUseDiceBonus, setCombatUseShield]
+  );
+
+  const applyMobileDockSelection = useCallback(() => {
+    if (mobileDockAction === null) return;
+    if (mobileDockAction === "bomb") handleUseBomb();
+    else handleUseArtifact(mobileDockAction);
+  }, [mobileDockAction, handleUseBomb, handleUseArtifact]);
+
   const doMove = useCallback(
     (dx: number, dy: number, jumpOnly = false) => {
       if (winner !== null || !lab) return;
@@ -1812,10 +2392,19 @@ export default function LabyrinthGame() {
       next.grid = lab.grid.map((r) => [...r]);
       next.players = lab.players.map((p) => ({
         ...p,
+        hp: p.hp ?? DEFAULT_PLAYER_HP,
         jumps: p.jumps ?? 0,
         diamonds: p.diamonds ?? 0,
         shield: p.shield ?? 0,
         bombs: p.bombs ?? 0,
+        artifacts: p.artifacts ?? 0,
+        artifactsCollected: p.artifactsCollected ?? [],
+        artifactDice: p.artifactDice ?? 0,
+        artifactShield: p.artifactShield ?? 0,
+        artifactTeleport: p.artifactTeleport ?? 0,
+        artifactReveal: p.artifactReveal ?? 0,
+        artifactHealing: p.artifactHealing ?? 0,
+        diceBonus: p.diceBonus ?? 0,
       }));
       next.hiddenCells = new Map(lab.hiddenCells);
       next.webPositions = [...(lab.webPositions || [])];
@@ -1837,6 +2426,7 @@ export default function LabyrinthGame() {
         movesLeftRef.current += costToPay;
         return;
       }
+      openMovePadDesktopWithTimerRef.current();
       {
         const newMovesLeft = Math.max(0, movesLeftRef.current);
         setMovesLeft(newMovesLeft);
@@ -1874,7 +2464,7 @@ export default function LabyrinthGame() {
               const usedShield = next.tryConsumeShield(currentPlayer);
               if (usedShield) setShieldAbsorbed(true);
               else {
-                p.hp = (p.hp ?? 3) - 1;
+                p.hp = (p.hp ?? DEFAULT_PLAYER_HP) - 1;
                 setHarmTaken(true);
                 if (p.hp <= 0) {
                   next.eliminatedPlayers.add(currentPlayer);
@@ -1923,20 +2513,27 @@ export default function LabyrinthGame() {
             }
           }
           if (cell && isArtifactCell(cell)) {
-            p.artifacts = (p.artifacts ?? 0) + 1;
-            const ac = p.artifactsCollected ?? [];
-            p.artifactsCollected = [...ac, cell];
-            if (cell === ARTIFACT_DICE) p.diceBonus = (p.diceBonus ?? 0) + 1;
-            if (cell === ARTIFACT_SHIELD) p.shield = (p.shield ?? 0) + 1;
-            if (cell === ARTIFACT_TELEPORT_CELL) p.hasTeleportArtifact = true;
-            if (cell === ARTIFACT_REVEAL) {
-              const totalDiamonds = next.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0) + 1;
-              const revealed = next.revealHiddenCells(totalDiamonds);
-              if (revealed > 0) setCellsRevealed(revealed);
-            }
-            if (cell === ARTIFACT_HEALING) {
-              p.hp = Math.min(DEFAULT_PLAYER_HP, (p.hp ?? 3) + 1);
-              setHealingGained(true);
+            const kind = storedArtifactKindFromCell(cell);
+            if (kind) {
+              p.artifacts = (p.artifacts ?? 0) + 1;
+              const ac = p.artifactsCollected ?? [];
+              if (kind === "dice") {
+                p.artifactDice = (p.artifactDice ?? 0) + 1;
+                setArtifactGained("dice");
+              } else if (kind === "shield") {
+                p.artifactShield = (p.artifactShield ?? 0) + 1;
+                setArtifactGained("shield");
+              } else if (kind === "teleport") {
+                p.artifactTeleport = (p.artifactTeleport ?? 0) + 1;
+                setArtifactGained("teleport");
+              } else if (kind === "reveal") {
+                p.artifactReveal = (p.artifactReveal ?? 0) + 1;
+                setArtifactGained("reveal");
+              } else {
+                p.artifactHealing = (p.artifactHealing ?? 0) + 1;
+                setArtifactGained("healing");
+              }
+              p.artifactsCollected = [...ac, STORED_ARTIFACT_LINE[kind]];
             }
             next.grid[p.y][p.x] = PATH;
           }
@@ -2094,7 +2691,7 @@ export default function LabyrinthGame() {
           diamonds: p.diamonds ?? 0,
           shield: p.shield ?? 0,
           bombs: p.bombs ?? 0,
-          hp: p.hp ?? 3,
+          hp: p.hp ?? DEFAULT_PLAYER_HP,
           artifacts: p.artifacts ?? 0,
         }));
         next.goalX = prev.goalX;
@@ -2171,6 +2768,7 @@ export default function LabyrinthGame() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (isKeyboardEventFromEditableField(e.target)) return;
       if (e.key === "r" || e.key === "R") {
         newGame();
         e.preventDefault();
@@ -2196,6 +2794,7 @@ export default function LabyrinthGame() {
       };
       const d = map[e.key];
       if (d) {
+        openMovePadDesktopWithTimerRef.current();
         if (movesLeftRef.current <= 0 || winnerRef.current !== null || !lab || passThroughMagicRef.current) return;
         // Same keys for move and jump: prefer jump when possible in that direction
         const jumpPreferred = lab.canJumpInDirection(d[0], d[1], currentPlayer);
@@ -2361,7 +2960,7 @@ export default function LabyrinthGame() {
     handleTeleportSelectRef.current = handleTeleportSelect;
   }, [handleTeleportSelect]);
 
-  const MAGIC_TELEPORT_TIMEOUT_MS = 6000;
+  const MAGIC_TELEPORT_TIMEOUT_MS = 2000;
 
   useEffect(() => {
     if (!teleportPicker || teleportPicker.options.length === 0) {
@@ -2422,30 +3021,70 @@ export default function LabyrinthGame() {
   );
 
   if (!gameStarted) {
+  const startModalRowBase: React.CSSProperties = isMobile
+    ? { ...modalRowStyle, flexDirection: "column", alignItems: "stretch", gap: 6, marginBottom: "0.85rem" }
+    : modalRowStyle;
   return (
-      <div style={startModalOverlayStyle}>
-        <div style={startModalStyle}>
-          <h1 style={startModalTitleStyle}>LABYRINTH</h1>
-          <p style={startModalSubtitleStyle}>Configure your game and start when ready</p>
-          <div style={startModalFormStyle}>
-            <div style={modalRowStyle}>
-              <label style={startModalLabelStyle}>Maze size</label>
+      <div
+        style={{
+          ...startModalOverlayStyle,
+          ...(isMobile
+            ? {
+                alignItems: "flex-start",
+                justifyContent: "center",
+                paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
+              }
+            : {}),
+        }}
+      >
+        <div
+          style={{
+            ...startModalStyle,
+            ...(isMobile
+              ? {
+                  padding: "1.15rem 1rem",
+                  width: "100%",
+                  maxWidth: "min(100%, 620px)",
+                  borderRadius: 12,
+                }
+              : {}),
+          }}
+        >
+          <h1
+            style={{
+              ...startModalTitleStyle,
+              ...(isMobile ? { fontSize: "1.5rem", letterSpacing: 2, lineHeight: 1.2 } : {}),
+            }}
+          >
+            LABYRINTH
+          </h1>
+          <p
+            style={{
+              ...startModalSubtitleStyle,
+              ...(isMobile ? { fontSize: "0.88rem", marginBottom: "1.1rem", lineHeight: 1.35 } : {}),
+            }}
+          >
+            Configure your game and start when ready
+          </p>
+          <div style={{ ...startModalFormStyle, ...(isMobile ? { marginBottom: "1.1rem" } : {}) }}>
+            <div style={startModalRowBase}>
+              <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>Maze size</label>
               <select
                 value={mazeSize}
                 onChange={(e) => setMazeSize(Number(e.target.value))}
-                style={startModalSelectStyle}
+                style={{ ...startModalSelectStyle, ...(isMobile ? { width: "100%", minHeight: 44 } : {}) }}
               >
                 {SIZE_OPTIONS.map((s) => (
                   <option key={s} value={s}>{s}×{s}</option>
                 ))}
               </select>
             </div>
-            <div style={modalRowStyle}>
-              <label style={startModalLabelStyle}>Difficulty</label>
+            <div style={startModalRowBase}>
+              <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>Difficulty</label>
               <select
                 value={difficulty}
                 onChange={(e) => setDifficulty(Number(e.target.value))}
-                style={startModalSelectStyle}
+                style={{ ...startModalSelectStyle, ...(isMobile ? { width: "100%", minHeight: 44 } : {}) }}
               >
                 {DIFFICULTY_OPTIONS.map((d) => (
                   <option key={d} value={d}>
@@ -2454,23 +3093,48 @@ export default function LabyrinthGame() {
                 ))}
               </select>
             </div>
-            <div style={modalRowStyle}>
-              <label style={startModalLabelStyle}>Number of players</label>
+            <div style={startModalRowBase}>
+              <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>Number of players</label>
               <input
                 type="number"
                 min={1}
                 max={10}
                 value={numPlayers}
                 onChange={(e) => setNumPlayers(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
-                style={startModalInputStyle}
+                style={{ ...startModalInputStyle, ...(isMobile ? { width: "100%", maxWidth: 120, minHeight: 44 } : {}) }}
               />
             </div>
-            <div style={{ ...modalRowStyle, flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
-              <label style={startModalLabelStyle}>Player names & avatars</label>
+            <div
+              style={{
+                ...modalRowStyle,
+                flexDirection: "column",
+                alignItems: "flex-start",
+                gap: 8,
+                marginBottom: 0,
+              }}
+            >
+              <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>Player names & avatars</label>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 2, flexShrink: 0, maxWidth: 120 }}>
+                  <div
+                    key={i}
+                    style={{
+                      display: "flex",
+                      flexDirection: isMobile ? "column" : "row",
+                      alignItems: isMobile ? "stretch" : "center",
+                      gap: isMobile ? 8 : 10,
+                      width: "100%",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 4,
+                        flexShrink: 0,
+                        maxWidth: isMobile ? "100%" : AVATAR_PICKER_WRAP_MAX_W,
+                      }}
+                    >
                       {PLAYER_AVATARS.map((av) => (
                         <button
                           key={av}
@@ -2483,15 +3147,18 @@ export default function LabyrinthGame() {
                             });
                           }}
                           style={{
-                            width: 26,
-                            height: 26,
+                            width: AVATAR_PICKER_BTN_PX,
+                            height: AVATAR_PICKER_BTN_PX,
                             padding: 0,
-                            fontSize: "0.9rem",
+                            fontSize: AVATAR_PICKER_FONT,
                             lineHeight: 1,
                             border: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}` : "1px solid #444",
-                            borderRadius: 4,
+                            borderRadius: 6,
                             background: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? "rgba(0,255,136,0.2)" : "#1a1a24",
                             cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
                           }}
                         >
                           {av}
@@ -2510,7 +3177,14 @@ export default function LabyrinthGame() {
                         });
                       }}
                       placeholder={`Player ${i + 1}`}
-                      style={{ ...startModalInputStyle, flex: 1, minWidth: 0 }}
+                      style={{
+                        ...startModalInputStyle,
+                        flex: isMobile ? undefined : 1,
+                        minWidth: 0,
+                        width: isMobile ? "100%" : "auto",
+                        maxWidth: "100%",
+                        minHeight: isMobile ? 44 : undefined,
+                      }}
                     />
                   </div>
                 ))}
@@ -2519,11 +3193,15 @@ export default function LabyrinthGame() {
           </div>
           <div style={startModalButtonsStyle}>
             <button
+              type="button"
               onClick={() => {
                 newGame();
                 setGameStarted(true);
               }}
-              style={startButtonStyle}
+              style={{
+                ...startButtonStyle,
+                ...(isMobile ? { width: "100%", minHeight: 48, padding: "0.85rem 1rem", fontSize: "1.02rem" } : {}),
+              }}
             >
               Start Game
             </button>
@@ -2541,42 +3219,116 @@ export default function LabyrinthGame() {
     );
   }
 
+  const showMovePad = isMobile || movePadOpenDesktop;
+  const showMoveGrid = showMovePad && movesLeft > 0 && !combatState && winner === null;
+  const inCombatDock = !!combatState;
+  const totalDiamondsDock = lab.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
+  const bombUseDisabled = !cp || (cp?.bombs ?? 0) <= 0 || (moveDisabled && !combatState);
+  const artifactUseDisabledDock = (kind: StoredArtifactKind) => {
+    if (!cp) return true;
+    if (inCombatDock && isStoredArtifactMapOnly(kind)) return true;
+    if (kind === "healing" && (cp.hp ?? DEFAULT_PLAYER_HP) >= DEFAULT_PLAYER_HP) return true;
+    if (kind === "reveal" && peekRevealBatchSize(lab, totalDiamondsDock) <= 0) return true;
+    return false;
+  };
+  const mobileApplyDisabled =
+    mobileDockAction == null
+      ? true
+      : mobileDockAction === "bomb"
+        ? bombUseDisabled
+        : artifactUseDisabledDock(mobileDockAction);
+  const dockActions: { id: MobileDockAction; n: number }[] = [];
+  if ((cp?.bombs ?? 0) > 0) dockActions.push({ id: "bomb", n: cp!.bombs ?? 0 });
+  for (const k of STORED_ARTIFACT_ORDER) {
+    const n = storedArtifactCount(cp, k);
+    if (n > 0) dockActions.push({ id: k, n });
+  }
+
   return (
     <div style={gamePaneStyle}>
-      <header style={headerStyle}>
-        <h1 style={headerTitleStyle}>LABYRINTH</h1>
-        <div style={headerStatsStyle}>
-          <span style={{ ...headerStatItemStyle, color: winner !== null ? (winner >= 0 ? "#00ff88" : "#ff4444") : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88"), fontWeight: "bold" }}>
-            {winner !== null
-              ? winner >= 0
-                ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
-                : "Monsters win!"
-              : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
-          </span>
-          <span style={headerStatDivider}>|</span>
-          <span style={headerStatItemStyle}>
-            Moves: {diceResult !== null ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}` : "—/—"}
-          </span>
-          <span style={headerStatDivider}>|</span>
-          <span style={headerStatItemStyle}>Round: {(lab.round ?? 0) + 1}/{MAX_ROUNDS}</span>
-          <span style={headerStatDivider}>|</span>
-          <span style={headerStatItemStyle}>Total: {totalMoves}</span>
-          <span style={headerStatDivider}>|</span>
-          <span style={headerStatItemStyle}>
-            {lab.players.map((p, i) => (
-              <span
-                key={i}
-                style={{
-                  marginRight: 8,
-                  color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#888"),
-                  textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
-                }}
-              >
-                {playerNames[i] ?? `P${i + 1}`}: <ArtifactIcon variant="diamond" size={16} style={{ marginLeft: 2, marginRight: 2, verticalAlign: "middle" }} />{p?.diamonds ?? 0}
-              </span>
-            ))}
-          </span>
-        </div>
+      <header
+        style={{
+          ...headerStyle,
+          ...(isMobile ? { gap: 6, padding: "0.35rem 0.5rem", flexWrap: "nowrap" as const } : {}),
+        }}
+      >
+        <h1
+          style={
+            isMobile
+              ? {
+                  ...headerTitleStyle,
+                  fontSize: "1.05rem",
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }
+              : headerTitleStyle
+          }
+        >
+          LABYRINTH
+        </h1>
+        {!isMobile ? (
+          <div style={headerStatsStyle}>
+            <span style={{ ...headerStatItemStyle, color: winner !== null ? (winner >= 0 ? "#00ff88" : "#ff4444") : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88"), fontWeight: "bold" }}>
+              {winner !== null
+                ? winner >= 0
+                  ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
+                  : "Monsters win!"
+                : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
+            </span>
+            <span style={headerStatDivider}>|</span>
+            <span style={headerStatItemStyle}>
+              Moves: {diceResult !== null ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}` : "—/—"}
+            </span>
+            <span style={headerStatDivider}>|</span>
+            <span style={headerStatItemStyle}>Round: {(lab.round ?? 0) + 1}/{MAX_ROUNDS}</span>
+            <span style={headerStatDivider}>|</span>
+            <span style={headerStatItemStyle}>Total: {totalMoves}</span>
+            <span style={headerStatDivider}>|</span>
+            <span style={headerStatItemStyle}>
+              {lab.players.map((p, i) => (
+                <span
+                  key={i}
+                  style={{
+                    marginRight: 8,
+                    color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#888"),
+                    textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
+                  }}
+                >
+                  {playerNames[i] ?? `P${i + 1}`}: <ArtifactIcon variant="diamond" size={16} style={{ marginLeft: 2, marginRight: 2, verticalAlign: "middle" }} />{p?.diamonds ?? 0}
+                </span>
+              ))}
+            </span>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setMobileGameSummaryOpen((o) => !o)}
+            aria-expanded={mobileGameSummaryOpen}
+            aria-label="Game summary"
+            title="Game summary"
+            style={{
+              flexShrink: 0,
+              minWidth: 44,
+              minHeight: 44,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 0,
+              fontSize: "1.35rem",
+              lineHeight: 1,
+              color: "#ccc",
+              background: mobileGameSummaryOpen ? "#2a2a38" : "#1a1a24",
+              border: "1px solid #444",
+              borderRadius: 8,
+              cursor: "pointer",
+            }}
+          >
+            ☰
+          </button>
+        )}
         {teleportPicker && (
           <button
             onClick={() => setTeleportPicker(null)}
@@ -2593,15 +3345,223 @@ export default function LabyrinthGame() {
             Cancel slingshot
           </button>
         )}
-        <button
-          onClick={() => setSettingsOpen(true)}
-          style={{ ...buttonStyle, ...headerButtonStyle }}
-        >
-          Setup
-        </button>
+        <div ref={headerMenuRef} style={{ position: "relative", flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => setHeaderMenuOpen((o) => !o)}
+            aria-expanded={headerMenuOpen}
+            aria-haspopup="menu"
+            style={{
+              ...buttonStyle,
+              ...headerButtonStyle,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            Menu
+            <span aria-hidden style={{ fontSize: "0.65rem", opacity: 0.9, lineHeight: 1 }}>
+              ▼
+            </span>
+          </button>
+          {headerMenuOpen && (
+            <div
+              role="menu"
+              style={{
+                position: "absolute",
+                top: "100%",
+                right: 0,
+                marginTop: 6,
+                minWidth: isMobile ? "min(92vw, 300px)" : 272,
+                maxWidth: "min(92vw, 340px)",
+                padding: "12px 14px",
+                background: "#1a1a24",
+                border: "1px solid #444",
+                borderRadius: 8,
+                boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
+                zIndex: 200,
+                display: "flex",
+                flexDirection: "column",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    fontSize: "0.65rem",
+                    fontWeight: 700,
+                    color: "#888",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                    marginBottom: 8,
+                  }}
+                >
+                  Current progress
+                </div>
+                <div style={{ fontSize: "0.8rem", color: "#c8c8d0", lineHeight: 1.45, display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ fontWeight: 700, color: winner !== null ? (winner >= 0 ? "#00ff88" : "#ff6666") : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88") }}>
+                    {winner !== null
+                      ? winner >= 0
+                        ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
+                        : "Monsters win!"
+                      : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
+                  </div>
+                  <div>
+                    <span style={{ color: "#888" }}>Maze: </span>
+                    {lab.width}×{lab.height}
+                  </div>
+                  <div>
+                    <span style={{ color: "#888" }}>Moves: </span>
+                    {diceResult !== null ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}` : "—/—"}
+                  </div>
+                  <div>
+                    <span style={{ color: "#888" }}>Round: </span>
+                    {(lab.round ?? 0) + 1}/{MAX_ROUNDS}
+                  </div>
+                  <div>
+                    <span style={{ color: "#888" }}>Total moves: </span>
+                    {totalMoves}
+                  </div>
+                  <div style={{ borderTop: "1px solid #333", paddingTop: 8 }}>
+                    <div style={{ color: "#888", fontSize: "0.72rem", marginBottom: 6 }}>Diamonds</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {lab.players.map((p, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#aaa"),
+                            textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
+                          }}
+                        >
+                          <span style={{ fontWeight: 600 }}>{playerNames[i] ?? `P${i + 1}`}</span>
+                          <ArtifactIcon variant="diamond" size={16} style={{ flexShrink: 0 }} />
+                          <span>{p?.diamonds ?? 0}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setHeaderMenuOpen(false);
+                    setSettingsOpen(true);
+                  }}
+                  style={{ ...buttonStyle, ...headerButtonStyle, width: "100%", justifyContent: "center" }}
+                >
+                  Game setup
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setHeaderMenuOpen(false);
+                    setGameStarted(false);
+                  }}
+                  style={{ ...buttonStyle, ...secondaryButtonStyle, width: "100%", justifyContent: "center" }}
+                >
+                  New game
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </header>
 
+      {isMobile && mobileGameSummaryOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2000,
+            background: "rgba(0,0,0,0.52)",
+            paddingTop: HEADER_HEIGHT,
+          }}
+          onClick={() => setMobileGameSummaryOpen(false)}
+          role="presentation"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Game summary"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              margin: "8px 12px 0",
+              background: "#1a1a24",
+              border: "1px solid #444",
+              borderRadius: 10,
+              padding: "12px 14px",
+              maxHeight: "min(70vh, 480px)",
+              overflowY: "auto",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "0.72rem",
+                fontWeight: 700,
+                color: "#888",
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                marginBottom: 10,
+              }}
+            >
+              Game summary
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: "0.88rem", color: "#c0c0c8" }}>
+              <div style={{ fontWeight: 700, color: winner !== null ? (winner >= 0 ? "#00ff88" : "#ff6666") : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88") }}>
+                {winner !== null
+                  ? winner >= 0
+                    ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
+                    : "Monsters win!"
+                  : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
+              </div>
+              <div>
+                <span style={{ color: "#888" }}>Moves: </span>
+                {diceResult !== null ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}` : "—/—"}
+              </div>
+              <div>
+                <span style={{ color: "#888" }}>Round: </span>
+                {(lab.round ?? 0) + 1}/{MAX_ROUNDS}
+              </div>
+              <div>
+                <span style={{ color: "#888" }}>Total moves: </span>
+                {totalMoves}
+              </div>
+              <div style={{ borderTop: "1px solid #333", paddingTop: 8 }}>
+                <div style={{ color: "#888", fontSize: "0.75rem", marginBottom: 6 }}>Diamonds</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {lab.players.map((p, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#aaa"),
+                        textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
+                      }}
+                    >
+                      <span style={{ fontWeight: 600 }}>{playerNames[i] ?? `P${i + 1}`}</span>
+                      <ArtifactIcon variant="diamond" size={18} style={{ flexShrink: 0 }} />
+                      <span>{p?.diamonds ?? 0}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
+        {!isMobile && (
         <aside style={statsPanelStyle}>
           <div style={{ fontSize: "0.9rem", fontWeight: "bold", color: "#00ff88", marginBottom: 4 }}>Players</div>
           {lab.players.map((p, i) => (
@@ -2625,15 +3585,15 @@ export default function LabyrinthGame() {
                 Moves: {playerMoves[i] ?? 0}
               </div>
               <div style={{ fontSize: "0.75rem", color: "#aaa", marginBottom: 2 }}>
-                HP: {p?.hp ?? 3}/{DEFAULT_PLAYER_HP}
+                HP: {p?.hp ?? DEFAULT_PLAYER_HP}/{DEFAULT_PLAYER_HP}
               </div>
               <div style={{ height: 6, background: "#333", borderRadius: 3, overflow: "hidden" }}>
                 <div
                   style={{
                     height: "100%",
-                    width: `${Math.max(0, Math.min(100, ((p?.hp ?? 3) / DEFAULT_PLAYER_HP) * 100))}%`,
+                    width: `${Math.max(0, Math.min(100, ((p?.hp ?? DEFAULT_PLAYER_HP) / DEFAULT_PLAYER_HP) * 100))}%`,
                     background: (() => {
-                      const hp = p?.hp ?? 3;
+                      const hp = p?.hp ?? DEFAULT_PLAYER_HP;
                       const pct = DEFAULT_PLAYER_HP > 0 ? hp / DEFAULT_PLAYER_HP : 1;
                       return pct >= 0.66 ? "linear-gradient(90deg, #22cc44, #44ff66)" : pct >= 0.33 ? "linear-gradient(90deg, #ffaa00, #ffcc44)" : "linear-gradient(90deg, #ff4444, #ff6666)";
                     })(),
@@ -2645,19 +3605,23 @@ export default function LabyrinthGame() {
               <div style={{ fontSize: "0.75rem", color: "#aaa" }}>
                 Artifacts: {p?.artifacts ?? 0}/3
               </div>
-              {(p?.artifactsCollected?.length ?? 0) > 0 && (
-                <div style={{ fontSize: "0.75rem", color: "#888", marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
-                  {(p?.artifactsCollected ?? []).map((a, i) => (
-                    <span
-                      key={i}
-                      style={{ fontSize: "1.25rem", lineHeight: 1 }}
-                      title={a === "artifact" ? "Artifact" : a.startsWith("monster-") ? `From ${getMonsterName(a.replace("monster-", "") as MonsterType)}` : a === ARTIFACT_DICE ? "+1 dice" : a === ARTIFACT_SHIELD ? "Shield" : a === ARTIFACT_TELEPORT_CELL ? "Teleport" : a === ARTIFACT_HEALING ? "+1 HP" : "Reveal"}
+              {STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(p, k) > 0) &&
+                STORED_ARTIFACT_ORDER.map((kind) => {
+                  const n = storedArtifactCount(p, kind);
+                  if (n <= 0) return null;
+                  return (
+                    <div
+                      key={kind}
+                      style={{ fontSize: "0.75rem", color: "#aa66ff", marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}
+                      title={STORED_ARTIFACT_TOOLTIP[kind]}
                     >
-                      {getArtifactIcon(a)}
-                    </span>
-                  ))}
-                </div>
-              )}
+                      <ArtifactIcon variant={storedArtifactIconVariant(kind)} size={14} />
+                      <span>
+                        {STORED_ARTIFACT_TITLE[kind]}: {n}
+                      </span>
+                    </div>
+                  );
+                })}
               <div style={{ fontSize: "0.75rem", color: "#aaa", display: "flex", alignItems: "center", gap: 4 }}>
                 <ArtifactIcon variant="diamond" size={14} /> Diamonds: {p?.diamonds ?? 0}
               </div>
@@ -2675,6 +3639,7 @@ export default function LabyrinthGame() {
             </div>
           ))}
         </aside>
+        )}
 
         <div style={mainContentStyle}>
       {/* Single overlay for hints - one at a time to avoid duplication */}
@@ -2736,20 +3701,35 @@ export default function LabyrinthGame() {
               const headerSurpriseVisible =
                 !!combatState && (!combatResult || secondChanceBanner) && combatHasRolledRef.current;
               const inActiveFight = !!combatState;
+              /** Between rolls: calm idle (full HP) or recover (wounded). Surprise stance only drives rolling pose + combat math — not the static portrait between strikes. */
               const headerMonsterCombatState: MonsterSpriteState = (() => {
                 if (inActiveFight && headerMt) {
                   if (secondChanceBanner && combatResult?.monsterType) {
                     if (rolling) {
                       return getMonsterSpriteWhileRolling(headerMt, combatMonsterStance);
                     }
+                    /** Second-chance banner used to force idle via getCombatResultMonsterSpriteState — ignore wounded HP. Use live maze HP like between rolls. */
+                    if (combatState && lab) {
+                      const maxHp = getMonsterMaxHp(combatState.monsterType);
+                      const m = lab.monsters[combatState.monsterIndex];
+                      const cur = m ? (m.hp ?? maxHp) : maxHp;
+                      return monsterCalmPortraitFromHp(cur, maxHp);
+                    }
                     return getCombatResultMonsterSpriteState(combatResult, combatVictoryPhase);
                   }
-                  if (headerSurpriseVisible) {
-                    return rolling
-                      ? getMonsterSpriteWhileRolling(headerMt, combatMonsterStance)
-                      : combatMonsterStance;
+                  if (combatFooterSnapshot && (combatRecoveryPhase === "hurt" || combatRecoveryPhase === "recover")) {
+                    return combatRecoveryPhase;
                   }
-                  return "neutral";
+                  if (rolling) {
+                    return getMonsterSpriteWhileRolling(headerMt, combatMonsterStance);
+                  }
+                  if (combatState && lab) {
+                    const maxHp = getMonsterMaxHp(combatState.monsterType);
+                    const m = lab.monsters[combatState.monsterIndex];
+                    const cur = m ? (m.hp ?? maxHp) : maxHp;
+                    return monsterCalmPortraitFromHp(cur, maxHp);
+                  }
+                  return combatMonsterStance;
                 }
                 if (combatResult?.monsterType) {
                   return getCombatResultMonsterSpriteState(combatResult, combatVictoryPhase);
@@ -2776,52 +3756,56 @@ export default function LabyrinthGame() {
               const mBarBg =
                 mPct >= 0.66 ? "linear-gradient(90deg, #22cc44, #44ff66)" : mPct >= 0.33 ? "linear-gradient(90deg, #ffaa00, #ffcc44)" : "linear-gradient(90deg, #ff4444, #ff6666)";
 
-              const pHp = lab && !lab.eliminatedPlayers.has(headerPi) ? (lab.players[headerPi]?.hp ?? DEFAULT_PLAYER_HP) : null;
+              const pHp =
+                combatResult?.playerDefeated && combatResult.playerIndex === headerPi
+                  ? (combatResult.playerHpAtEnd ?? 0)
+                  : lab && !lab.eliminatedPlayers.has(headerPi)
+                    ? (lab.players[headerPi]?.hp ?? DEFAULT_PLAYER_HP)
+                    : null;
               const pMax = DEFAULT_PLAYER_HP;
               const pPct = pHp != null ? pHp / pMax : 1;
               const pFill = pHp != null ? (pPct >= 0.66 ? "linear-gradient(90deg, #22cc44, #44ff66)" : pPct >= 0.33 ? "linear-gradient(90deg, #ffaa00, #ffcc44)" : "linear-gradient(90deg, #ff4444, #ff6666)") : "#666";
               const pGlow = pHp != null ? (pPct >= 0.66 ? "rgba(68,255,102,0.33)" : pPct >= 0.33 ? "rgba(255,170,0,0.33)" : "rgba(255,68,68,0.33)") : "rgba(102,102,102,0.33)";
-              const combatMonsterRollLoom =
-                !!combatState && rolling && !!headerMt && (!combatResult || secondChanceBanner);
-              const combatMonsterVisualScale = combatMonsterRollLoom ? getCombatMonsterRollScale(combatMonsterStance) : 1;
-              const playerCombatRollScale =
-                !!combatState && rolling && (!combatResult || secondChanceBanner) ? 1.07 : 1;
               const monsterRollScaryGlow =
-                combatMonsterRollLoom && (combatMonsterStance === "angry" || combatMonsterStance === "attack");
-              const combatFaceoffRowMinH = Math.max(
-                COMBAT_PLAYER_AVATAR_PX,
-                Math.ceil(COMBAT_FACEOFF_SPRITE_PX * combatMonsterVisualScale),
-              );
+                !!combatState && rolling && !!headerMt && (!combatResult || secondChanceBanner) && (combatMonsterStance === "angry" || combatMonsterStance === "attack");
+              const showCombatHintText =
+                !!combatToast || (!rolling && !!(combatFooterSnapshot || lab));
+              /** After combat loss (any monster): skull in the player slot instead of emoji avatar. */
+              const showCombatDefeatSkull = !!combatResult?.playerDefeated && !combatState;
+              /** Mobile column is narrow: bias framing left so wide sprites (e.g. Dracula) read centered in the modal. */
+              const combatMonsterImgObjectPosition = isMobile ? "left center" : "center bottom";
               return (
                 <div
                   style={{
                     width: "100%",
                     flexShrink: 0,
                     textAlign: "center",
-                    paddingTop: combatMonsterRollLoom ? 14 : 6,
+                    paddingTop: 2,
                     overflow: "visible",
                   }}
                 >
                   <h2 style={combatModalTitleStyle}>Combat</h2>
-                  {diceResult !== null && combatState?.playerIndex === currentPlayer && (
-                    <div style={{ fontSize: "0.8rem", color: "#00ff88", fontWeight: "bold", marginBottom: 4 }}>
-                      Moves: {Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/{bonusAdded ?? diceResult}
-                    </div>
-                  )}
+                  <div style={{ minHeight: 18, marginBottom: 0 }}>
+                    {diceResult !== null && combatState?.playerIndex === currentPlayer && (
+                      <span style={{ fontSize: "0.8rem", color: "#00ff88", fontWeight: "bold" }}>
+                        Moves: {Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/{bonusAdded ?? diceResult}
+                      </span>
+                    )}
+                  </div>
                   <div style={combatModalVersusGridStyle}>
                     <div
                       style={{
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
-                        minHeight: pendingCombatBonusPick && !combatState ? 34 : 0,
+                        minHeight: 26,
                         textAlign: "center",
                       }}
                     >
                       {pendingCombatBonusPick && !combatState ? (
                         <span
                           style={{
-                            fontSize: "0.78rem",
+                            fontSize: "0.72rem",
                             fontWeight: 800,
                             color: "#b8ffd9",
                             letterSpacing: "0.12em",
@@ -2844,14 +3828,14 @@ export default function LabyrinthGame() {
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
-                        minHeight: pendingCombatBonusPick && !combatState ? 34 : 0,
+                        minHeight: 26,
                         textAlign: "center",
                       }}
                     >
                       {pendingCombatBonusPick && !combatState ? (
                         <span
                           style={{
-                            fontSize: "0.78rem",
+                            fontSize: "0.72rem",
                             fontWeight: 800,
                             color: "#ffe8e8",
                             letterSpacing: "0.14em",
@@ -2875,33 +3859,33 @@ export default function LabyrinthGame() {
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
-                        minHeight: combatFaceoffRowMinH,
+                        minHeight: 220,
                         width: "100%",
                       }}
                     >
                       <span
+                        title={showCombatDefeatSkull ? "Defeated" : undefined}
                         style={{
-                          fontSize: `clamp(4rem, 8vw, 5.2rem)`,
+                          fontSize: `clamp(5rem, 11vw, 6.75rem)`,
                           display: "inline-flex",
                           alignItems: "center",
                           justifyContent: "center",
                           width: COMBAT_PLAYER_AVATAR_PX,
                           height: COMBAT_PLAYER_AVATAR_PX,
-                          transform: `scale(${playerCombatRollScale})`,
                           transformOrigin: "50% 50%",
                           transition: "transform 0.35s cubic-bezier(0.34, 1.45, 0.64, 1)",
                         }}
                       >
-                        {playerAvatars[headerPi] ?? PLAYER_AVATARS[headerPi % PLAYER_AVATARS.length]}
+                        {showCombatDefeatSkull ? "💀" : playerAvatars[headerPi] ?? PLAYER_AVATARS[headerPi % PLAYER_AVATARS.length]}
                       </span>
                     </div>
-                    <div aria-hidden style={{ minWidth: 36 }} />
+                    <div aria-hidden style={{ minWidth: 28 }} />
                     <div
                       style={{
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
-                        minHeight: combatFaceoffRowMinH,
+                        minHeight: 220,
                         overflow: "visible",
                         width: "100%",
                       }}
@@ -2914,15 +3898,17 @@ export default function LabyrinthGame() {
                           style={{
                             width: COMBAT_FACEOFF_SPRITE_PX,
                             height: COMBAT_FACEOFF_SPRITE_PX,
-                            objectFit: "contain",
-                            transform: `scale(${combatMonsterVisualScale})`,
+                            /* Wide 1536×1024 attack art: contain letterboxes → tiny; cover fills 200×200 like square sprites */
+                            objectFit:
+                              headerMt === "V" && headerMonsterSprite.includes("/dracula/attack")
+                                ? "cover"
+                                : "contain",
+                            objectPosition: combatMonsterImgObjectPosition,
                             transformOrigin: "50% 50%",
                             transition: "transform 0.35s cubic-bezier(0.34, 1.55, 0.64, 1), filter 0.35s ease",
                             filter: monsterRollScaryGlow
                               ? "drop-shadow(0 0 18px rgba(255,60,40,0.95)) drop-shadow(0 6px 28px rgba(200,0,0,0.55)) drop-shadow(0 2px 8px rgba(0,0,0,0.6))"
-                              : combatMonsterRollLoom
-                                ? "drop-shadow(0 0 12px rgba(255,180,60,0.5)) drop-shadow(0 2px 8px rgba(0,0,0,0.5))"
-                                : "drop-shadow(0 2px 8px rgba(0,0,0,0.5))",
+                              : "drop-shadow(0 2px 8px rgba(0,0,0,0.5))",
                           }}
                         />
                       ) : (
@@ -2935,7 +3921,6 @@ export default function LabyrinthGame() {
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            transform: `scale(${combatMonsterVisualScale})`,
                             transformOrigin: "50% 50%",
                             transition: "transform 0.35s cubic-bezier(0.34, 1.55, 0.64, 1), filter 0.35s ease",
                             filter: monsterRollScaryGlow ? "drop-shadow(0 0 14px rgba(255,80,40,0.85))" : undefined,
@@ -2946,66 +3931,22 @@ export default function LabyrinthGame() {
                       )}
                     </div>
 
-                    <span style={{ fontSize: "0.82rem", fontWeight: 700, color: PLAYER_COLORS[headerPi] ?? "#00ff88", textAlign: "center", lineHeight: 1.2, maxWidth: "100%", minWidth: 0 }}>
-                      {playerNames[headerPi] ?? `Player ${headerPi + 1}`}
-                    </span>
-                    <div />
-                    <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "#ff8888", textAlign: "center", lineHeight: 1.2, maxWidth: "100%", minWidth: 0 }}>{headerMonsterName}</span>
-
-                    <div />
-                    <div />
-                    <div style={{ textAlign: "center", minHeight: combatState && (!combatResult || secondChanceBanner) && headerSurpriseVisible ? undefined : 0 }}>
-                      {combatState && (!combatResult || secondChanceBanner) && headerSurpriseVisible ? (
-                        <span
-                          style={{
-                            fontSize: "0.65rem",
-                            fontWeight: "bold",
-                            letterSpacing: "0.12em",
-                            color: rolling ? "#ffcc00" : "#aaa",
-                            textTransform: "uppercase",
-                          }}
-                        >
-                          {rolling ? "Rolling…" : combatMonsterStance === "idle" ? "Surprise: idle" : combatMonsterStance === "hunt" ? "Surprise: hunt" : combatMonsterStance === "attack" ? "Surprise: attack" : "Surprise: angry"}
-                        </span>
-                      ) : null}
-                    </div>
-
-                    <div
-                      style={{
-                        gridColumn: "1 / -1",
-                        display: "flex",
-                        justifyContent: "center",
-                        alignItems: "center",
-                        padding: "4px 0 8px",
-                      }}
-                      aria-hidden
-                    >
-                      <span
-                        style={{
-                          fontSize: "1.5rem",
-                          lineHeight: 1,
-                          filter: "drop-shadow(0 0 8px rgba(255,200,100,0.35))",
-                        }}
-                      >
-                        ⚔️
-                      </span>
-                    </div>
-
                     <div
                       style={{
                         gridColumn: "1 / -1",
                         display: "grid",
                         gridTemplateColumns: "1fr 1fr",
-                        gap: "10px 14px",
+                        gap: "4px 10px",
                         marginTop: 0,
+                        marginBottom: 1,
                         width: "100%",
                         alignItems: "start",
                       }}
                     >
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 0 }}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
                         {pHp != null ? (
                           <>
-                            <span style={{ fontSize: "0.72rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
+                            <span style={{ fontSize: "0.68rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
                             <div style={{ ...combatHpBarUnderlineTrack, width: "100%", maxWidth: "100%" }}>
                               <div
                                 style={{
@@ -3017,18 +3958,18 @@ export default function LabyrinthGame() {
                                 }}
                               />
                             </div>
-                            <span style={{ fontSize: "0.75rem", color: "#9a9aaa", marginTop: -2 }}>
+                            <span style={{ fontSize: "0.72rem", color: "#9a9aaa", marginTop: -2 }}>
                               {pHp} / {pMax}
                             </span>
                           </>
                         ) : (
-                          <span style={{ fontSize: "0.72rem", color: "#666" }}>—</span>
+                          <span style={{ fontSize: "0.68rem", color: "#666" }}>—</span>
                         )}
                       </div>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 0 }}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
                         {headerMt ? (
                           <>
-                            <span style={{ fontSize: "0.72rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
+                            <span style={{ fontSize: "0.68rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
                             <div style={{ ...combatHpBarUnderlineTrack, width: "100%", maxWidth: "100%" }}>
                               <div
                                 style={{
@@ -3039,22 +3980,465 @@ export default function LabyrinthGame() {
                                 }}
                               />
                             </div>
-                            <span style={{ fontSize: "0.75rem", color: "#9a9aaa", marginTop: -2 }}>
+                            <span style={{ fontSize: "0.72rem", color: "#9a9aaa", marginTop: -2 }}>
                               {monsterCurHp} / {monsterMaxHp}
                             </span>
                           </>
                         ) : (
-                          <span style={{ fontSize: "0.72rem", color: "#666" }}>—</span>
+                          <span style={{ fontSize: "0.68rem", color: "#666" }}>—</span>
                         )}
                       </div>
                     </div>
+
+                    <span style={{ fontSize: "0.8rem", fontWeight: 700, color: PLAYER_COLORS[headerPi] ?? "#00ff88", textAlign: "center", lineHeight: 1.15, maxWidth: "100%", minWidth: 0 }}>
+                      {playerNames[headerPi] ?? `Player ${headerPi + 1}`}
+                    </span>
+                    <div />
+                    <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "#ff8888", textAlign: "center", lineHeight: 1.15, maxWidth: "100%", minWidth: 0 }}>{headerMonsterName}</span>
+
+                    <div />
+                    <div />
+                    <div style={{ textAlign: "center", minHeight: 12 }}>
+                      {combatState && (!combatResult || secondChanceBanner) && headerSurpriseVisible && !rolling ? (
+                        <span
+                          style={{
+                            fontSize: "0.62rem",
+                            fontWeight: "bold",
+                            letterSpacing: "0.12em",
+                            color: "#aaa",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {combatMonsterStance === "idle" ? "Surprise: idle" : combatMonsterStance === "hunt" ? "Surprise: hunt" : combatMonsterStance === "attack" ? "Surprise: attack" : "Surprise: angry"}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <div
+                      style={{
+                        gridColumn: "1 / -1",
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "center",
+                        padding: "0 0 2px",
+                      }}
+                      aria-hidden
+                    >
+                      <span
+                        style={{
+                          fontSize: "1.25rem",
+                          lineHeight: 1,
+                          filter: "drop-shadow(0 0 8px rgba(255,200,100,0.35))",
+                        }}
+                      >
+                        ⚔️
+                      </span>
+                    </div>
                   </div>
+                  {combatState && (
+                    <div
+                      style={{
+                        width: "100%",
+                        padding: "2px 8px 0",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: 3,
+                        flexShrink: 0,
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      {rolling && lab ? (
+                        <div
+                          className="combat-dice combat-dice-rolling-slot"
+                          style={{
+                            width: "100%",
+                            maxWidth: 420,
+                            minWidth: 0,
+                            height: COMBAT_SKILLS_HINT_STACK_TOTAL_PX,
+                            minHeight: COMBAT_SKILLS_HINT_STACK_TOTAL_PX,
+                            maxHeight: COMBAT_SKILLS_HINT_STACK_TOTAL_PX,
+                            flexShrink: 0,
+                            boxSizing: "border-box",
+                            background: "linear-gradient(145deg, #1a1a24 0%, #0d0d12 100%)",
+                            borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                            overflow: "hidden",
+                            display: "flex",
+                            flexDirection: "column",
+                            border: "2px solid #ffcc00",
+                            boxShadow: "inset 0 0 24px rgba(255,204,0,0.12)",
+                          }}
+                        >
+                          <div style={{ flex: 1, minHeight: 0, width: "100%", display: "flex", flexDirection: "column" }}>
+                            <Dice3D
+                              ref={combatDiceRef}
+                              onRollComplete={handleCombatRollComplete}
+                              disabled={rolling}
+                              fitContainer
+                              hideHint
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {/* Skills & artifacts above the hint so they stay visible when the modal scrolls (tall face-off + maxHeight). */}
+                          {lab &&
+                            (() => {
+                              const pi = combatState.playerIndex;
+                              const cp = lab.players[pi] ?? lab.players[headerPi];
+                              const hasShield = cp ? (cp.shield ?? 0) > 0 : false;
+                              const hasDiceBonus = cp ? (cp.diceBonus ?? 0) > 0 : false;
+                              const hasStored = cp
+                                ? STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(cp, k) > 0)
+                                : false;
+                              const hasSkillRow = hasShield || hasDiceBonus || hasStored;
+                              return (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    alignItems: "center",
+                                    gap: 4,
+                                    width: "100%",
+                                    maxWidth: 420,
+                                    height: COMBAT_SKILLS_PANEL_PX,
+                                    minHeight: COMBAT_SKILLS_PANEL_PX,
+                                    maxHeight: COMBAT_SKILLS_PANEL_PX,
+                                    padding: "4px 8px 6px",
+                                    background: "rgba(0,0,0,0.45)",
+                                    borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                                    border: "1px solid rgba(170,102,255,0.45)",
+                                    boxSizing: "border-box",
+                                    overflow: "hidden",
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  <div style={{ color: "#b8a0e8", fontSize: "0.72rem", fontWeight: 700 }}>Skills &amp; Artifacts</div>
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      flexWrap: "wrap",
+                                      justifyContent: "center",
+                                      alignItems: "center",
+                                      gap: 6,
+                                      minHeight: 28,
+                                      width: "100%",
+                                    }}
+                                  >
+                                    {hasSkillRow ? (
+                                      <>
+                                        {hasShield && (
+                                          <CombatSkillItemIcon
+                                            mode="toggle"
+                                            variant="shield"
+                                            selected={combatUseShield}
+                                            disabled={rolling}
+                                            onClick={() => !rolling && setCombatUseShield((v) => !v)}
+                                            title="Shield: tap to use / not use on this roll (blocks damage if you lose)"
+                                          />
+                                        )}
+                                        {hasDiceBonus && (
+                                          <CombatSkillItemIcon
+                                            mode="toggle"
+                                            variant="dice"
+                                            selected={combatUseDiceBonus}
+                                            disabled={rolling}
+                                            onClick={() => !rolling && setCombatUseDiceBonus((v) => !v)}
+                                            title="Power: tap to add +1 to this attack roll or skip"
+                                          />
+                                        )}
+                                        {STORED_ARTIFACT_ORDER.map((kind) => {
+                                          const n = storedArtifactCount(cp, kind);
+                                          if (n <= 0) return null;
+                                          if (kind === "dice") {
+                                            return (
+                                              <CombatSkillItemIcon
+                                                key={kind}
+                                                mode="consume"
+                                                variant="dice"
+                                                disabled={rolling}
+                                                onClick={() => !rolling && handleUseArtifact("dice")}
+                                                title={`${STORED_ARTIFACT_LINE.dice}. ${STORED_ARTIFACT_TOOLTIP.dice}`}
+                                                stackCount={n}
+                                              />
+                                            );
+                                          }
+                                          if (kind === "shield") {
+                                            return (
+                                              <CombatSkillItemIcon
+                                                key={kind}
+                                                mode="consume"
+                                                variant="shield"
+                                                disabled={rolling}
+                                                onClick={() => !rolling && handleUseArtifact("shield")}
+                                                title={`${STORED_ARTIFACT_LINE.shield}. ${STORED_ARTIFACT_TOOLTIP.shield}`}
+                                                stackCount={n}
+                                              />
+                                            );
+                                          }
+                                          const mapTitle = `${STORED_ARTIFACT_LINE[kind]} Locked during combat — use on the map after this fight.`;
+                                          return (
+                                            <CombatSkillItemIcon
+                                              key={kind}
+                                              mode="locked"
+                                              variant={storedArtifactIconVariant(kind)}
+                                              title={mapTitle}
+                                              stackCount={n}
+                                            />
+                                          );
+                                        })}
+                                      </>
+                                    ) : cp && (cp.artifacts ?? 0) > 0 ? (
+                                      <span
+                                        style={{
+                                          fontSize: "0.68rem",
+                                          color: "#9a9aaa",
+                                          textAlign: "center",
+                                          lineHeight: 1.35,
+                                          padding: "0 4px",
+                                        }}
+                                      >
+                                        Artifact inventory {(cp.artifacts ?? 0)}/3 — use on the map after this fight
+                                      </span>
+                                    ) : (
+                                      <span
+                                        style={{
+                                          fontSize: "0.68rem",
+                                          color: "#666",
+                                          textAlign: "center",
+                                          lineHeight: 1.35,
+                                          padding: "0 4px",
+                                        }}
+                                      >
+                                        {cp ? "No combat skills or stored artifacts" : "—"}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          <div
+                            style={{
+                              width: "100%",
+                              maxWidth: 420,
+                              height: COMBAT_HINT_STRIP_PX,
+                              minHeight: COMBAT_HINT_STRIP_PX,
+                              maxHeight: COMBAT_HINT_STRIP_PX,
+                              flexShrink: 0,
+                              boxSizing: "border-box",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                          >
+                            <div
+                              role={showCombatHintText ? "alert" : undefined}
+                              aria-live={showCombatHintText ? "polite" : undefined}
+                              aria-hidden={!showCombatHintText}
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                boxSizing: "border-box",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                padding: "4px 8px",
+                                borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                                overflow: "hidden",
+                                border:
+                                  combatToast?.style === "secondAttempt"
+                                    ? "2px solid rgba(255,204,0,0.75)"
+                                    : showCombatHintText
+                                      ? "2px solid rgba(255,204,0,0.38)"
+                                      : "2px solid transparent",
+                                background: showCombatHintText
+                                  ? combatToast?.style === "secondAttempt"
+                                    ? "rgba(255,204,0,0.15)"
+                                    : "rgba(255,204,0,0.08)"
+                                  : "rgba(255,204,0,0.04)",
+                                color: combatToast?.style === "secondAttempt" ? "#ffcc00" : "#eeccaa",
+                                fontSize: combatToast?.style === "secondAttempt" ? "0.86rem" : "0.76rem",
+                                fontWeight: combatToast?.style === "secondAttempt" ? 700 : 500,
+                                textAlign: "center",
+                                lineHeight: 1.28,
+                              }}
+                            >
+                              {showCombatHintText ? (
+                                <span
+                                  style={{
+                                    display: "-webkit-box",
+                                    WebkitLineClamp: 2,
+                                    WebkitBoxOrient: "vertical" as const,
+                                    overflow: "hidden",
+                                    wordBreak: "break-word",
+                                  }}
+                                >
+                                  {combatToast
+                                    ? combatToast.message
+                                    : combatFooterSnapshot
+                                      ? combatFooterSnapshot.summary
+                                      : lab
+                                        ? `💡 ${getMonsterHint(combatState.monsterType, lab?.monsters[combatState.monsterIndex]?.hasShield)}`
+                                        : null}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })()}
-            <div style={{ ...combatResultSectionStyle, flex: 1, justifyContent: "flex-start", gap: 14, width: "100%" }}>
-            {/* Fight finished: win / loss / bonus / defeat — no live combatState */}
-            {combatResult && !combatState ? (
+            <div style={{ height: combatState ? 8 : 32, flexShrink: 0, minHeight: combatState ? 8 : 32 }} />
+            <div
+              style={{
+                ...combatResultSectionStyle,
+                flex: "0 0 auto",
+                justifyContent: "flex-start",
+                gap: pendingCombatBonusPick && bonusLootRevealed ? 8 : 14,
+                width: "100%",
+                minHeight: combatResultSlotHeightPx,
+                maxHeight: combatResultSlotHeightPx,
+                overflow: pendingCombatBonusPick && bonusLootRevealed ? "auto" : "hidden",
+                boxSizing: "border-box",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+              }}
+            >
+            {/* Fixed-height slot: result banner/bonus OR roll controls — never jumps */}
+            {combatState ? (
+              <div style={{ ...combatRollSectionStyle, flex: 0, width: "100%", justifyContent: "center" }}>
+                {(() => {
+                  /** Same on all breakpoints: lower dice viewport height 0 until roll; while rolling, Dice3D only in upper Skills/hint slot. */
+                  const combatDiceInLowerSlot = !rolling;
+                  const combatDiceViewportHidden = !rolling;
+                  return (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 0,
+                    width: "100%",
+                    maxWidth: "100%",
+                    minHeight: combatDiceViewportHidden ? 0 : COMBAT_ROLL_ROW_MIN_PX,
+                    paddingTop: combatDiceViewportHidden ? 6 : COMBAT_ROLL_ROW_PAD_Y,
+                    paddingBottom: combatDiceViewportHidden ? 6 : COMBAT_ROLL_ROW_PAD_Y,
+                    paddingLeft: isMobile ? 6 : 8,
+                    paddingRight: isMobile ? 6 : 8,
+                    boxSizing: "border-box",
+                    flexShrink: 0,
+                  }}
+                >
+                  {combatDiceInLowerSlot ? (
+                  <div
+                    className="combat-dice"
+                    onClick={combatDiceViewportHidden ? undefined : handleCombatRollClick}
+                    style={{
+                      cursor: combatDiceViewportHidden ? "default" : rolling ? "default" : "pointer",
+                      width: "100%",
+                      maxWidth: 420,
+                      alignSelf: "center",
+                      minWidth: 0,
+                      height: combatDiceViewportHidden
+                        ? 0
+                        : `clamp(${COMBAT_ROLL_DICE_VIEWPORT_MIN_H}px, min(32vw, 28vh), ${COMBAT_ROLL_DICE_VIEWPORT_MAX_H}px)`,
+                      minHeight: combatDiceViewportHidden ? 0 : COMBAT_ROLL_DICE_VIEWPORT_MIN_H,
+                      maxHeight: combatDiceViewportHidden ? 0 : COMBAT_ROLL_DICE_VIEWPORT_MAX_H,
+                      flexShrink: 0,
+                      boxSizing: "border-box",
+                      background: combatDiceViewportHidden ? "transparent" : "linear-gradient(145deg, #1a1a24 0%, #0d0d12 100%)",
+                      borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                      overflow: "hidden",
+                      display: "flex",
+                      flexDirection: "column",
+                      border: combatDiceViewportHidden ? "2px solid transparent" : "2px solid #ffcc00",
+                      boxShadow: combatDiceViewportHidden ? "none" : "inset 0 0 24px rgba(255,204,0,0.12)",
+                      pointerEvents: combatDiceViewportHidden ? "none" : "auto",
+                    }}
+                  >
+                    <div style={{ flex: 1, minHeight: 0, width: "100%", display: "flex", flexDirection: "column" }}>
+                      <Dice3D
+                        ref={combatDiceRef}
+                        onRollComplete={handleCombatRollComplete}
+                        disabled={rolling}
+                        fitContainer
+                        hideHint
+                      />
+                    </div>
+                  </div>
+                  ) : (
+                    <div style={{ height: 0, overflow: "hidden", flexShrink: 0 }} aria-hidden />
+                  )}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: isMobile ? "column" : "row",
+                      alignItems: "stretch",
+                      justifyContent: "space-between",
+                      gap: isMobile ? 8 : 10,
+                      width: "100%",
+                      maxWidth: isMobile ? undefined : 420,
+                      alignSelf: isMobile ? "stretch" : "center",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={handleCombatRollClick}
+                      disabled={rolling}
+                      style={{
+                        ...buttonStyle,
+                        flex: isMobile ? "none" : 1,
+                        minWidth: 0,
+                        width: isMobile ? "100%" : "auto",
+                        boxSizing: "border-box",
+                        minHeight: isMobile ? 48 : COMBAT_ROLL_BUTTON_H_PX,
+                        padding: "0 clamp(8px, 2vw, 16px)",
+                        fontSize: isMobile ? "0.8rem" : "0.85rem",
+                        lineHeight: 1.2,
+                        background: "#ffcc00",
+                        color: "#111",
+                        border: "2px solid #cc9900",
+                        borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                        fontWeight: "bold",
+                      }}
+                    >
+                      {rolling ? "Rolling…" : "Roll dice"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRunAway}
+                      disabled={rolling || movesLeft <= 0}
+                      style={{
+                        ...buttonStyle,
+                        flex: isMobile ? "none" : 1,
+                        minWidth: 0,
+                        width: isMobile ? "100%" : "auto",
+                        boxSizing: "border-box",
+                        minHeight: isMobile ? 48 : COMBAT_ROLL_BUTTON_H_PX,
+                        padding: "0 clamp(8px, 2vw, 16px)",
+                        fontSize: isMobile ? "0.8rem" : "0.85rem",
+                        lineHeight: 1.2,
+                        background: movesLeft > 0 ? "#666" : "#444",
+                        color: "#fff",
+                        border: "1px solid #888",
+                        borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                        opacity: movesLeft > 0 ? 1 : 0.6,
+                      }}
+                      title={movesLeft > 0 ? "Retreat to previous cell (costs 1 move)" : "No moves left"}
+                    >
+                      🏃 Run away
+                    </button>
+                  </div>
+                </div>
+                  );
+                })()}
+              </div>
+            ) : combatResult ? (
               <>
                 {!pendingCombatBonusPick && (
                 <div
@@ -3065,7 +4449,7 @@ export default function LabyrinthGame() {
                     display: "flex",
                     flexDirection: "column",
                     alignItems: "center",
-                    gap: 12,
+                    gap: 8,
                     borderColor: combatResult.secondAttempt ? "#ffcc00" : (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
                     background: combatResult.secondAttempt ? "rgba(255,204,0,0.2)" : (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "rgba(255,102,0,0.2)" : combatResult.monsterEffect === "skeleton_shield" ? "rgba(255,204,0,0.15)" : combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.22)" : "rgba(255,68,68,0.15)",
                   }}
@@ -3073,10 +4457,10 @@ export default function LabyrinthGame() {
                   <span
                     style={{
                       color: combatResult.secondAttempt ? "#ffcc00" : (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
-                      fontSize: "1.15rem",
+                      fontSize: "1rem",
                       fontWeight: "bold",
                       textAlign: "center",
-                      lineHeight: 1.35,
+                      lineHeight: 1.3,
                     }}
                   >
                     {combatResult.secondAttempt
@@ -3095,7 +4479,8 @@ export default function LabyrinthGame() {
                                   combatResult.reward?.type === "movement" && "🎯 +1 move",
                                 ].filter(Boolean);
                                 const bonusParts = [
-                                  combatResult.bonusReward?.type === "artifact" && "✨ +1 artifact",
+                                  combatResult.bonusReward?.type === "artifact" &&
+                                    `✨ ${formatMonsterBonusRewardLabel({ type: "artifact", amount: combatResult.bonusReward.amount })}`,
                                   combatResult.bonusReward &&
                                     combatResult.bonusReward.type === "bonusMoves" &&
                                     `🎯 +${combatResult.bonusReward.amount} move${combatResult.bonusReward.amount > 1 ? "s" : ""}`,
@@ -3118,15 +4503,21 @@ export default function LabyrinthGame() {
                                   : `✗ -${combatResult.damage} HP`}
                   </span>
                   {combatResult.won && (combatResult.reward || combatResult.bonusReward) && (
-                    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 16, marginTop: 12 }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8, marginTop: 4 }}>
                       {combatResult.reward?.type === "jump" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 jump"><ArtifactIcon variant="jump" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 jump</span></span>}
                       {combatResult.reward?.type === "hp" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 HP"><ArtifactIcon variant="healing" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 HP</span></span>}
                       {combatResult.reward?.type === "shield" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 shield"><ArtifactIcon variant="shield" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 shield</span></span>}
                       {combatResult.reward?.type === "attackBonus" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 attack"><ArtifactIcon variant="magic" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 attack</span></span>}
                       {combatResult.reward?.type === "movement" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 move"><ArtifactIcon variant="catapult" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 move</span></span>}
                       {combatResult.bonusReward?.type === "artifact" && (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }} title="+1 artifact">
-                          <ArtifactIcon variant="magic" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 artifact</span>
+                        <span
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6, filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }}
+                          title={formatMonsterBonusRewardLabel({ type: "artifact", amount: combatResult.bonusReward.amount })}
+                        >
+                          <ArtifactIcon variant="artifact" size={40} />
+                          <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>
+                            {formatMonsterBonusRewardLabel({ type: "artifact", amount: combatResult.bonusReward.amount })}
+                          </span>
                         </span>
                       )}
                       {combatResult.bonusReward?.type === "bonusMoves" && (
@@ -3146,8 +4537,8 @@ export default function LabyrinthGame() {
                       onClick={handleCloseDefeatModal}
                       style={{
                         ...buttonStyle,
-                        marginTop: 12,
-                        padding: "10px 24px",
+                        marginTop: 8,
+                        padding: "8px 20px",
                         fontSize: "1rem",
                         fontWeight: "bold",
                         background: "#444",
@@ -3176,98 +4567,116 @@ export default function LabyrinthGame() {
                   return (
                     <div style={combatBonusLootPanelStyle}>
                       <div style={combatBonusLootTitleStyle}>Bonus loot — pick one</div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", justifyContent: "center" }}>
-                        <button
-                          type="button"
-                          onClick={() => setBonusLootSelectedIndex((i) => (i - 1 + n) % n)}
-                          style={{
-                            ...buttonStyle,
-                            width: 36,
-                            height: 36,
-                            padding: 0,
-                            borderRadius: "50%",
-                            background: "#2a2a2e",
-                            color: "#00ffcc",
-                            border: "1px solid #00ff8866",
-                            fontSize: "1.2rem",
-                            flexShrink: 0,
-                          }}
-                          aria-label="Previous"
-                        >
-                          ‹
-                        </button>
-                        <div
-                          style={{
-                            flex: 1,
-                            minWidth: 0,
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "12px 8px",
-                          }}
-                        >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          width: "100%",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", justifyContent: "center" }}>
                           <button
                             type="button"
-                            onClick={() => handlePickCombatBonusReward(pi, mt, current)}
+                            onClick={() => setBonusLootSelectedIndex((i) => (i - 1 + n) % n)}
                             style={{
                               ...buttonStyle,
-                              width: "100%",
+                              width: 32,
+                              height: 32,
+                              padding: 0,
+                              borderRadius: "50%",
                               background: "#2a2a2e",
-                              color: "#ddd",
-                              border: "1px solid #555",
-                              borderRadius: 8,
-                              padding: "12px 16px",
-                              fontWeight: "bold",
+                              color: "#00ffcc",
+                              border: "1px solid #00ff8866",
+                              fontSize: "1.1rem",
+                              flexShrink: 0,
+                            }}
+                            aria-label="Previous"
+                          >
+                            ‹
+                          </button>
+                          <div
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              maxWidth: 240,
                               display: "flex",
                               flexDirection: "column",
                               alignItems: "center",
-                              gap: 6,
-                              boxShadow: "0 0 4px rgba(0,0,0,0.2)",
+                              gap: 4,
+                              padding: "4px 2px",
                             }}
                           >
-                            <span style={{ display: "inline-flex", filter: "drop-shadow(0 0 2px rgba(255,255,255,0.15))" }}>
-                              {getBonusRewardIcon(current, 56)}
+                            <button
+                              type="button"
+                              onClick={() => handlePickCombatBonusReward(pi, mt, current)}
+                              style={{
+                                ...buttonStyle,
+                                width: "100%",
+                                minHeight: 118,
+                                background: "#2a2a2e",
+                                color: "#ddd",
+                                border: "1px solid #555",
+                                borderRadius: 8,
+                                padding: "8px 10px",
+                                fontWeight: "bold",
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: 5,
+                                boxShadow: "0 0 6px rgba(0,0,0,0.3)",
+                              }}
+                            >
+                              <span
+                                style={{
+                                  display: "inline-flex",
+                                  filter: "drop-shadow(0 0 3px rgba(255,255,255,0.15))",
+                                }}
+                              >
+                                {getBonusRewardIcon(current, COMBAT_BONUS_LOOT_ICON_PX)}
+                              </span>
+                              <span style={{ fontSize: "0.82rem", lineHeight: 1.2 }}>
+                                {formatMonsterBonusRewardLabel(current)}
+                              </span>
+                            </button>
+                            <span style={{ fontSize: "0.65rem", color: "#889988", fontWeight: 600 }}>
+                              {idx + 1} / {n}
                             </span>
-                            <span style={{ fontSize: "0.85rem" }}>{formatMonsterBonusRewardLabel(current)}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setBonusLootSelectedIndex((i) => (i + 1) % n)}
+                            style={{
+                              ...buttonStyle,
+                              width: 32,
+                              height: 32,
+                              padding: 0,
+                              borderRadius: "50%",
+                              background: "#2a2a2e",
+                              color: "#00ffcc",
+                              border: "1px solid #00ff8866",
+                              fontSize: "1.05rem",
+                              flexShrink: 0,
+                            }}
+                            aria-label="Next"
+                          >
+                            ›
                           </button>
-                          <span style={{ fontSize: "0.7rem", color: "#666" }}>
-                            {idx + 1} / {n}
-                          </span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setBonusLootSelectedIndex((i) => (i + 1) % n)}
-                          style={{
-                            ...buttonStyle,
-                            width: 36,
-                            height: 36,
-                            padding: 0,
-                            borderRadius: "50%",
-                            background: "#2a2a2e",
-                            color: "#00ffcc",
-                            border: "1px solid #00ff8866",
-                            fontSize: "1.2rem",
-                            flexShrink: 0,
-                          }}
-                          aria-label="Next"
-                        >
-                          ›
-                        </button>
                       </div>
                       <button
                         type="button"
                         onClick={() => handlePickCombatBonusReward(pi, mt, "skip")}
                         style={{
                           ...buttonStyle,
-                          marginTop: 10,
+                          marginTop: 0,
                           width: "100%",
                           background: "#2a2a2e",
                           color: "#888",
                           border: "1px solid #444",
                           borderRadius: 6,
-                          fontSize: "0.8rem",
-                          padding: "8px",
+                          fontSize: "0.72rem",
+                          padding: "6px 8px",
                         }}
                       >
                         Skip
@@ -3282,274 +4691,7 @@ export default function LabyrinthGame() {
                 )}
               </>
             ) : null}
-            {/* Any active encounter: always show full combat dice + skills; stack messages above (second chance, last roll summary) */}
-            {combatState && (
-              <div style={{ ...combatRollSectionStyle, flex: 0 }}>
-                {combatResult?.secondAttempt && (
-                  <div
-                    style={{
-                      ...combatResultBannerStyle,
-                      width: "100%",
-                      maxWidth: 400,
-                      marginBottom: 12,
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: 8,
-                      borderColor: "#ffcc00",
-                      background: "rgba(255,204,0,0.2)",
-                    }}
-                  >
-                    <span
-                      style={{
-                        color: "#ffcc00",
-                        fontSize: "1.05rem",
-                        fontWeight: "bold",
-                        textAlign: "center",
-                        lineHeight: 1.35,
-                      }}
-                    >
-                      🎲 Second attempt! Roll again — monster was caught off guard!
-                    </span>
-                  </div>
-                )}
-                {combatFooterSnapshot && (
-                  <div
-                    style={{
-                      width: "100%",
-                      maxWidth: 400,
-                      marginBottom: 12,
-                      padding: "10px 14px",
-                      borderRadius: 10,
-                      background: "rgba(255,200,80,0.12)",
-                      border: "1px solid rgba(255,204,0,0.45)",
-                      color: "#eeccaa",
-                      fontSize: "0.88rem",
-                      fontWeight: 600,
-                      textAlign: "center",
-                      lineHeight: 1.35,
-                    }}
-                  >
-                    {combatFooterSnapshot.summary}
-                  </div>
-                )}
-                {!rolling && (
-                <>
-                <div
-                  style={{
-                    color: "#ffcc00",
-                    fontSize: "0.8rem",
-                    marginBottom: 8,
-                    padding: "6px 10px",
-                    maxWidth: 420,
-                    width: "100%",
-                    boxSizing: "border-box",
-                    background: "rgba(255,204,0,0.08)",
-                    borderRadius: 8,
-                    border: "1px solid rgba(255,204,0,0.3)",
-                    lineHeight: 1.35,
-                  }}
-                >
-                  💡 {getMonsterHint(combatState.monsterType, lab?.monsters[combatState.monsterIndex]?.hasShield)}
-                </div>
-                {lab &&
-                  ((lab.players[combatState.playerIndex]?.shield ?? 0) > 0 ||
-                    (lab.players[combatState.playerIndex]?.diceBonus ?? 0) > 0) && (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
-                      width: "100%",
-                      maxWidth: 420,
-                      marginBottom: 10,
-                      padding: "8px 10px",
-                      background: "rgba(0,0,0,0.4)",
-                      borderRadius: 8,
-                      border: "1px solid #333",
-                      boxSizing: "border-box",
-                    }}
-                  >
-                    <div style={{ color: "#ffcc00", fontSize: "0.85rem", fontWeight: "bold", marginBottom: 4 }}>Skills & Artifacts</div>
-                    {(lab.players[combatState.playerIndex]?.artifactsCollected?.length ?? 0) > 0 && (
-                      <div style={{ color: "#666", fontSize: "0.75rem", lineHeight: 1.35, marginBottom: 2 }}>
-                        Collected artifacts: see the <strong style={{ color: "#888" }}>Players</strong> sidebar.
-                      </div>
-                    )}
-                    {(lab.players[combatState.playerIndex]?.shield ?? 0) > 0 && (
-                      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", color: "#ccc", fontSize: "0.95rem" }}>
-                        <input
-                          type="checkbox"
-                          checked={combatUseShield}
-                          onChange={(e) => setCombatUseShield(e.target.checked)}
-                          style={{ width: 20, height: 20, accentColor: "#44ff88" }}
-                        />
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="shield" size={18} /> Shield — block damage if I lose</span>
-                      </label>
-                    )}
-                    {(lab.players[combatState.playerIndex]?.diceBonus ?? 0) > 0 && (
-                      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", color: "#ccc", fontSize: "0.95rem" }}>
-                        <input
-                          type="checkbox"
-                          checked={combatUseDiceBonus}
-                          onChange={(e) => setCombatUseDiceBonus(e.target.checked)}
-                          style={{ width: 20, height: 20, accentColor: "#ffcc00" }}
-                        />
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="dice" size={18} /> Power — +1 to attack roll</span>
-                      </label>
-                    )}
-                  </div>
-                )}
-                </>
-                )}
-                <div
-                  style={{
-                    width: COMBAT_DICE_WIDGET_PX,
-                    maxWidth: "100%",
-                    boxSizing: "border-box",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "stretch",
-                    alignSelf: "center",
-                  }}
-                >
-                  <div
-                    style={{
-                      color: "#ffcc00",
-                      fontSize: "0.9rem",
-                      fontWeight: "bold",
-                      marginBottom: 6,
-                      marginTop: 2,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      width: "100%",
-                      justifyContent: "center",
-                      textAlign: "center",
-                      lineHeight: 1.25,
-                    }}
-                  >
-                    <ArtifactIcon variant="dice" size={20} /> {rolling ? "Rolling..." : "Roll dice to attack"}
-                  </div>
-                  <div
-                    className="combat-dice"
-                    onClick={handleCombatRollClick}
-                    style={{
-                      cursor: rolling ? "default" : "pointer",
-                      width: "100%",
-                      boxSizing: "border-box",
-                      height: 118,
-                      minHeight: 118,
-                      background: "linear-gradient(145deg, #1a1a24 0%, #0d0d12 100%)",
-                      borderRadius: 12,
-                      overflow: "hidden",
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "stretch",
-                      justifyContent: "flex-start",
-                      border: "2px solid #ffcc00",
-                      boxShadow: "inset 0 0 30px rgba(255,204,0,0.1)",
-                      position: "relative",
-                    }}
-                  >
-                    <div style={{ width: "100%", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                      <Dice3D
-                        ref={combatDiceRef}
-                        onRollComplete={handleCombatRollComplete}
-                        disabled={rolling}
-                        fitContainer
-                        hideHint
-                      />
-                    </div>
-                  </div>
-                  <div style={{ fontSize: "0.72rem", color: "#888", marginTop: 4, textAlign: "center", width: "100%" }}>
-                    Click dice area or button below to roll
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "row",
-                      alignItems: "stretch",
-                      gap: 6,
-                      marginTop: 8,
-                      marginBottom: 14,
-                      width: "100%",
-                    }}
-                  >
-                    <button
-                      onClick={handleCombatRollClick}
-                      disabled={rolling}
-                      style={{
-                        ...buttonStyle,
-                        flex: movesLeft > 0 ? "1 1 0" : "1 1 auto",
-                        minWidth: 0,
-                        boxSizing: "border-box",
-                        padding: "8px 4px",
-                        fontSize: "0.72rem",
-                        lineHeight: 1.2,
-                        background: "#ffcc00",
-                        color: "#111",
-                      }}
-                    >
-                      {rolling ? "Rolling…" : "Roll to attack"}
-                    </button>
-                    {movesLeft > 0 ? (
-                      <button
-                        onClick={handleRunAway}
-                        disabled={rolling}
-                        style={{
-                          ...buttonStyle,
-                          flex: "1 1 0",
-                          minWidth: 0,
-                          boxSizing: "border-box",
-                          padding: "8px 4px",
-                          fontSize: "0.72rem",
-                          lineHeight: 1.2,
-                          background: "#666",
-                          color: "#fff",
-                          border: "1px solid #888",
-                        }}
-                        title="Retreat to previous cell (costs 1 move)"
-                      >
-                        🏃 Run away
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            )}
             </div>
-            {(combatResult || (combatState && combatFooterSnapshot)) && (
-              <div style={combatModalFooterDiceStyle}>
-                <div style={combatModalFooterDiceRowStyle}>
-                  {combatResult ? (
-                    <>
-                      <span style={combatModalFooterDiceItemStyle}>Dice: {combatResult.playerRoll}</span>
-                      <span style={combatModalFooterDiceSepStyle}>·</span>
-                      <span style={combatModalFooterDiceItemStyle}>
-                        + Attack bonus: {combatResult.attackTotal - combatResult.playerRoll}
-                      </span>
-                      <span style={combatModalFooterDiceSepStyle}>·</span>
-                      <span style={combatModalFooterDiceItemStyle}>= Total: {combatResult.attackTotal}</span>
-                      <span style={combatModalFooterDiceSepStyle}>·</span>
-                      <span style={combatModalFooterDiceItemStyle}>vs Defense: {combatResult.monsterDefense}</span>
-                    </>
-                  ) : combatFooterSnapshot ? (
-                    <>
-                      <span style={combatModalFooterDiceItemStyle}>Dice + bonuses: {combatFooterSnapshot.playerRoll}</span>
-                      <span style={combatModalFooterDiceSepStyle}>·</span>
-                      <span style={combatModalFooterDiceItemStyle}>
-                        + Attack bonus: {combatFooterSnapshot.attackTotal - combatFooterSnapshot.playerRoll}
-                      </span>
-                      <span style={combatModalFooterDiceSepStyle}>·</span>
-                      <span style={combatModalFooterDiceItemStyle}>= Total: {combatFooterSnapshot.attackTotal}</span>
-                      <span style={combatModalFooterDiceSepStyle}>·</span>
-                      <span style={combatModalFooterDiceItemStyle}>vs Defense: {combatFooterSnapshot.monsterDefense}</span>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-            )}
             {combatState && lab && (() => {
               const [dMin, dMax] = getMonsterDamageRange(combatState.monsterType);
               const atk = lab.players[combatState.playerIndex]?.attackBonus ?? 0;
@@ -3589,13 +4731,32 @@ export default function LabyrinthGame() {
         </div>
       )}
 
-      {(bonusAdded !== null || diceBonusApplied !== null || jumpAdded !== null || shieldAbsorbed !== null || shieldGained !== null || healingGained !== null || harmTaken !== null || bombGained !== null || hiddenGemTeleport !== null || torchGained !== null || cellsRevealed !== null || webSlowed !== null || draculaAttacked !== null) &&
+      {(bonusAdded !== null ||
+        diceBonusApplied !== null ||
+        bonusMovesGained !== null ||
+        jumpAdded !== null ||
+        shieldAbsorbed !== null ||
+        shieldGained !== null ||
+        healingGained !== null ||
+        harmTaken !== null ||
+        bombGained !== null ||
+        artifactGained !== null ||
+        hiddenGemTeleport !== null ||
+        torchGained !== null ||
+        cellsRevealed !== null ||
+        webSlowed !== null ||
+        draculaAttacked !== null) &&
         !combatState &&
         !combatResult && (
         <div style={effectToastStyle} className="effect-toast">
           {diceBonusApplied !== null && (
             <span style={{ color: "#ffcc00", display: "inline-flex", alignItems: "center", gap: 6 }}>
               <ArtifactIcon variant="dice" size={20} /> +1 dice bonus applied!
+            </span>
+          )}
+          {bonusMovesGained !== null && (
+            <span style={{ color: "#ffcc00", marginLeft: diceBonusApplied !== null ? 12 : 0, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <ArtifactIcon variant="dice" size={20} /> Rolled {bonusMovesGained} — +{bonusMovesGained} moves!
             </span>
           )}
           {bonusAdded !== null && diceResult !== null && (
@@ -3633,6 +4794,12 @@ export default function LabyrinthGame() {
           {bombGained !== null && (
             <span style={{ color: "#ff8844", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
               <ArtifactIcon variant="bomb" size={20} /> +1 Bomb!
+            </span>
+          )}
+          {artifactGained !== null && (
+            <span style={{ color: "#aa66ff", marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <ArtifactIcon variant={artifactGained === "dice" ? "dice" : artifactGained === "shield" ? "shield" : artifactGained === "teleport" ? "magic" : artifactGained === "reveal" ? "reveal" : "healing"} size={20} />
+              +1 {artifactGained === "dice" ? "Dice" : artifactGained === "shield" ? "Shield" : artifactGained === "teleport" ? "Teleport" : artifactGained === "reveal" ? "Reveal" : "Healing"} (stored)!
             </span>
           )}
           {hiddenGemTeleport !== null && (
@@ -3693,7 +4860,7 @@ export default function LabyrinthGame() {
               <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 2, flexShrink: 0, maxWidth: 100 }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flexShrink: 0, maxWidth: AVATAR_PICKER_WRAP_MAX_W }}>
                       {PLAYER_AVATARS.map((av) => (
                         <button
                           key={av}
@@ -3706,15 +4873,18 @@ export default function LabyrinthGame() {
                             });
                           }}
                           style={{
-                            width: 22,
-                            height: 22,
+                            width: AVATAR_PICKER_BTN_PX,
+                            height: AVATAR_PICKER_BTN_PX,
                             padding: 0,
-                            fontSize: "0.75rem",
+                            fontSize: AVATAR_PICKER_FONT,
                             lineHeight: 1,
                             border: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}` : "1px solid #444",
-                            borderRadius: 4,
+                            borderRadius: 6,
                             background: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? "rgba(0,255,136,0.2)" : "#1a1a24",
                             cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
                           }}
                         >
                           {av}
@@ -3760,11 +4930,50 @@ export default function LabyrinthGame() {
         </div>
       )}
 
-      <div style={mazeAreaStyle}>
-        <div style={mazeZoomControlsStyle}>
-          <button onClick={() => setMazeZoom((z) => Math.max(0.5, z - 0.25))} style={mazeZoomButtonStyle} title="Zoom out">−</button>
-          <span style={{ fontSize: "0.8rem", color: "#888", minWidth: 36, textAlign: "center" }}>{Math.round(mazeZoom * 100)}%</span>
-          <button onClick={() => setMazeZoom((z) => Math.min(2, z + 0.25))} style={mazeZoomButtonStyle} title="Zoom in">+</button>
+      <div
+        style={{
+          ...mazeAreaStyle,
+          ...(isMobile
+            ? {
+                paddingBottom: `calc(${MAZE_MARGIN + mobileDockInsetPx + 10}px + env(safe-area-inset-bottom, 0px))`,
+              }
+            : {}),
+        }}
+      >
+        <div
+          style={{
+            ...mazeZoomControlsStyle,
+            ...(isMobile
+              ? {
+                  width: "100%",
+                  boxSizing: "border-box",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }
+              : {}),
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button onClick={() => setMazeZoom((z) => Math.max(0.5, z - 0.25))} style={mazeZoomButtonStyle} title="Zoom out">−</button>
+            <span style={{ fontSize: "0.8rem", color: "#888", minWidth: 36, textAlign: "center" }}>{Math.round(mazeZoom * 100)}%</span>
+            <button onClick={() => setMazeZoom((z) => Math.min(2, z + 0.25))} style={mazeZoomButtonStyle} title="Zoom in">+</button>
+          </div>
+          {isMobile && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                flexShrink: 0,
+                fontSize: "0.72rem",
+                color: "#c4c4d4",
+                lineHeight: 1.2,
+              }}
+            >
+              <span title="Moves remaining this turn">Moves {movesLeft}</span>
+              <span title="Jump charges">Jumps {cp?.jumps ?? 0}</span>
+            </div>
+          )}
         </div>
         <div
           className="maze-wrap"
@@ -3845,7 +5054,7 @@ export default function LabyrinthGame() {
                       ...markerStyle,
                       ...markerStretchStyle,
                       background: "transparent",
-                      fontSize: "1.25rem",
+                      fontSize: "1.55rem",
                       lineHeight: 1,
                       boxShadow: isActive ? `0 0 8px ${c}, 0 0 12px ${c}` : undefined,
                       border: isActive ? `2px solid ${c}` : "none",
@@ -3901,11 +5110,15 @@ export default function LabyrinthGame() {
                 const isFogged = (fogIntensityMap.get(`${x},${y}`) ?? 0) > 0;
                 const showArtifact = !isHidden && !isFogged;
                 if (showArtifact) {
-                  const art = cellType;
-                  const title = art === ARTIFACT_DICE ? "+1 dice" : art === ARTIFACT_SHIELD ? "Shield" : art === ARTIFACT_TELEPORT_CELL ? "Teleport" : art === ARTIFACT_HEALING ? "+1 HP" : "Reveal";
+                  const kind = storedArtifactKindFromCell(cellType);
+                  const title = kind ? `${STORED_ARTIFACT_LINE[kind]}. ${STORED_ARTIFACT_TOOLTIP[kind]}` : "Artifact";
                   content = (
                     <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={title}>
-                      {art === ARTIFACT_SHIELD ? <ArtifactIcon variant="shield" size={42} /> : art === ARTIFACT_TELEPORT_CELL ? <ArtifactIcon variant="magic" size={42} /> : art === ARTIFACT_DICE ? <ArtifactIcon variant="dice" size={42} /> : art === ARTIFACT_HEALING ? <ArtifactIcon variant="healing" size={42} /> : <ArtifactIcon variant="reveal" size={42} />}
+                      {kind ? (
+                        <ArtifactIcon variant={storedArtifactIconVariant(kind)} size={42} />
+                      ) : (
+                        <ArtifactIcon variant="artifact" size={42} />
+                      )}
                     </span>
                   );
                 }
@@ -4361,62 +5574,377 @@ export default function LabyrinthGame() {
         </div>
         </div>
 
-      {/* Left bottom: move controls */}
       <div
-        className="controls-panel move-controls"
+        ref={mobileDockRef}
+        className="controls-panel unified-bottom-dock"
         style={{
           ...controlsPanelStyle,
           position: "fixed",
-          left: 16,
-          bottom: 16,
+          left: "50%",
+          transform: "translateX(-50%)",
+          bottom: isMobile ? 10 : 16,
           zIndex: 99,
-          width: 120,
+          width: isMobile ? "calc(100vw - 16px)" : "min(432px, calc(100vw - 24px))",
+          maxWidth: 432,
+          boxSizing: "border-box",
         }}
       >
-        <div style={controlsSectionStyle}>
-          <div style={controlsSectionLabelStyle}>Move</div>
-          <div className="move-buttons" style={{ ...moveButtonsStyle, display: "grid", gridTemplateColumns: "repeat(3, 2.5rem)", gridTemplateRows: "repeat(3, 2.5rem)", gap: 2, alignSelf: "center" }}>
-            <button onClick={() => doMove(0, -1, false)} disabled={!canMoveUp} style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 1 }} title="Move up">↑</button>
-            <button onClick={() => doMove(-1, 0, false)} disabled={!canMoveLeft} style={{ ...moveButtonStyle, gridColumn: 1, gridRow: 2 }} title="Move left">←</button>
-            <button onClick={() => doMove(1, 0, false)} disabled={!canMoveRight} style={{ ...moveButtonStyle, gridColumn: 3, gridRow: 2 }} title="Move right">→</button>
-            <button onClick={() => doMove(0, 1, false)} disabled={!canMoveDown} style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 3 }} title="Move down">↓</button>
-        </div>
-        </div>
+        {!isMobile && !showMoveGrid && movesLeft > 0 && !combatState && winner === null && (
           <button
-            onClick={endTurn}
-            className="secondary"
+            type="button"
+            onClick={openMovePadDesktopWithTimer}
+            style={{
+              ...buttonStyle,
+              ...secondaryButtonStyle,
+              width: "100%",
+              marginBottom: 6,
+              fontSize: "0.8rem",
+              padding: "6px 10px",
+            }}
+            title="Show move pad (also opens with arrow keys or after you move)"
+          >
+            Moves ⌨
+          </button>
+        )}
+        {isMobile ? (
+          <div style={{ ...controlsSectionStyle, borderColor: "#554466", marginTop: 0 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                width: "100%",
+                marginBottom: mobileDockExpanded ? 2 : 0,
+              }}
+            >
+              <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff", flex: 1, textAlign: "left" }}>
+                {mobileDockExpanded ? "Move & items" : "Artifacts"}
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileDockExpanded((e) => !e)}
+                aria-expanded={mobileDockExpanded}
+                title={mobileDockExpanded ? "Collapse to artifact strip" : "Expand for moves, bomb & Use"}
+                style={{
+                  flexShrink: 0,
+                  minWidth: 40,
+                  minHeight: 36,
+                  padding: "4px 10px",
+                  fontSize: "0.75rem",
+                  fontWeight: 700,
+                  color: "#ccb8ff",
+                  background: "#25252f",
+                  border: "1px solid #554466",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                {mobileDockExpanded ? "▲" : "▼"}
+              </button>
+            </div>
+            {mobileDockExpanded ? (
+              <>
+                {showMoveGrid && (
+                  <div
+                    className="move-buttons"
+                    style={{ ...moveButtonsStyle, display: "grid", gridTemplateColumns: "repeat(3, 2.5rem)", gridTemplateRows: "repeat(3, 2.5rem)", gap: 2, alignSelf: "center", margin: "4px auto 0" }}
+                  >
+                    <button onClick={() => doMove(0, -1, false)} disabled={!canMoveUp} style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 1 }} title="Move up">
+                      ↑
+                    </button>
+                    <button onClick={() => doMove(-1, 0, false)} disabled={!canMoveLeft} style={{ ...moveButtonStyle, gridColumn: 1, gridRow: 2 }} title="Move left">
+                      ←
+                    </button>
+                    <button onClick={() => doMove(1, 0, false)} disabled={!canMoveRight} style={{ ...moveButtonStyle, gridColumn: 3, gridRow: 2 }} title="Move right">
+                      →
+                    </button>
+                    <button onClick={() => doMove(0, 1, false)} disabled={!canMoveDown} style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 3 }} title="Move down">
+                      ↓
+                    </button>
+                  </div>
+                )}
+                {dockActions.length > 0 ? (
+                  <>
+                    <div style={{ fontSize: "0.65rem", color: "#777", marginTop: showMoveGrid ? 8 : 4, marginBottom: 6, textAlign: "center" }}>Tap to select · then Use</div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "row",
+                        gap: 8,
+                        overflowX: "auto",
+                        paddingBottom: 4,
+                        marginBottom: 8,
+                        WebkitOverflowScrolling: "touch",
+                      }}
+                    >
+                      {dockActions.map(({ id, n }) => {
+                        const selected = mobileDockAction === id;
+                        const bomb = id === "bomb";
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => setMobileDockAction(id)}
+                            style={{
+                              flex: "0 0 auto",
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "8px 12px",
+                              borderRadius: 10,
+                              border: selected ? "2px solid #00ff88" : "1px solid #444",
+                              background: bomb ? "rgba(255,136,68,0.2)" : "rgba(42,42,53,0.95)",
+                              color: "#ddd",
+                              cursor: "pointer",
+                              minWidth: 72,
+                            }}
+                            title={bomb ? "Bomb" : STORED_ARTIFACT_TOOLTIP[id]}
+                          >
+                            <ArtifactIcon variant={bomb ? "bomb" : storedArtifactIconVariant(id)} size={26} />
+                            <span style={{ fontSize: "0.7rem", fontWeight: 700 }}>
+                              {bomb ? "Bomb" : STORED_ARTIFACT_TITLE[id]} ×{n}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={applyMobileDockSelection}
+                      disabled={mobileApplyDisabled}
+                      style={{
+                        ...buttonStyle,
+                        width: "100%",
+                        fontSize: "0.9rem",
+                        padding: "10px 12px",
+                        opacity: mobileApplyDisabled ? 0.45 : 1,
+                      }}
+                      title={
+                        mobileDockAction === "bomb"
+                          ? combatState
+                            ? "Explode 3×3 (combat)"
+                            : "Explode 3×3 (uses 1 move)"
+                          : mobileDockAction != null
+                            ? STORED_ARTIFACT_TOOLTIP[mobileDockAction]
+                            : "Select an item"
+                      }
+                    >
+                      Use{" "}
+                      {mobileDockAction === "bomb"
+                        ? "bomb"
+                        : mobileDockAction != null
+                          ? STORED_ARTIFACT_TITLE[mobileDockAction]
+                          : "…"}
+                    </button>
+                  </>
+                ) : (
+                  <div style={{ color: "#666", fontSize: "0.75rem", textAlign: "center", padding: showMoveGrid ? "8px 0 4px" : "6px 0" }}>No bombs or artifacts</div>
+                )}
+              </>
+            ) : (
+              <>
+                {(() => {
+                  const artifactStripActions = dockActions.filter(
+                    (a): a is { id: StoredArtifactKind; n: number } => a.id !== "bomb"
+                  );
+                  if (artifactStripActions.length > 0) {
+                    return (
+                      <>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "row",
+                            gap: 8,
+                            overflowX: "auto",
+                            paddingTop: 4,
+                            paddingBottom: 6,
+                            width: "100%",
+                            WebkitOverflowScrolling: "touch",
+                          }}
+                        >
+                          {artifactStripActions.map(({ id, n }) => {
+                            const selected = mobileDockAction === id;
+                            return (
+                              <button
+                                key={id}
+                                type="button"
+                                onClick={() => setMobileDockAction(id)}
+                                style={{
+                                  flex: "0 0 auto",
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  alignItems: "center",
+                                  gap: 4,
+                                  padding: "8px 12px",
+                                  borderRadius: 10,
+                                  border: selected ? "2px solid #00ff88" : "1px solid #444",
+                                  background: "rgba(42,42,53,0.95)",
+                                  color: "#ddd",
+                                  cursor: "pointer",
+                                  minWidth: 72,
+                                }}
+                                title={STORED_ARTIFACT_TOOLTIP[id]}
+                              >
+                                <ArtifactIcon variant={storedArtifactIconVariant(id)} size={26} />
+                                <span style={{ fontSize: "0.7rem", fontWeight: 700 }}>
+                                  {STORED_ARTIFACT_TITLE[id]} ×{n}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={applyMobileDockSelection}
+                          disabled={mobileApplyDisabled}
+                          style={{
+                            ...buttonStyle,
+                            width: "100%",
+                            fontSize: "0.85rem",
+                            padding: "8px 12px",
+                            opacity: mobileApplyDisabled ? 0.45 : 1,
+                          }}
+                          title={
+                            mobileDockAction != null && mobileDockAction !== "bomb"
+                              ? STORED_ARTIFACT_TOOLTIP[mobileDockAction]
+                              : "Select an artifact"
+                          }
+                        >
+                          Use{" "}
+                          {mobileDockAction != null && mobileDockAction !== "bomb"
+                            ? STORED_ARTIFACT_TITLE[mobileDockAction]
+                            : "…"}
+                        </button>
+                      </>
+                    );
+                  }
+                  return (
+                    <div style={{ color: "#666", fontSize: "0.75rem", textAlign: "center", padding: "8px 4px 4px", lineHeight: 1.35 }}>
+                      No artifacts here — tap ▼ to open moves, bomb &amp; full list.
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+        ) : (
+          <>
+            {showMoveGrid && (
+              <div style={{ ...controlsSectionStyle, marginTop: 0 }}>
+                <div style={controlsSectionLabelStyle}>Move</div>
+                <div
+                  className="move-buttons"
+                  style={{ ...moveButtonsStyle, display: "grid", gridTemplateColumns: "repeat(3, 2.5rem)", gridTemplateRows: "repeat(3, 2.5rem)", gap: 2, alignSelf: "center", margin: "0 auto" }}
+                >
+                  <button onClick={() => doMove(0, -1, false)} disabled={!canMoveUp} style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 1 }} title="Move up">
+                    ↑
+                  </button>
+                  <button onClick={() => doMove(-1, 0, false)} disabled={!canMoveLeft} style={{ ...moveButtonStyle, gridColumn: 1, gridRow: 2 }} title="Move left">
+                    ←
+                  </button>
+                  <button onClick={() => doMove(1, 0, false)} disabled={!canMoveRight} style={{ ...moveButtonStyle, gridColumn: 3, gridRow: 2 }} title="Move right">
+                    →
+                  </button>
+                  <button onClick={() => doMove(0, 1, false)} disabled={!canMoveDown} style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 3 }} title="Move down">
+                    ↓
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div style={{ ...controlsSectionStyle, borderColor: "#554466", marginTop: showMoveGrid ? 6 : 0 }}>
+              <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff" }}>Bomb &amp; artifacts</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {(cp?.bombs ?? 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={handleUseBomb}
+                  disabled={bombUseDisabled}
+                  style={{
+                    ...buttonStyle,
+                    padding: "4px 8px",
+                    fontSize: "0.8rem",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "flex-start",
+                    gap: 6,
+                    width: "100%",
+                    background: "#ff8844",
+                    color: "#fff",
+                    opacity: bombUseDisabled ? 0.45 : 1,
+                  }}
+                  title={combatState ? "Explode 3×3 to clear monster (no move cost)" : "Explode 3×3 area (uses 1 move)"}
+                >
+                  <ArtifactIcon variant="bomb" size={14} />
+                  <span style={{ flex: 1, textAlign: "left" }}>
+                    Bomb: {cp?.bombs ?? 0}
+                  </span>
+                </button>
+              )}
+              {STORED_ARTIFACT_ORDER.map((kind) => {
+                const n = storedArtifactCount(cp, kind);
+                if (n <= 0) return null;
+                const accent = STORED_ARTIFACT_BUTTON_STYLE[kind];
+                const mapOnlyLocked = inCombatDock && isStoredArtifactMapOnly(kind);
+                const healFull = kind === "healing" && (cp?.hp ?? DEFAULT_PLAYER_HP) >= DEFAULT_PLAYER_HP;
+                const cantReveal = kind === "reveal" && peekRevealBatchSize(lab, totalDiamondsDock) <= 0;
+                const disabled = !cp || mapOnlyLocked || healFull || cantReveal;
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleUseArtifact(kind)}
+                    disabled={disabled}
+                    style={{
+                      ...buttonStyle,
+                      padding: "4px 8px",
+                      fontSize: "0.8rem",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "flex-start",
+                      gap: 6,
+                      width: "100%",
+                      background: accent.background,
+                      color: accent.color,
+                      opacity: disabled ? 0.45 : 1,
+                    }}
+                    title={
+                      mapOnlyLocked
+                        ? `${STORED_ARTIFACT_TOOLTIP[kind]} (not during combat)`
+                        : healFull
+                          ? "Already at full HP"
+                          : cantReveal
+                            ? "Nothing hidden to reveal right now"
+                            : STORED_ARTIFACT_TOOLTIP[kind]
+                    }
+                  >
+                    <ArtifactIcon variant={storedArtifactIconVariant(kind)} size={14} />
+                    <span style={{ flex: 1, textAlign: "left" }}>
+                      {STORED_ARTIFACT_TITLE[kind]}: {n}
+                    </span>
+                  </button>
+                );
+              })}
+              {(cp?.bombs ?? 0) <= 0 && !STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(cp, k) > 0) && (
+                <div style={{ color: "#666", fontSize: "0.75rem" }}>None</div>
+              )}
+              </div>
+            </div>
+          </>
+        )}
+
+        <button
+          onClick={endTurn}
+          className="secondary"
           disabled={winner !== null || !!catapultPicker || !!teleportPicker}
           style={{ ...buttonStyle, ...secondaryButtonStyle, marginTop: 8, width: "100%" }}
-          >
-            End turn
-          </button>
-        </div>
-
-      {/* Right bottom: bomb + artifacts */}
-        <div
-        className="controls-panel artifact-controls"
-          style={{
-          ...controlsPanelStyle,
-          position: "fixed",
-          right: 16,
-          bottom: 16,
-          zIndex: 99,
-          width: 120,
-        }}
-      >
-        <div style={{ ...controlsSectionStyle, borderColor: "#ff8844", background: (cp?.bombs ?? 0) > 0 ? "#2e1e1e22" : undefined }}>
-          <div style={{ ...controlsSectionLabelStyle, color: "#ff8844" }}>Bomb {(cp?.bombs ?? 0) > 0 && `×${cp?.bombs ?? 0}`}</div>
-          <button
-            onClick={handleUseBomb}
-            disabled={!cp || (cp?.bombs ?? 0) <= 0 || (moveDisabled && !combatState)}
-            style={{ ...buttonStyle, width: "100%", background: (cp?.bombs ?? 0) > 0 ? "#ff8844" : "#444", color: "#fff" }}
-            title={combatState ? "Explode 3×3 to clear monster (no move cost)" : "Explode 3×3 area (uses 1 move)"}
-          >
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="bomb" size={18} /> Use Bomb</span>
-          </button>
-        </div>
+        >
+          End turn
+        </button>
         {error && <div className="error" style={errorStyle}>{error}</div>}
-        </div>
+      </div>
         </div>
         </div>
 
@@ -4428,14 +5956,77 @@ export default function LabyrinthGame() {
         lab &&
         movesLeft <= 0 &&
         diceResult === null && (
-          <div style={{ ...modalOverlayStyle, zIndex: DICE_MODAL_Z }}>
-            <div style={{ ...controlsPanelStyle, padding: "1.5rem", minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
-              <h3 style={{ margin: "0 0 1rem 0", color: "#00ff88", fontSize: "1.2rem" }}>
+          <div style={{ ...modalOverlayStyle, zIndex: DICE_MODAL_Z }} onClick={(e) => e.stopPropagation()}>
+            <div style={movementDiceModalPanelStyle} onClick={(e) => e.stopPropagation()}>
+              <h3
+                style={{
+                  margin: "0 0 0.35rem 0",
+                  color: "#00ff88",
+                  fontSize: "clamp(1.2rem, 3.2vw, 1.75rem)",
+                  fontWeight: 800,
+                  textAlign: "center",
+                  letterSpacing: "0.02em",
+                }}
+              >
                 {playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`} — Roll for moves
               </h3>
-              <div onClick={() => !rolling && diceRef.current?.roll()} style={{ cursor: rolling ? "default" : "pointer" }}>
-                <Dice3D ref={diceRef} onRollComplete={handleMovementRollComplete} disabled={rolling} />
-        </div>
+              <p style={{ margin: "0 0 1.25rem 0", color: "#8a8a9a", fontSize: "0.92rem", textAlign: "center", lineHeight: 1.4 }}>
+                Click the 3D dice area or use the button below
+              </p>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => !rolling && diceRef.current?.roll()}
+                onKeyDown={(e) => {
+                  if ((e.key === "Enter" || e.key === " ") && !rolling) {
+                    e.preventDefault();
+                    diceRef.current?.roll();
+                  }
+                }}
+                style={{
+                  cursor: rolling ? "default" : "pointer",
+                  width: "100%",
+                  height: `clamp(${MOVEMENT_DICE_VIEWPORT_MIN_H}px, 38vh, ${MOVEMENT_DICE_VIEWPORT_MAX_H}px)`,
+                  minHeight: MOVEMENT_DICE_VIEWPORT_MIN_H,
+                  maxHeight: MOVEMENT_DICE_VIEWPORT_MAX_H,
+                  borderRadius: 14,
+                  overflow: "hidden",
+                  border: "2px solid rgba(255, 204, 0, 0.35)",
+                  boxSizing: "border-box",
+                  background: "#0a0a0f",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                  <Dice3D
+                    ref={diceRef}
+                    onRollComplete={handleMovementRollComplete}
+                    disabled={rolling}
+                    fitContainer
+                    hideHint
+                  />
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !rolling && diceRef.current?.roll()}
+                disabled={rolling}
+                style={{
+                  ...buttonStyle,
+                  alignSelf: "center",
+                  marginTop: 20,
+                  padding: "14px 40px",
+                  fontSize: "1.08rem",
+                  fontWeight: 800,
+                  minWidth: 220,
+                  borderRadius: 10,
+                  border: "2px solid #00cc66",
+                  boxShadow: "0 0 24px rgba(0,255,136,0.35)",
+                }}
+              >
+                {rolling ? "Rolling…" : "Roll dice"}
+              </button>
             </div>
           </div>
         )}
@@ -4459,7 +6050,7 @@ export default function LabyrinthGame() {
                   <span style={{ marginLeft: 8, color: "#aaa", fontSize: "0.9rem" }}>
                     Turns: {playerTurns[i] ?? 0} · Moves: {playerMoves[i] ?? 0} · 💎 {p?.diamonds ?? 0}
                   </span>
-      </div>
+                </div>
               ))}
             </div>
             <button onClick={newGame} style={gameOverRestartButtonStyle}>
@@ -4665,31 +6256,38 @@ const startModalOverlayStyle: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   zIndex: 1000,
+  padding:
+    "max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px))",
+  boxSizing: "border-box",
+  overflow: "auto",
 };
 
 const startModalStyle: React.CSSProperties = {
   background: "#1a1a24",
-  padding: "2rem",
-  borderRadius: 12,
+  padding: "2.5rem 2.75rem",
+  borderRadius: 14,
   border: "1px solid #333",
   boxShadow: "0 0 40px rgba(0,255,136,0.15)",
-  minWidth: 320,
-  maxWidth: 420,
+  minWidth: 0,
+  maxWidth: 620,
+  width: "min(calc(100vw - 24px), 620px)",
+  boxSizing: "border-box",
+  margin: "0 auto",
 };
 
 const startModalTitleStyle: React.CSSProperties = {
-  margin: "0 0 0.25rem 0",
+  margin: "0 0 0.35rem 0",
   color: "#00ff88",
-  fontSize: "1.8rem",
+  fontSize: "2.1rem",
   fontWeight: "bold",
   textAlign: "center",
   letterSpacing: 4,
 };
 
 const startModalSubtitleStyle: React.CSSProperties = {
-  margin: "0 0 1.5rem 0",
+  margin: "0 0 1.75rem 0",
   color: "#888",
-  fontSize: "0.9rem",
+  fontSize: "1rem",
   textAlign: "center",
 };
 
@@ -4699,12 +6297,20 @@ const startModalFormStyle: React.CSSProperties = {
 
 const startModalLabelStyle: React.CSSProperties = {
   color: "#aaa",
-  fontSize: "0.85rem",
-  minWidth: 120,
+  fontSize: "0.92rem",
+  minWidth: 140,
+};
+
+const startModalLabelStyleMobile: React.CSSProperties = {
+  color: "#aaa",
+  fontSize: "0.88rem",
+  minWidth: 0,
+  width: "100%",
 };
 
 const startModalSelectStyle: React.CSSProperties = {
-  padding: "0.4rem 0.6rem",
+  padding: "0.5rem 0.75rem",
+  fontSize: "0.95rem",
   fontFamily: "inherit",
   background: "#2a2a35",
   border: "1px solid #444",
@@ -4714,13 +6320,14 @@ const startModalSelectStyle: React.CSSProperties = {
 };
 
 const startModalInputStyle: React.CSSProperties = {
-  padding: "0.4rem 0.6rem",
+  padding: "0.5rem 0.75rem",
+  fontSize: "0.95rem",
   fontFamily: "inherit",
   background: "#2a2a35",
   border: "1px solid #444",
   color: "#c0c0c0",
   borderRadius: 6,
-  width: "4rem",
+  width: "4.5rem",
 };
 
 const startModalButtonsStyle: React.CSSProperties = {
@@ -4766,44 +6373,75 @@ const combatModalOverlayStyle: React.CSSProperties = {
   ...modalOverlayStyle,
   background: "rgba(0,0,0,0.85)",
   zIndex: 1220,
+  paddingLeft: "max(8px, env(safe-area-inset-left, 0px))",
+  paddingRight: "max(8px, env(safe-area-inset-right, 0px))",
+  paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
+  paddingBottom: "max(8px, env(safe-area-inset-bottom, 0px))",
+  boxSizing: "border-box",
 };
 
 /** Movement roll overlay — below combat, above maze/main content */
 const DICE_MODAL_Z = 1180;
+/** Large movement dice modal — wide panel + tall 3D viewport */
+const MOVEMENT_DICE_MODAL_MIN_W = 520;
+const MOVEMENT_DICE_MODAL_MAX_W = 720;
+const MOVEMENT_DICE_VIEWPORT_MIN_H = 260;
+const MOVEMENT_DICE_VIEWPORT_MAX_H = 420;
+
+const movementDiceModalPanelStyle: React.CSSProperties = {
+  background: "linear-gradient(180deg, #1e1e2a 0%, #14141c 100%)",
+  padding: "2rem clamp(1.25rem, 4vw, 2.75rem)",
+  borderRadius: 16,
+  border: "2px solid rgba(0, 255, 136, 0.35)",
+  boxShadow: "0 0 48px rgba(0,255,136,0.18), 0 20px 60px rgba(0,0,0,0.55)",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "stretch",
+  width: `min(96vw, ${MOVEMENT_DICE_MODAL_MAX_W}px)`,
+  minWidth: `min(94vw, ${MOVEMENT_DICE_MODAL_MIN_W}px)`,
+  maxWidth: MOVEMENT_DICE_MODAL_MAX_W,
+  boxSizing: "border-box",
+};
 
 const combatModalStyle: React.CSSProperties = {
   background: "linear-gradient(180deg, #1e1e2a 0%, #16161e 100%)",
-  padding: "1.25rem 1.5rem 1rem",
+  padding: "0.5rem clamp(0.45rem, 2.5vw, 0.75rem) 0.4rem",
   borderRadius: 16,
   border: "3px solid #ffcc00",
   boxShadow: "0 0 60px rgba(255,204,0,0.4), inset 0 0 40px rgba(0,0,0,0.3)",
-  width: 600,
-  maxWidth: "96vw",
+  width: `min(${COMBAT_MODAL_WIDTH}px, calc(100vw - 16px))`,
+  minWidth: 0,
+  maxWidth: "100%",
+  height: COMBAT_MODAL_HEIGHT,
+  maxHeight: "94vh",
   overflowX: "hidden",
-  overflowY: "visible",
+  overflowY: "auto",
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
+  boxSizing: "border-box",
 };
 
 const combatModalTitleStyle: React.CSSProperties = {
-  margin: "0 0 0.35rem 0",
+  margin: "0 0 0.1rem 0",
   color: "#ffcc00",
-  fontSize: "1.25rem",
+  fontSize: "1.05rem",
   fontWeight: "bold",
   textAlign: "center",
   flexShrink: 0,
   width: "100%",
 };
 
-/** Face-off: 3-column grid — winner/defeated one row, avatars + HP aligned */
+/** Face-off grid — HP directly under portraits; smaller sprite row saves vertical space */
 const combatModalVersusGridStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) 36px minmax(0, 1fr)",
-  alignItems: "center",
-  columnGap: 8,
-  rowGap: 6,
-  marginTop: 6,
+  gridTemplateColumns: "minmax(0, 1fr) 28px minmax(0, 1fr)",
+  gridTemplateRows: "minmax(24px, auto) 220px auto minmax(12px, auto) auto auto",
+  alignItems: "stretch",
+  alignContent: "start",
+  columnGap: 6,
+  rowGap: 0,
+  marginTop: 0,
   width: "100%",
   maxWidth: 480,
   marginLeft: "auto",
@@ -4833,6 +6471,7 @@ const combatRollSectionStyle: React.CSSProperties = {
   maxWidth: "100%",
   boxSizing: "border-box",
   padding: "0 2px",
+  gap: 4,
 };
 
 const combatResultSectionStyle: React.CSSProperties = {
@@ -4840,45 +6479,50 @@ const combatResultSectionStyle: React.CSSProperties = {
   flexDirection: "column",
   alignItems: "center",
   width: "100%",
-  gap: 12,
+  gap: 8,
 };
 
 const combatResultBannerStyle: React.CSSProperties = {
-  padding: "1.2rem 1.8rem",
-  borderRadius: 10,
+  padding: "0.5rem 1rem",
+  borderRadius: 8,
   border: "2px solid",
-  fontSize: "1.25rem",
+  fontSize: "0.95rem",
 };
 
-/** Win-only bonus loot picker: separate panel so it never collapses inside the banner */
+/** Win-only bonus loot picker — compact carousel */
 const combatBonusLootPanelStyle: React.CSSProperties = {
   width: "100%",
-  maxWidth: 340,
+  maxWidth: 320,
   flexShrink: 0,
-  marginTop: 14,
-  marginBottom: 14,
-  padding: "12px 14px 14px",
-  borderRadius: 4,
+  marginTop: 2,
+  marginBottom: 2,
+  padding: "8px 10px 10px",
+  borderRadius: 8,
   border: "1px solid #00ff8866",
   background: "linear-gradient(180deg, rgba(0,40,30,0.55) 0%, rgba(10,25,20,0.9) 100%)",
   boxShadow: "0 0 12px rgba(0,255,136,0.12), inset 0 1px 0 rgba(255,255,255,0.04)",
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "flex-start",
+  gap: 6,
 };
 
 const combatBonusLootTitleStyle: React.CSSProperties = {
   color: "#00ffcc",
   fontWeight: "bold",
   textAlign: "center",
-  fontSize: "0.8rem",
-  marginBottom: 8,
-  letterSpacing: "0.03em",
+  fontSize: "0.76rem",
+  marginBottom: 0,
+  letterSpacing: "0.04em",
 };
 
 /** Tiny dice breakdown pinned to bottom of combat modal */
 const combatModalFooterDiceStyle: React.CSSProperties = {
   width: "100%",
   flexShrink: 0,
-  marginTop: "auto",
-  paddingTop: 10,
+  paddingTop: 6,
+  marginTop: 0,
   borderTop: "1px solid #333",
   fontSize: "0.72rem",
   color: "#888",
@@ -4948,7 +6592,8 @@ const mazeZoomControlsStyle: React.CSSProperties = {
   position: "sticky",
   top: 0,
   left: 0,
-  zIndex: 5,
+  /** Above per-cell fog (50), fog overlay (40), catapult preview (≤15), and bottom dock (99) while scrolling the maze. */
+  zIndex: 200,
   display: "flex",
   alignItems: "center",
   gap: 4,
@@ -5037,8 +6682,8 @@ const cellStyle: React.CSSProperties = {
 };
 
 const markerStyle: React.CSSProperties = {
-  width: 24,
-  height: 24,
+  width: 34,
+  height: 34,
   borderRadius: "50%",
   margin: "auto",
   opacity: 1,

@@ -47,8 +47,8 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
     useImperativeHandle(
       ref,
       () => ({
+        /** Always runs the roll — parent gates via button state. `disabled` is visual/pointer-events only; deferring roll (e.g. mobile rAF after setRolling) would otherwise see disabled=true and skip onRollComplete. */
         roll: async () => {
-          if (disabled) return 0;
           const box = diceBoxRef.current;
           if (!box) {
             const fallback = Math.floor(Math.random() * 6) + 1;
@@ -68,7 +68,7 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
           }
         },
       }),
-      [onRollComplete, disabled]
+      [onRollComplete]
     );
 
     useEffect(() => {
@@ -147,6 +147,7 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
           minWidth: 0,
           height: "100%",
           minHeight: 0,
+          flex: 1,
           display: "flex",
           flexDirection: "column",
         }
@@ -155,7 +156,7 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
     const containerStyle: CSSProperties = {
       width: "100%",
       minWidth: 0,
-      borderRadius: 12,
+      borderRadius: 10,
       overflow: "hidden",
       background: "#0d0d12",
       pointerEvents: disabled ? "none" : "auto",
