@@ -2814,19 +2814,24 @@ export default function LabyrinthGame() {
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
-                        minHeight: pendingCombatBonusPick && !combatState ? 22 : 0,
+                        minHeight: pendingCombatBonusPick && !combatState ? 34 : 0,
                         textAlign: "center",
                       }}
                     >
                       {pendingCombatBonusPick && !combatState ? (
                         <span
                           style={{
-                            fontSize: "0.65rem",
+                            fontSize: "0.78rem",
                             fontWeight: 800,
-                            color: "#00ff88",
-                            letterSpacing: "0.1em",
+                            color: "#b8ffd9",
+                            letterSpacing: "0.12em",
                             textTransform: "uppercase",
                             lineHeight: 1.2,
+                            padding: "5px 12px",
+                            borderRadius: 8,
+                            background: "linear-gradient(180deg, rgba(0,90,55,0.55) 0%, rgba(0,45,30,0.85) 100%)",
+                            border: "1px solid rgba(0, 255, 160, 0.55)",
+                            boxShadow: "0 0 14px rgba(0, 255, 136, 0.25), inset 0 1px 0 rgba(255,255,255,0.08)",
                           }}
                         >
                           🏆 Winner
@@ -2839,20 +2844,25 @@ export default function LabyrinthGame() {
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
-                        minHeight: pendingCombatBonusPick && !combatState ? 22 : 0,
+                        minHeight: pendingCombatBonusPick && !combatState ? 34 : 0,
                         textAlign: "center",
                       }}
                     >
                       {pendingCombatBonusPick && !combatState ? (
                         <span
                           style={{
-                            fontSize: "0.65rem",
+                            fontSize: "0.78rem",
                             fontWeight: 800,
-                            color: "#ff5555",
-                            letterSpacing: "0.1em",
+                            color: "#ffe8e8",
+                            letterSpacing: "0.14em",
                             textTransform: "uppercase",
                             lineHeight: 1.2,
-                            textShadow: "0 0 10px rgba(255, 60, 60, 0.35)",
+                            padding: "5px 12px",
+                            borderRadius: 8,
+                            background: "linear-gradient(180deg, rgba(120,25,25,0.65) 0%, rgba(55,10,12,0.92) 100%)",
+                            border: "1px solid rgba(255, 120, 120, 0.65)",
+                            textShadow: "0 0 12px rgba(255, 80, 80, 0.55), 0 1px 2px rgba(0,0,0,0.8)",
+                            boxShadow: "0 0 16px rgba(255, 60, 60, 0.35), inset 0 1px 0 rgba(255,255,255,0.06)",
                           }}
                         >
                           Defeated
@@ -2877,10 +2887,6 @@ export default function LabyrinthGame() {
                           justifyContent: "center",
                           width: COMBAT_PLAYER_AVATAR_PX,
                           height: COMBAT_PLAYER_AVATAR_PX,
-                          borderRadius: "50%",
-                          border: `2px solid ${PLAYER_COLORS[headerPi] ?? "#00ff88"}`,
-                          background: "rgba(0,0,0,0.4)",
-                          boxShadow: `0 0 12px ${PLAYER_COLORS[headerPi] ?? "#00ff88"}33`,
                           transform: `scale(${playerCombatRollScale})`,
                           transformOrigin: "50% 50%",
                           transition: "transform 0.35s cubic-bezier(0.34, 1.45, 0.64, 1)",
@@ -2889,20 +2895,7 @@ export default function LabyrinthGame() {
                         {playerAvatars[headerPi] ?? PLAYER_AVATARS[headerPi % PLAYER_AVATARS.length]}
                       </span>
                     </div>
-                    <span
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        minHeight: combatFaceoffRowMinH,
-                        fontSize: "1.75rem",
-                        lineHeight: 1,
-                        filter: "drop-shadow(0 0 8px rgba(255,200,100,0.35))",
-                      }}
-                      aria-hidden
-                    >
-                      ⚔️
-                    </span>
+                    <div aria-hidden style={{ minWidth: 36 }} />
                     <div
                       style={{
                         display: "flex",
@@ -2980,10 +2973,31 @@ export default function LabyrinthGame() {
                     <div
                       style={{
                         gridColumn: "1 / -1",
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "center",
+                        padding: "4px 0 8px",
+                      }}
+                      aria-hidden
+                    >
+                      <span
+                        style={{
+                          fontSize: "1.5rem",
+                          lineHeight: 1,
+                          filter: "drop-shadow(0 0 8px rgba(255,200,100,0.35))",
+                        }}
+                      >
+                        ⚔️
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        gridColumn: "1 / -1",
                         display: "grid",
                         gridTemplateColumns: "1fr 1fr",
                         gap: "10px 14px",
-                        marginTop: 4,
+                        marginTop: 0,
                         width: "100%",
                         alignItems: "start",
                       }}
@@ -3160,7 +3174,7 @@ export default function LabyrinthGame() {
                   const idx = Math.max(0, Math.min(bonusLootSelectedIndex, n - 1));
                   const current = opts[idx];
                   return (
-                    <div style={{ ...combatBonusLootPanelStyle, marginTop: 0 }}>
+                    <div style={combatBonusLootPanelStyle}>
                       <div style={combatBonusLootTitleStyle}>Bonus loot — pick one</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", justifyContent: "center" }}>
                         <button
@@ -3338,53 +3352,54 @@ export default function LabyrinthGame() {
                 >
                   💡 {getMonsterHint(combatState.monsterType, lab?.monsters[combatState.monsterIndex]?.hasShield)}
                 </div>
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                    width: "100%",
-                    maxWidth: 420,
-                    marginBottom: 10,
-                    padding: "8px 10px",
-                    background: "rgba(0,0,0,0.4)",
-                    borderRadius: 8,
-                    border: "1px solid #333",
-                    boxSizing: "border-box",
-                  }}
-                >
-                  <div style={{ color: "#ffcc00", fontSize: "0.85rem", fontWeight: "bold", marginBottom: 4 }}>Skills & Artifacts</div>
-                  {lab && (lab.players[combatState.playerIndex]?.artifactsCollected?.length ?? 0) > 0 && (
-                    <div style={{ color: "#666", fontSize: "0.75rem", lineHeight: 1.35, marginBottom: 2 }}>
-                      Collected artifacts: see the <strong style={{ color: "#888" }}>Players</strong> sidebar.
-                    </div>
-                  )}
-                  {lab && (lab.players[combatState.playerIndex]?.shield ?? 0) > 0 && (
-                    <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", color: "#ccc", fontSize: "0.95rem" }}>
-                      <input
-                        type="checkbox"
-                        checked={combatUseShield}
-                        onChange={(e) => setCombatUseShield(e.target.checked)}
-                        style={{ width: 20, height: 20, accentColor: "#44ff88" }}
-                      />
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="shield" size={18} /> Shield — block damage if I lose</span>
-                    </label>
-                  )}
-                  {lab && (lab.players[combatState.playerIndex]?.diceBonus ?? 0) > 0 && (
-                    <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", color: "#ccc", fontSize: "0.95rem" }}>
-                      <input
-                        type="checkbox"
-                        checked={combatUseDiceBonus}
-                        onChange={(e) => setCombatUseDiceBonus(e.target.checked)}
-                        style={{ width: 20, height: 20, accentColor: "#ffcc00" }}
-                      />
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="dice" size={18} /> Power — +1 to attack roll</span>
-                    </label>
-                  )}
-                  {lab && (lab.players[combatState.playerIndex]?.shield ?? 0) <= 0 && (lab.players[combatState.playerIndex]?.diceBonus ?? 0) <= 0 && (
-                    <span style={{ color: "#666", fontSize: "0.85rem" }}>No shield or power dice for this roll.</span>
-                  )}
-                </div>
+                {lab &&
+                  ((lab.players[combatState.playerIndex]?.shield ?? 0) > 0 ||
+                    (lab.players[combatState.playerIndex]?.diceBonus ?? 0) > 0) && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      width: "100%",
+                      maxWidth: 420,
+                      marginBottom: 10,
+                      padding: "8px 10px",
+                      background: "rgba(0,0,0,0.4)",
+                      borderRadius: 8,
+                      border: "1px solid #333",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <div style={{ color: "#ffcc00", fontSize: "0.85rem", fontWeight: "bold", marginBottom: 4 }}>Skills & Artifacts</div>
+                    {(lab.players[combatState.playerIndex]?.artifactsCollected?.length ?? 0) > 0 && (
+                      <div style={{ color: "#666", fontSize: "0.75rem", lineHeight: 1.35, marginBottom: 2 }}>
+                        Collected artifacts: see the <strong style={{ color: "#888" }}>Players</strong> sidebar.
+                      </div>
+                    )}
+                    {(lab.players[combatState.playerIndex]?.shield ?? 0) > 0 && (
+                      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", color: "#ccc", fontSize: "0.95rem" }}>
+                        <input
+                          type="checkbox"
+                          checked={combatUseShield}
+                          onChange={(e) => setCombatUseShield(e.target.checked)}
+                          style={{ width: 20, height: 20, accentColor: "#44ff88" }}
+                        />
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="shield" size={18} /> Shield — block damage if I lose</span>
+                      </label>
+                    )}
+                    {(lab.players[combatState.playerIndex]?.diceBonus ?? 0) > 0 && (
+                      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", color: "#ccc", fontSize: "0.95rem" }}>
+                        <input
+                          type="checkbox"
+                          checked={combatUseDiceBonus}
+                          onChange={(e) => setCombatUseDiceBonus(e.target.checked)}
+                          style={{ width: 20, height: 20, accentColor: "#ffcc00" }}
+                        />
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ArtifactIcon variant="dice" size={18} /> Power — +1 to attack roll</span>
+                      </label>
+                    )}
+                  </div>
+                )}
                 </>
                 )}
                 <div
@@ -3457,6 +3472,7 @@ export default function LabyrinthGame() {
                       alignItems: "stretch",
                       gap: 6,
                       marginTop: 8,
+                      marginBottom: 14,
                       width: "100%",
                     }}
                   >
@@ -4839,7 +4855,8 @@ const combatBonusLootPanelStyle: React.CSSProperties = {
   width: "100%",
   maxWidth: 340,
   flexShrink: 0,
-  marginTop: 2,
+  marginTop: 14,
+  marginBottom: 14,
   padding: "12px 14px 14px",
   borderRadius: 4,
   border: "1px solid #00ff8866",
