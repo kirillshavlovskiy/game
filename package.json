@@ -6,7 +6,7 @@
     "dev": "node node_modules/next/dist/bin/next dev",
     "validate-scenarios": "npx tsx scripts/validate-scenarios.ts",
     "build": "next build",
-    "build:itch": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\" && ITCH_EXPORT=1 next build",
+    "build:itch": "node -e \"const fs=require('fs');for (const p of ['.next','node_modules/.cache']) { try { fs.rmSync(p,{recursive:true,force:true}); } catch (_) {} }\" && ITCH_EXPORT=1 next build",
     "package:itch": "bash scripts/package-itch.sh",
     "package:crazygames": "bash scripts/package-crazygames.sh",
     "clean": "rm -rf .next node_modules package-lock.json && npm install",

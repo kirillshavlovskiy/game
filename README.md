@@ -51,3 +51,5 @@ npm run package:crazygames
 This runs a static export (`ITCH_EXPORT=1`) and writes `dist/creep-labyrinth-crazygames.zip`. Upload that file in the [CrazyGames developer portal](https://developer.crazygames.com/) as an HTML5 game.
 
 The static build has no server-side API; “Generate with AI” uses the same fallback as other offline builds unless you host your own API. See `.env.example` for notes.
+
+If `next build` fails with `Cannot find module for page: /_document` during `package:crazygames`, run a clean static build: `npm run build:itch` already removes `.next` and `node_modules/.cache`. Retry; if it persists, run `rm -rf .next node_modules/.cache` and `npm install`, then `npm run package:crazygames` again. Do not add a partial `pages/` folder (e.g. only `_app`) without the full Pages Router shell files.
