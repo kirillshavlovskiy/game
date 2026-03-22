@@ -169,8 +169,8 @@ const COMBAT_MODAL_WIDTH = 600;
 /** Wider combat panel in phone landscape so dice + portraits fit in one row. */
 const COMBAT_MODAL_WIDTH_LANDSCAPE_PX = 720;
 /** Landscape face-off: smaller sprites + dice so skills/hints fit without scrolling. */
-const COMBAT_LANDSCAPE_SPRITE_PX = 88;
-const COMBAT_LANDSCAPE_CENTER_DICE_MAX_H = 96;
+const COMBAT_LANDSCAPE_SPRITE_PX = 104;
+const COMBAT_LANDSCAPE_CENTER_DICE_MAX_H = 108;
 const COMBAT_LANDSCAPE_HINT_STRIP_PX = 34;
 /** Combat modal uses maxHeight only so it fits viewport; no fixed height. */
 /** Bonus loot carousel — icon fits inside a fixed slot so the pick button does not resize per asset */
@@ -4113,6 +4113,8 @@ export default function LabyrinthGame() {
   const combatLandscapePostFight = isLandscapeCompact && combatResult !== null;
   const showCombatLandscapeVersus =
     isLandscapeCompact && (combatState !== null || combatResult !== null);
+  /** Landscape phone: overlay covers the app header (~64px) and stacks above it for extra vertical room. */
+  const combatOverlayFullBleedLandscape = isLandscapeCompact && isMobile && combatOverlayVisible;
 
   const renderCombatOutcome = () => {
     if (!combatResult) return null;
@@ -4836,7 +4838,10 @@ export default function LabyrinthGame() {
         <div
             style={{
             ...combatModalOverlayStyle,
-            top: HEADER_HEIGHT,
+            top: combatOverlayFullBleedLandscape ? 0 : HEADER_HEIGHT,
+            ...(combatOverlayFullBleedLandscape
+              ? { zIndex: HEADER_Z_INDEX + 20 }
+              : {}),
             ...(isMobile
               ? { paddingTop: "max(12px, env(safe-area-inset-top, 0px))" }
               : { paddingTop: "max(8px, env(safe-area-inset-top, 0px))" }),
@@ -4847,7 +4852,9 @@ export default function LabyrinthGame() {
         <div
           style={{
               ...combatModalStyle,
-              maxHeight: `calc(100dvh - ${HEADER_HEIGHT}px - 24px)`,
+              maxHeight: combatOverlayFullBleedLandscape
+                ? "calc(100dvh - 24px)"
+                : `calc(100dvh - ${HEADER_HEIGHT}px - 24px)`,
               overflowY: combatLandscapePostFight ? "hidden" : "auto",
               WebkitOverflowScrolling: "touch",
               ...(isLandscapeCompact
@@ -4923,12 +4930,13 @@ export default function LabyrinthGame() {
               const monsterRollScaryGlow =
                 !!combatState && rolling && !!headerMt && !combatResult && (combatMonsterStance === "angry" || combatMonsterStance === "attack");
               const showCombatHintText =
-                !!combatToast || (!rolling && !!(combatFooterSnapshot || lab));
+                !!combatToast ||
+                (!rolling && !!(combatFooterSnapshot || (lab && combatState)));
               /** After combat loss (any monster): skull in the player slot instead of emoji avatar. */
               const showCombatDefeatSkull = !!combatResult?.playerDefeated && !combatState;
               /** Mobile column is narrow: bias framing left so wide sprites (e.g. Dracula) read centered in the modal. */
               const combatMonsterImgObjectPosition = isMobile ? "left center" : "center bottom";
-              const combatPortraitCellMinH = isLandscapeCompact ? 120 : 220;
+              const combatPortraitCellMinH = isLandscapeCompact ? 132 : 220;
               const combatVersusGridStyleEffective: React.CSSProperties = {
                 ...combatModalVersusGridStyle,
                 ...(isLandscapeCompact
@@ -4964,16 +4972,66 @@ export default function LabyrinthGame() {
                   <div style={{ ...combatLandscapeFaceoffWrapStyle, position: "relative" }}>
                     <div
                       style={{
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0, 1fr) minmax(72px, 1fr) minmax(0, 1fr)",
+                        columnGap: 8,
+                        alignItems: "center",
+                        width: "100%",
+                        marginTop: -2,
+                        marginBottom: 2,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: "0.8rem",
+                          fontWeight: 700,
+                          color: PLAYER_COLORS[headerPi] ?? "#00ff88",
+                          textAlign: "center",
+                          lineHeight: 1.1,
+                          maxWidth: "100%",
+                          minWidth: 0,
+                        }}
+                      >
+                        {playerNames[headerPi] ?? `Player ${headerPi + 1}`}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: "0.62rem",
+                          color: "#776666",
+                          textAlign: "center",
+                          fontWeight: 700,
+                          letterSpacing: "0.08em",
+                        }}
+                      >
+                        Strike
+                      </span>
+                      <span
+                        style={{
+                          fontSize: "0.8rem",
+                          fontWeight: 700,
+                          color: "#ff8888",
+                          textAlign: "center",
+                          lineHeight: 1.1,
+                          maxWidth: "100%",
+                          minWidth: 0,
+                        }}
+                      >
+                        {headerMonsterName}
+                      </span>
+                    </div>
+                    {pendingCombatBonusPick && !combatState ? (
+                    <div
+                      style={{
                         display: "flex",
                         justifyContent: "space-between",
                         alignItems: "center",
-                        minHeight: 26,
+                        minHeight: 0,
                         paddingLeft: 4,
                         paddingRight: 4,
+                        marginBottom: 4,
                       }}
                     >
                       <div style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "flex-start" }}>
-                        {pendingCombatBonusPick && !combatState ? (
                           <span
                             style={{
                               fontSize: "0.72rem",
@@ -4991,10 +5049,8 @@ export default function LabyrinthGame() {
                           >
                             🏆 Winner
                           </span>
-                        ) : null}
                       </div>
                       <div style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "flex-end" }}>
-                        {pendingCombatBonusPick && !combatState ? (
                           <span
                             style={{
                               fontSize: "0.72rem",
@@ -5013,65 +5069,15 @@ export default function LabyrinthGame() {
                           >
                             Defeated
                           </span>
-                        ) : null}
                       </div>
                     </div>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "minmax(0, 1fr) minmax(72px, 1fr) minmax(0, 1fr)",
-                        columnGap: 8,
-                        alignItems: "end",
-                        width: "100%",
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: "0.8rem",
-                          fontWeight: 700,
-                          color: PLAYER_COLORS[headerPi] ?? "#00ff88",
-                          textAlign: "center",
-                          lineHeight: 1.15,
-                          maxWidth: "100%",
-                          minWidth: 0,
-                          paddingBottom: 4,
-                        }}
-                      >
-                        {playerNames[headerPi] ?? `Player ${headerPi + 1}`}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: "0.62rem",
-                          color: "#776666",
-                          textAlign: "center",
-                          fontWeight: 700,
-                          letterSpacing: "0.08em",
-                          paddingBottom: 4,
-                        }}
-                      >
-                        Strike
-                      </span>
-                      <span
-                        style={{
-                          fontSize: "0.8rem",
-                          fontWeight: 700,
-                          color: "#ff8888",
-                          textAlign: "center",
-                          lineHeight: 1.15,
-                          maxWidth: "100%",
-                          minWidth: 0,
-                          paddingBottom: 4,
-                        }}
-                      >
-                        {headerMonsterName}
-                      </span>
-                    </div>
+                    ) : null}
                     <div style={{ position: "relative", width: "100%" }}>
                     <div
                       style={{
                         display: "flex",
                         flexDirection: "row",
-                        alignItems: "flex-end",
+                        alignItems: "center",
                         justifyContent: "center",
                         gap: 8,
                         width: "100%",
@@ -5412,13 +5418,13 @@ export default function LabyrinthGame() {
                               display: "flex",
                               flexDirection: "column",
                               alignItems: "center",
-                              gap: 2,
+                              gap: 3,
                               width: "100%",
                               maxWidth: "min(100%, 680px)",
-                              minHeight: 48,
-                              maxHeight: 52,
-                              height: 52,
-                              padding: "2px 6px 3px",
+                              minHeight: 56,
+                              maxHeight: 66,
+                              height: 66,
+                              padding: "3px 6px 4px",
                               background: "rgba(0,0,0,0.45)",
                               borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
                               border: "1px solid rgba(170,102,255,0.45)",
@@ -5548,6 +5554,7 @@ export default function LabyrinthGame() {
                           </div>
                         );
                       })()}
+                    {showCombatHintText ? (
                     <div
                       style={{
                         width: "100%",
@@ -5563,9 +5570,8 @@ export default function LabyrinthGame() {
                       }}
                     >
                       <div
-                        role={showCombatHintText ? "alert" : undefined}
-                        aria-live={showCombatHintText ? "polite" : undefined}
-                        aria-hidden={!showCombatHintText}
+                        role="alert"
+                        aria-live="polite"
                         style={{
                           width: "100%",
                           height: "100%",
@@ -5576,8 +5582,8 @@ export default function LabyrinthGame() {
                           padding: "2px 6px",
                           borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
                           overflow: "hidden",
-                          border: showCombatHintText ? "2px solid rgba(255,204,0,0.38)" : "2px solid transparent",
-                          background: showCombatHintText ? "rgba(255,204,0,0.08)" : "rgba(255,204,0,0.04)",
+                          border: "2px solid rgba(255,204,0,0.38)",
+                          background: "rgba(255,204,0,0.08)",
                           color: "#eeccaa",
                           fontSize: "0.65rem",
                           fontWeight: 500,
@@ -5585,7 +5591,6 @@ export default function LabyrinthGame() {
                           lineHeight: 1.2,
                         }}
                       >
-                        {showCombatHintText ? (
                           <span
                             style={{
                               display: "-webkit-box",
@@ -5601,11 +5606,11 @@ export default function LabyrinthGame() {
                                 ? combatFooterSnapshot.summary
                                 : lab && combatState
                                   ? `💡 ${getMonsterHint(combatState.monsterType, lab?.monsters[combatState.monsterIndex]?.hasShield)}`
-                                  : null}
+                                  : ""}
                           </span>
-                        ) : null}
                       </div>
                     </div>
+                    ) : null}
                     <div style={{ textAlign: "center", minHeight: 8 }}>
                       {combatState && !combatResult && headerSurpriseVisible && !rolling ? (
                         <span
@@ -6171,6 +6176,7 @@ export default function LabyrinthGame() {
                         </div>
                               );
                             })()}
+                              {showCombatHintText ? (
                               <div
                                 style={{
                                   width: "100%",
@@ -6186,9 +6192,8 @@ export default function LabyrinthGame() {
                                 }}
                               >
                                 <div
-                                  role={showCombatHintText ? "alert" : undefined}
-                                  aria-live={showCombatHintText ? "polite" : undefined}
-                                  aria-hidden={!showCombatHintText}
+                                  role="alert"
+                                  aria-live="polite"
                                   style={{
                                     width: "100%",
                                     height: "100%",
@@ -6199,8 +6204,8 @@ export default function LabyrinthGame() {
                                     padding: "4px 8px",
                                     borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
                                     overflow: "hidden",
-                                    border: showCombatHintText ? "2px solid rgba(255,204,0,0.38)" : "2px solid transparent",
-                                    background: showCombatHintText ? "rgba(255,204,0,0.08)" : "rgba(255,204,0,0.04)",
+                                    border: "2px solid rgba(255,204,0,0.38)",
+                                    background: "rgba(255,204,0,0.08)",
                                     color: "#eeccaa",
                                     fontSize: "0.76rem",
                                     fontWeight: 500,
@@ -6208,7 +6213,6 @@ export default function LabyrinthGame() {
                                     lineHeight: 1.28,
                                   }}
                                 >
-                                  {showCombatHintText ? (
                                     <span
                                       style={{
                                         display: "-webkit-box",
@@ -6222,13 +6226,13 @@ export default function LabyrinthGame() {
                                         ? combatToast.message
                                         : combatFooterSnapshot
                                           ? combatFooterSnapshot.summary
-                                          : lab
+                                          : lab && combatState
                                             ? `💡 ${getMonsterHint(combatState.monsterType, lab?.monsters[combatState.monsterIndex]?.hasShield)}`
-                                            : null}
+                                            : ""}
                                     </span>
-                                  ) : null}
                                 </div>
                               </div>
+                              ) : null}
                           </>
                       )}
                     </div>
@@ -6248,7 +6252,9 @@ export default function LabyrinthGame() {
                 maxHeight: combatLandscapePostFight
                   ? "none"
                   : combatState
-                    ? `min(420px, calc(100dvh - ${HEADER_HEIGHT}px - 140px))`
+                    ? combatOverlayFullBleedLandscape
+                      ? "min(520px, calc(100dvh - 32px))"
+                      : `min(420px, calc(100dvh - ${HEADER_HEIGHT}px - 140px))`
                     : combatResultSlotHeightPx,
                 overflowY: combatLandscapePostFight ? "visible" : "auto",
                 WebkitOverflowScrolling: "touch",
@@ -7996,7 +8002,7 @@ export default function LabyrinthGame() {
 }
 
 const HEADER_HEIGHT = 64;
-/** Above combat overlay (1220) so menu / mobile backdrop work during fight; settings use SETTINGS_MODAL_Z */
+/** Above default combat overlay (1220). Phone-landscape combat uses a full-viewport overlay at HEADER_Z_INDEX+20; settings remain on top via SETTINGS_MODAL_Z */
 const HEADER_Z_INDEX = 1300;
 /** Game setup — must sit above combat (1220) when opened from menu mid-game */
 const SETTINGS_MODAL_Z = 1360;

@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import Script from "next/script";
+import { CrazyGamesSdk } from "@/components/CrazyGamesSdk";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,6 +16,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
+        <Script
+          src="https://sdk.crazygames.com/crazygames-sdk-v3.js"
+          strategy="beforeInteractive"
+        />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
@@ -21,7 +27,10 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        <CrazyGamesSdk />
+        {children}
+      </body>
     </html>
   );
 }

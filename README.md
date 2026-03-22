@@ -37,3 +37,17 @@ Open [http://localhost:3000](http://localhost:3000).
 3. Deploy. The game runs at your Vercel URL.
 
 Without an API key, the "Generate with AI" button will show an error; the random maze still works.
+
+## CrazyGames (HTML5)
+
+The [CrazyGames HTML5 v3 SDK](https://docs.crazygames.com/sdk/intro/) is loaded from `sdk.crazygames.com`, initialized on the client, and reports `loadingStart` / `loadingStop` / `gameplayStart` when the environment is `local` or `crazygames`. On other domains the SDK is disabled and no calls are made.
+
+**Production zip for upload**
+
+```bash
+npm run package:crazygames
+```
+
+This runs a static export (`ITCH_EXPORT=1`) and writes `dist/creep-labyrinth-crazygames.zip`. Upload that file in the [CrazyGames developer portal](https://developer.crazygames.com/) as an HTML5 game.
+
+The static build has no server-side API; “Generate with AI” uses the same fallback as other offline builds unless you host your own API. See `.env.example` for notes.
