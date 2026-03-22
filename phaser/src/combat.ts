@@ -66,15 +66,15 @@ export function resolveCombat(
   const monsterDefense = getMonsterDefense(monsterType);
   const monsterDamage = getMonsterDamage(monsterType);
 
-  // Ghost & Skeleton: same 50% miss as main game
-  if ((monsterType === 'G' || monsterType === 'K') && Math.random() < 0.5) {
+  // Ghost: 50% chance attack misses
+  if (monsterType === 'G' && Math.random() < 0.5) {
     return {
       won: false,
       damage: monsterDamage,
       playerRoll,
       monsterDefense,
       attackTotal: 0,
-      monsterEffect: monsterType === 'G' ? 'ghost_evade' : 'skeleton_evade',
+      monsterEffect: 'ghost_evade',
     };
   }
 

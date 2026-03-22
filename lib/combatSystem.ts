@@ -114,10 +114,7 @@ export function getMonsterReward(monsterType: MonsterType): MonsterReward {
 export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
   switch (type) {
     case "G": return "👻 Ghost: Dice 6 = instant win! Otherwise 50% miss.";
-    case "K":
-      return hasShield
-        ? "💀 Skeleton: Dice 6 = instant win! Otherwise 50% miss. First hit that lands breaks shield (no HP); then −1 HP per hit."
-        : "💀 Skeleton: Dice 6 = instant win! Otherwise 50% miss. Each hit that lands −1 HP.";
+    case "K": return hasShield ? "💀 Skeleton: First hit breaks shield, second hit wins." : "💀 Skeleton: Shield broken — one more hit!";
     case "Z": {
       const zm = getMonsterMaxHp("Z");
       const half = Math.max(1, Math.floor(zm / 2));
@@ -157,23 +154,20 @@ export function resolveCombat(
     };
   }
 
-  // Ghost & Skeleton: same 50% phantom miss (dice 6 already handled above).
-  if ((monsterType === "G" || monsterType === "K") && Math.random() < 0.5) {
+  // Ghost: 50% chance attack misses
+  if (monsterType === "G" && Math.random() < 0.5) {
     return {
       won: false,
       damage: monsterDamage,
       playerRoll,
       monsterDefense,
       attackTotal: 0,
-      monsterEffect: monsterType === "G" ? "ghost_evade" : "skeleton_evade",
+      monsterEffect: "ghost_evade",
       glancingDamage: 0,
     };
   }
 
-  // Skeleton: with shield, defense is 0 (any hit connects) but the hit only strips the shield — no HP loss yet.
-  // Without shield, same defense rules as other monsters (base 4 + stance).
-  const effectiveDefense = Math.max(
-    0,
+  const effectiveDefense = Math.max(0,
     (monsterType === "K" && skeletonHasShield ? 0 : monsterDefense) + surpriseModifier
   );
   const attackTotal = playerRoll + attackBonus;
@@ -199,7 +193,6 @@ export function resolveCombat(
   const glancingDamage = won ? 0 : (glanceMin >= 1 ? glanceMin + Math.floor(Math.random() * (glanceMax - glanceMin + 1)) : 0);
 
   // Zombie: 6 = instant win above; 5 = heavy; 3–4 = half max HP; 1–2 = 1 HP.
-  // Skeleton (shield off): normal hits −1 HP per strike (dice 6 = instant win handled above).
   let monsterHpLoss: number | undefined;
   if (won && monsterType === "Z" && physicalDie >= 1 && physicalDie <= 5) {
     const zMax = getMonsterMaxHp("Z");
@@ -207,8 +200,6 @@ export function resolveCombat(
     if (physicalDie === 5) monsterHpLoss = 4;
     else if (physicalDie >= 3 && physicalDie <= 4) monsterHpLoss = halfLife;
     else monsterHpLoss = 1;
-  } else if (won && monsterType === "K" && physicalDie < 6) {
-    monsterHpLoss = 1;
   }
 
   // Attack/angry mode: monster counter-attacks, player takes extra damage on miss

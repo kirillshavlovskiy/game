@@ -1,8 +1,5 @@
 import type { Metadata } from "next";
-import { Creepster } from "next/font/google";
 import "./globals.css";
-
-const creepster = Creepster({ weight: "400", subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Creep Labyrinth",
@@ -16,7 +13,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={creepster.className}>{children}</body>
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Creepster&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body>{children}</body>
     </html>
   );
 }

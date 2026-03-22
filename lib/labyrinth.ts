@@ -718,8 +718,27 @@ export class Labyrinth {
     return area;
   }
 
+  /** Spider east of (0,0) — first combat after moving right; matches _addMonsters. */
+  private _placeStartNeighborGhost(): void {
+    if (this.width > 1 && isWalkable(this.grid[0][1])) {
+      const patrolArea = this._getPatrolArea(1, 0, 28);
+      if (patrolArea.length >= 2) {
+        this.monsters.unshift({
+          x: 1,
+          y: 0,
+          type: "S",
+          patrolArea,
+          visionRadius: 3,
+          spawnX: 1,
+          spawnY: 0,
+          hp: getMonsterMaxHp("S"),
+        });
+      }
+    }
+  }
+
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor is Skeleton at (1,0))
+    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor spider is unshifted in generate/loadGrid)
     const intersections: [number, number][] = [];
     const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
@@ -981,23 +1000,7 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
 
-    // Skeleton at (1,0) adjacent to start — triggers combat as soon as player moves toward it
-    if (this.width > 1 && isWalkable(this.grid[0][1])) {
-      const patrolArea = this._getPatrolArea(1, 0, 28);
-      if (patrolArea.length >= 2) {
-        this.monsters.unshift({
-          x: 1,
-          y: 0,
-          type: "K",
-          patrolArea,
-          visionRadius: 3,
-          spawnX: 1,
-          spawnY: 0,
-          hp: getMonsterMaxHp("K"),
-          hasShield: true,
-        });
-      }
-    }
+    this._placeStartNeighborGhost();
   }
 
   loadGrid(grid: string[][]): boolean {
@@ -1046,23 +1049,7 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
-    // Skeleton at (1,0) adjacent to start — triggers combat as soon as player moves toward it
-    if (this.width > 1 && isWalkable(this.grid[0][1])) {
-      const patrolArea = this._getPatrolArea(1, 0, 28);
-      if (patrolArea.length >= 2) {
-        this.monsters.unshift({
-          x: 1,
-          y: 0,
-          type: "K",
-          patrolArea,
-          visionRadius: 3,
-          spawnX: 1,
-          spawnY: 0,
-          hp: getMonsterMaxHp("K"),
-          hasShield: true,
-        });
-      }
-    }
+    this._placeStartNeighborGhost();
     // Add hidden cells and spider webs from path cells for AI-loaded mazes
     const pathCells: [number, number][] = [];
     for (let y = 1; y < this.height - 1; y++)
