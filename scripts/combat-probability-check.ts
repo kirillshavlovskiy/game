@@ -13,17 +13,19 @@ import type { MonsterType } from "../lib/labyrinth";
 
 const SURPRISES: MonsterSurpriseState[] = ["idle", "hunt", "attack", "angry"];
 
+/** Mirrors `resolveCombat` skeleton armor + surprise (K no-shield uses bones 2, min effective DEF 2). */
 function effectiveDefense(
   type: MonsterType,
   surprise: MonsterSurpriseState,
   skeletonShield: boolean
 ): number {
-  const base = getMonsterDefense(type);
   const mod = getSurpriseDefenseModifier(surprise);
-  return Math.max(
-    0,
-    (type === "K" && skeletonShield ? 0 : base) + mod
-  );
+  if (type === "K" && skeletonShield) return Math.max(0, 0 + mod);
+  if (type === "K" && !skeletonShield) {
+    const raw = Math.max(0, 2 + mod);
+    return Math.max(2, raw);
+  }
+  return Math.max(0, getMonsterDefense(type) + mod);
 }
 
 /** First roll: win, or second-chance (no damage yet), or skeleton shield break (no HP dmg) */

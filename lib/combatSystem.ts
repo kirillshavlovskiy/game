@@ -1,6 +1,6 @@
 /**
  * Combat system for Labyrinth game.
- * Player attack (d6 + attack bonus) vs monster defense.
+ * Player strike: d6 + optional holy artifact bonus vs monster defense (callers pass attackBonus 0 in combat).
  */
 
 import { type MonsterType, getMonsterMaxHp, type StoredArtifactKind } from "./labyrinth";
@@ -55,8 +55,20 @@ const BONUS_REWARDS: MonsterBonusReward[] = [
   { type: "shield", amount: 1 },
   { type: "jump", amount: 1 },
   { type: "catapult", amount: 1 },
-  { type: "diceBonus", amount: 1 },
 ];
+
+/**
+ * One key per player-facing “kind” of bonus so the pick list never offers two rewards that mean the same thing
+ * (e.g. +1 dice bonus charge vs +1 Dice artifact, or shield chip vs +1 shield charge).
+ */
+function bonusRewardChoiceDedupeKey(r: MonsterBonusReward): string {
+  if (r.type === "diceBonus") return "dice_economy";
+  if (r.type === "storedArtifact" && r.kind === "dice") return "dice_economy";
+  if (r.type === "shield") return "shield_economy";
+  if (r.type === "storedArtifact" && r.kind === "shield") return "shield_economy";
+  if (r.type === "storedArtifact") return `storedArtifact:${r.kind}`;
+  return r.type;
+}
 
 /** 50% chance to return a random bonus reward on monster defeat */
 export function getMonsterBonusReward(): MonsterBonusReward | null {
@@ -64,13 +76,13 @@ export function getMonsterBonusReward(): MonsterBonusReward | null {
   return BONUS_REWARDS[Math.floor(Math.random() * BONUS_REWARDS.length)]!;
 }
 
-/** Shuffled bonus options for post-combat player choice (up to `count`, unique types). */
+/** Shuffled bonus options for post-combat player choice (up to `count`, unique by semantic kind). */
 export function getMonsterBonusRewardChoices(count = 3): MonsterBonusReward[] {
   const shuffled = [...BONUS_REWARDS].sort(() => Math.random() - 0.5);
   const seen = new Set<string>();
   const out: MonsterBonusReward[] = [];
   for (const r of shuffled) {
-    const key = r.type === "storedArtifact" ? `storedArtifact:${r.kind}` : r.type;
+    const key = bonusRewardChoiceDedupeKey(r);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(r);
@@ -113,17 +125,25 @@ export function getMonsterReward(monsterType: MonsterType): MonsterReward {
 /** Combat hints for each monster type */
 export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
   switch (type) {
-    case "G": return "👻 Ghost: Dice 6 = instant win! Otherwise 50% miss.";
-    case "K": return hasShield ? "💀 Skeleton: First hit breaks shield, second hit wins." : "💀 Skeleton: Shield broken — one more hit!";
+    case "G":
+      return "👻 Ghost: Dice 6 = instant win! 50% evade on other rolls — if it evades you lose 1 HP (shield can block).";
+    case "K":
+      return hasShield
+        ? "💀 Skeleton: First hit breaks shield (no HP loss) — then clean hits only hurt the bones; you take 1 HP on a miss (+Attack/Angry) unless shield blocks. Glances can chip it too."
+        : "💀 Skeleton: No shield — defense never below 2 (surprise still shifts it up). Clean hits hurt only the monster; on a miss you take 1 HP (+Attack/Angry) unless shield blocks.";
     case "Z": {
       const zm = getMonsterMaxHp("Z");
       const half = Math.max(1, Math.floor(zm / 2));
-      return `🧟 Zombie: Dice 6 = instant win! Dice 5 = −4 HP. Dice 3–4 = half max HP (−${half}). Dice 1–2 = −1 HP. Miss: glancing by die. Lose: 2+ dmg.`;
+      return `🧟 Zombie: Dice 6 = instant win! Dice 5 = −4 HP. Dice 3–4 = half max HP (−${half}). Dice 1–2 = −1 HP. Miss: glancing by die; you take 2 HP (+Attack/Angry) unless shield blocks.`;
     }
-    case "V": return "🧛 Dracula: High defense (5). Defeat for +1 attack.";
-    case "S": return "🕷 Spider: Def 3. Win for +1 jump.";
-    case "L": return "🔥 Lava Elemental: High defense (6). Dice 6 = instant win! Miss: dice 2→1–2, 3→2–3, 4→3–4, 5→4–5 HP.";
-    default: return "Dice 6 = instant win! Miss: 2→1–2, 3→2–3, 4→3–4, 5→4–5 HP. Attack/angry = monster hits you back.";
+    case "V":
+      return "🧛 Dracula: High defense (5). Defeat: +1 on movement dice (map, max 6). Combat: d6 + holy sword/cross only. Miss: 1 HP (+Attack/Angry) unless shield blocks.";
+    case "S":
+      return "🕷 Spider: Def 3. Win for +1 jump. Miss: you take 1 HP (+Attack/Angry) unless shield blocks.";
+    case "L":
+      return "🔥 Lava Elemental: High defense (6). Dice 6 = instant win! Miss: glancing chip on it by die; you take 2 HP (+Attack/Angry) unless shield blocks.";
+    default:
+      return "Dice 6 = instant win! Miss: glancing chip on the monster (by die) AND you lose HP (1 for most beasts, 2 zombie/lava) unless shield blocks — Attack/Angry surprise adds +1 or +2 to that hit. Dice artifact: optional second strike after the first roll.";
   }
 }
 
@@ -167,9 +187,13 @@ export function resolveCombat(
     };
   }
 
-  const effectiveDefense = Math.max(0,
-    (monsterType === "K" && skeletonHasShield ? 0 : monsterDefense) + surpriseModifier
-  );
+  // Skeleton: with shield, base defense 0 so any modest roll can break it; without shield, bones DEF 2 (not full 4) so hits are common.
+  // Floor effective DEF at 2 when exposed: idle surprise (−1) would otherwise give 1 → every d6 ≥1 hits and the player never takes miss damage.
+  const skeletonArmorDefense =
+    monsterType === "K" ? (skeletonHasShield ? 0 : 2) : monsterDefense;
+  const rawDefense = Math.max(0, skeletonArmorDefense + surpriseModifier);
+  const effectiveDefense =
+    monsterType === "K" && !skeletonHasShield ? Math.max(2, rawDefense) : rawDefense;
   const attackTotal = playerRoll + attackBonus;
   const hit = attackTotal >= effectiveDefense;
 

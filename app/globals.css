@@ -245,6 +245,28 @@ button {
   opacity: 0.85;
 }
 
+/* Combat: Skills panel → dice rolling slot morph */
+@keyframes combatDiceSlotEnter {
+  0% {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.combat-dice-rolling-slot {
+  animation: combatDiceSlotEnter 0.38s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .combat-dice-rolling-slot {
+    animation: none;
+  }
+}
+
 /* Combat attacking state - pulse glow */
 @keyframes combatAttackPulse {
   0%, 100% {

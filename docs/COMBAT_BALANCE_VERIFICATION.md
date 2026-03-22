@@ -20,7 +20,7 @@ Does *not* count later rolls after a second chance.
 | **G** Ghost | **35.4%** | **Below 50%** (50% evade + damage) |
 | **Z** Zombie | **62.5%** | OK |
 | **K** Skeleton (shield) | **95.8%** | OK (first hit usually shield) |
-| **K** Skeleton (no shield) | **62.5%** | OK (same structure as Z) |
+| **K** Skeleton (no shield) | **~79%** | Script models second-chance on miss; live game may differ if that rule is absent — bones DEF min 2 fixes “idle = DEF 1 = never miss” |
 | **L** Lava | **37.5%** | **Below 50%** (high DEF + angry/attack harsh; intentional) |
 | **V** Dracula | **50.0%** | **Exactly at threshold** |
 
@@ -49,7 +49,7 @@ So **without shield, ghost fails the “≥50% no damage first roll”** test. W
 
 ## Consistency checks (code vs rules)
 
-1. **Effective defense** — Lava uses base 6 + surprise modifier like others; skeleton + shield uses 0 for hit check; matches `resolveCombat`.
+1. **Effective defense** — Lava uses base 6 + surprise modifier like others; skeleton + shield uses 0 for hit check; skeleton **without** shield uses bones 2 + surprise with a **floor of 2** so idle (−1) cannot drop to 1 (which made every d6 a hit and zero player damage). Matches `resolveCombat`.
 2. **Second chance** — Only idle/hunt and miss and **raw d6 ≤ 3**; glancing is **not** applied when second chance triggers (early return in `LabyrinthGame`). Consistent.
 3. **Glancing** — Raw d6 ∈ {2,3,4} on miss chips monster HP; does **not** reduce player damage. Consistent with “player survival” not improved by glance.
 4. **Power dice / +1 attack** — Improve hit rate; not included in table above (player-favorable).

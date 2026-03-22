@@ -69,25 +69,25 @@ export const STORED_ARTIFACT_TITLE: Record<StoredArtifactKind, string> = {
 
 /** One-line entry for `artifactsCollected` / logs (same wording everywhere). */
 export const STORED_ARTIFACT_LINE: Record<StoredArtifactKind, string> = {
-  dice: "Dice — roll d6 on map (+moves); in combat +1 attack roll",
-  shield: "Shield — +1 block charge (combat)",
+  dice: "Dice — roll d6 on map (+moves); in combat: optional second strike after a roll",
+  shield: "Shield — +1 block charge (saves HP when you block a miss)",
   teleport: "Teleport — map only (after combat)",
   reveal: "Reveal — hidden cells (map only)",
   healing: "Healing — +1 HP (map only)",
   torch: "Torch — clears fog (map only)",
-  holySword: "Holy sword — same as dice: map roll for moves / combat +1 attack roll",
-  holyCross: "Holy cross — same as shield: +1 shield charge",
+  holySword: "Holy sword — map: roll d6 for moves; combat: +1 to your next strike die (monster damage)",
+  holyCross: "Holy cross — map: +1 shield charge; combat: +1 to your next strike die (monster damage)",
 };
 
 export const STORED_ARTIFACT_TOOLTIP: Record<StoredArtifactKind, string> = {
-  dice: "Spend on map: roll d6 and add that many moves to your current pool. In combat: +1 to your next attack roll.",
-  shield: "Spend: +1 shield charge. In combat, toggle the shield slot to block a hit.",
+  dice: "On map: spend to roll d6 and add that many moves. In combat: tap before you roll to mark a Dice artifact reroll — after the roll, choose whether to spend 1 artifact for a second strike roll (only that reroll).",
+  shield: "Spend: +1 shield charge. Toggle shield in combat ON to block monster hits — no HP lost while you have charges.",
   teleport: "Spend: open teleport picker. Only on the map, not during combat.",
   reveal: "Spend: reveal a batch of hidden cells. Only on the map, not during combat.",
   healing: "Spend: restore 1 HP if below max. Only on the map, not during combat.",
   torch: "Spend on map: light torch and clear fog zones. Not usable during combat.",
-  holySword: "Spend: same as dice — map: roll d6 for bonus moves; combat: +1 to your next attack roll.",
-  holyCross: "Spend: same as shield artifact — +1 shield charge (combat block).",
+  holySword: "Map: spend for d6 bonus moves. Combat: spend for +1 on your next strike die (only holy sword/cross add to combat offense).",
+  holyCross: "Map: spend for +1 shield charge. Combat: spend for +1 on your next strike die (only holy sword/cross add to combat offense).",
 };
 
 export function storedArtifactKindFromCell(cell: string): StoredArtifactKind | null {
@@ -255,11 +255,12 @@ export function getMonsterDamage(type: MonsterType): number {
   return type === "Z" || type === "L" ? 2 : 1; // Zombie, Lava = 2; Dracula, Ghost, Skeleton, Spider = 1
 }
 
-/** Max HP for every monster. Each hit that meets defense −1 HP. */
+/** Max HP for most monsters. Each clean hit −1 HP unless rule says otherwise. */
 export const MONSTER_HP_MAX = 5;
 
-export function getMonsterMaxHp(_type: MonsterType): number {
-  return MONSTER_HP_MAX;
+export function getMonsterMaxHp(type: MonsterType): number {
+  /** Skeleton: shield + shorter HP pool — post-shield fights end in a few solid hits. */
+  return type === "K" ? 3 : MONSTER_HP_MAX;
 }
 
 /** Min/max damage for variable monster attacks. Returns [min, max] inclusive. */
@@ -362,7 +363,7 @@ export class Labyrinth {
     artifactHolySword?: number;
     artifactHolyCross?: number;
     diceBonus?: number; // +1 to next roll from A1
-    attackBonus?: number; // +1 attack from defeating Dracula
+    attackBonus?: number; // +1 to movement roll (map, capped at 6) — not used in combat strikes
     catapultCharges?: number; // bonus from monster defeat - launch without standing on C cell
     hasTeleportArtifact?: boolean; // A3
     hasTorch?: boolean; // from hidden gem - clears fog zones
@@ -718,27 +719,28 @@ export class Labyrinth {
     return area;
   }
 
-  /** Spider east of (0,0) — first combat after moving right; matches _addMonsters. */
-  private _placeStartNeighborGhost(): void {
+  /** Skeleton east of (0,0) — first combat after moving right; matches _addMonsters (shield on). */
+  private _placeStartNeighborSkeleton(): void {
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "S",
+          type: "K",
           patrolArea,
           visionRadius: 3,
           spawnX: 1,
           spawnY: 0,
-          hp: getMonsterMaxHp("S"),
+          hasShield: true,
+          hp: getMonsterMaxHp("K"),
         });
       }
     }
   }
 
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor spider is unshifted in generate/loadGrid)
+    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor skeleton is unshifted in generate/loadGrid)
     const intersections: [number, number][] = [];
     const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
@@ -1000,7 +1002,7 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
 
-    this._placeStartNeighborGhost();
+    this._placeStartNeighborSkeleton();
   }
 
   loadGrid(grid: string[][]): boolean {
@@ -1049,7 +1051,7 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
-    this._placeStartNeighborGhost();
+    this._placeStartNeighborSkeleton();
     // Add hidden cells and spider webs from path cells for AI-loaded mazes
     const pathCells: [number, number][] = [];
     for (let y = 1; y < this.height - 1; y++)
