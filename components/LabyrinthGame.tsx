@@ -4848,7 +4848,7 @@ export default function LabyrinthGame() {
           style={{
               ...combatModalStyle,
               maxHeight: `calc(100dvh - ${HEADER_HEIGHT}px - 24px)`,
-              overflowY: "auto",
+              overflowY: combatLandscapePostFight ? "hidden" : "auto",
               WebkitOverflowScrolling: "touch",
               ...(isLandscapeCompact
                 ? {
@@ -4960,8 +4960,8 @@ export default function LabyrinthGame() {
                       </span>
                     )}
                   </div>
-                  {useCombatLandscapeFaceoff ? (
-                  <div style={combatLandscapeFaceoffWrapStyle}>
+                  {showCombatLandscapeVersus ? (
+                  <div style={{ ...combatLandscapeFaceoffWrapStyle, position: "relative" }}>
                     <div
                       style={{
                         display: "flex",
@@ -5066,6 +5066,7 @@ export default function LabyrinthGame() {
                         {headerMonsterName}
                       </span>
                     </div>
+                    <div style={{ position: "relative", width: "100%" }}>
                     <div
                       style={{
                         display: "flex",
@@ -5105,7 +5106,16 @@ export default function LabyrinthGame() {
                           minHeight: 0,
                         }}
                       >
-                        {combatArtifactRerollPrompt ? (
+                        {combatLandscapePostFight ? (
+                          <div
+                            style={{
+                              width: "100%",
+                              minHeight: COMBAT_LANDSCAPE_CENTER_DICE_MAX_H,
+                              flexShrink: 0,
+                            }}
+                            aria-hidden
+                          />
+                        ) : combatArtifactRerollPrompt ? (
                           <div
                             role="dialog"
                             aria-label="Dice artifact reroll"
@@ -5300,6 +5310,32 @@ export default function LabyrinthGame() {
                           </span>
                         )}
                       </div>
+                    </div>
+                    {combatLandscapePostFight ? (
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: "50%",
+                          top: "50%",
+                          transform: "translate(-50%, -50%)",
+                          zIndex: 25,
+                          width: "min(300px, calc(100vw - 40px))",
+                          maxWidth: "92%",
+                          maxHeight: "min(72dvh, 420px)",
+                          overflowY: "auto",
+                          WebkitOverflowScrolling: "touch",
+                          boxSizing: "border-box",
+                          padding: "10px 12px",
+                          borderRadius: 12,
+                          background: "rgba(12, 12, 20, 0.97)",
+                          border: "2px solid rgba(255, 204, 0, 0.55)",
+                          boxShadow: "0 12px 40px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.06)",
+                          pointerEvents: "auto",
+                        }}
+                      >
+                        {renderCombatOutcome()}
+                      </div>
+                    ) : null}
                     </div>
                     <div
                       style={{
@@ -5563,7 +5599,7 @@ export default function LabyrinthGame() {
                               ? combatToast.message
                               : combatFooterSnapshot
                                 ? combatFooterSnapshot.summary
-                                : lab
+                                : lab && combatState
                                   ? `💡 ${getMonsterHint(combatState.monsterType, lab?.monsters[combatState.monsterIndex]?.hasShield)}`
                                   : null}
                           </span>
@@ -6208,11 +6244,13 @@ export default function LabyrinthGame() {
                 justifyContent: "flex-start",
                 gap: 6,
                 width: "100%",
-                minHeight: combatResultSlotHeightPx,
-                maxHeight: combatState
-                  ? `min(420px, calc(100dvh - ${HEADER_HEIGHT}px - 140px))`
-                  : combatResultSlotHeightPx,
-                overflowY: "auto",
+                minHeight: combatLandscapePostFight ? 0 : combatResultSlotHeightPx,
+                maxHeight: combatLandscapePostFight
+                  ? "none"
+                  : combatState
+                    ? `min(420px, calc(100dvh - ${HEADER_HEIGHT}px - 140px))`
+                    : combatResultSlotHeightPx,
+                overflowY: combatLandscapePostFight ? "visible" : "auto",
                 WebkitOverflowScrolling: "touch",
                 boxSizing: "border-box",
                 display: "flex",
@@ -6361,305 +6399,11 @@ export default function LabyrinthGame() {
               </div>
               )
             ) : combatResult ? (
-              <>
-                {!pendingCombatBonusPick && (
-                <div
-                  style={{
-                    ...combatResultBannerStyle,
-                    width: "100%",
-                    maxWidth: 400,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: 8,
-                    borderColor: (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" || combatResult.monsterEffect === "ghost_evade" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff4444",
-                    background: (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "rgba(255,102,0,0.2)" : combatResult.monsterEffect === "skeleton_shield" || combatResult.monsterEffect === "ghost_evade" ? "rgba(255,204,0,0.15)" : combatResult.shieldAbsorbed ? "rgba(68,255,136,0.15)" : combatResult.won ? "rgba(0,255,136,0.22)" : "rgba(255,68,68,0.15)",
-                  }}
-                >
-                  <span
-                    style={{
-                      color: (combatResult.draculaWeakened || combatResult.monsterWeakened) ? "#ff6600" : combatResult.monsterEffect === "skeleton_shield" || combatResult.monsterEffect === "ghost_evade" ? "#ffcc00" : combatResult.shieldAbsorbed ? "#44ff88" : combatResult.won ? "#00ff88" : "#ff6666",
-                      fontSize: "1rem",
-                      fontWeight: "bold",
-                      textAlign: "center",
-                      lineHeight: 1.3,
-                    }}
-                  >
-                    {combatResult.draculaWeakened || combatResult.monsterWeakened
-                        ? `${getMonsterName(combatResult.monsterType!)} weakened! One more hit!`
-                        : combatResult.monsterEffect === "skeleton_shield"
-                          ? "💀 Shield broken! Try again next turn."
-                          : combatResult.won
-                            ? (() => {
-                                const primaryParts = [
-                                  combatResult.reward?.type === "jump" && "⬆️ +1 jump",
-                                  combatResult.reward?.type === "hp" && "❤️ +1 HP",
-                                  combatResult.reward?.type === "shield" && "🛡 +1 shield",
-                                  combatResult.reward?.type === "attackBonus" && "⚔️ +1 movement dice",
-                                  combatResult.reward?.type === "movement" && "🎯 +1 move",
-                                ].filter(Boolean);
-                                const bonusParts = [
-                                  combatResult.bonusReward?.type === "artifact" &&
-                                    `✨ ${formatMonsterBonusRewardLabel({ type: "artifact", amount: combatResult.bonusReward.amount })}`,
-                                  combatResult.bonusReward?.type === "storedArtifact" &&
-                                    `✨ ${formatMonsterBonusRewardLabel(combatResult.bonusReward)}`,
-                                  combatResult.bonusReward?.type === "torch" &&
-                                    `🔥 ${formatMonsterBonusRewardLabel(combatResult.bonusReward)}`,
-                                  combatResult.bonusReward?.type === "bomb" &&
-                                    `💣 ${formatMonsterBonusRewardLabel(combatResult.bonusReward)}`,
-                                  combatResult.bonusReward &&
-                                    combatResult.bonusReward.type === "bonusMoves" &&
-                                    `🎯 +${combatResult.bonusReward.amount} move${combatResult.bonusReward.amount > 1 ? "s" : ""}`,
-                                  combatResult.bonusReward?.type === "shield" && "🛡 +1 shield charge",
-                                  combatResult.bonusReward?.type === "jump" && "⬆️ +1 jump",
-                                  combatResult.bonusReward?.type === "catapult" && "🎯 +1 catapult",
-                                  combatResult.bonusReward?.type === "diceBonus" && "🎲 +1 dice bonus",
-                                ].filter(Boolean);
-                                if (primaryParts.length || bonusParts.length) {
-                                  return `WIN! ${[...primaryParts, ...bonusParts].join("  ") || "Monster defeated!"}`;
-                                }
-                                return "You are lucky! Monster defeated!";
-                              })()
-                            : combatResult.playerDefeated
-                              ? `You lost! ${getMonsterName(combatResult.monsterType ?? "Z")} wins! Respawned at start (-1 artifact).`
-                              : combatResult.shieldAbsorbed
-                                ? "🛡 Shield absorbed!"
-                                : combatResult.monsterEffect === "ghost_evade"
-                                  ? "👻 Attack missed!"
-                                  : `✗ -${combatResult.damage} HP`}
-                  </span>
-                  {combatResult.won && (combatResult.reward || combatResult.bonusReward) && (
-                    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8, marginTop: 4 }}>
-                      {combatResult.reward?.type === "jump" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 jump"><ArtifactIcon variant="jump" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 jump</span></span>}
-                      {combatResult.reward?.type === "hp" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 HP"><ArtifactIcon variant="healing" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 HP</span></span>}
-                      {combatResult.reward?.type === "shield" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 shield"><ArtifactIcon variant="shield" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 shield</span></span>}
-                      {combatResult.reward?.type === "attackBonus" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 on movement roll (max 6)"><ArtifactIcon variant="magic" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 movement</span></span>}
-                      {combatResult.reward?.type === "movement" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 move"><ArtifactIcon variant="catapult" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 move</span></span>}
-                      {combatResult.bonusReward?.type === "artifact" && (
-                        <span
-                          style={{ display: "inline-flex", alignItems: "center", gap: 6, filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }}
-                          title={formatMonsterBonusRewardLabel({ type: "artifact", amount: combatResult.bonusReward.amount })}
-                        >
-                          <ArtifactIcon variant="artifact" size={40} />
-                          <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>
-                            {formatMonsterBonusRewardLabel({ type: "artifact", amount: combatResult.bonusReward.amount })}
-                          </span>
-                        </span>
-                      )}
-                      {combatResult.bonusReward?.type === "bonusMoves" && (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={`+${combatResult.bonusReward.amount} moves`}>
-                          <ArtifactIcon variant="dice" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+{combatResult.bonusReward.amount} move{combatResult.bonusReward.amount > 1 ? "s" : ""}</span>
-                        </span>
-                      )}
-                      {combatResult.bonusReward?.type === "shield" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 shield"><ArtifactIcon variant="shield" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 shield</span></span>}
-                      {combatResult.bonusReward?.type === "jump" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 jump"><ArtifactIcon variant="jump" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 jump</span></span>}
-                      {combatResult.bonusReward?.type === "catapult" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 catapult charge"><ArtifactIcon variant="catapult" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 catapult</span></span>}
-                      {combatResult.bonusReward?.type === "diceBonus" && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title="+1 dice bonus"><ArtifactIcon variant="dice" size={40} /><span style={{ fontSize: "0.95rem", fontWeight: 600 }}>+1 dice bonus</span></span>}
-                      {combatResult.bonusReward?.type === "storedArtifact" && (
-                        <span
-                          style={{ display: "inline-flex", alignItems: "center", gap: 6, filter: "drop-shadow(0 0 6px rgba(255, 200, 100, 0.8))" }}
-                          title={formatMonsterBonusRewardLabel(combatResult.bonusReward)}
-                        >
-                          <ArtifactIcon variant={storedArtifactIconVariant(combatResult.bonusReward.kind)} size={40} />
-                          <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>{formatMonsterBonusRewardLabel(combatResult.bonusReward)}</span>
-                        </span>
-                      )}
-                      {combatResult.bonusReward?.type === "torch" && (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={formatMonsterBonusRewardLabel(combatResult.bonusReward)}>
-                          <ArtifactIcon variant="torch" size={40} />
-                          <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>{formatMonsterBonusRewardLabel(combatResult.bonusReward)}</span>
-                        </span>
-                      )}
-                      {combatResult.bonusReward?.type === "bomb" && (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={formatMonsterBonusRewardLabel(combatResult.bonusReward)}>
-                          <ArtifactIcon variant="bomb" size={40} />
-                          <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>{formatMonsterBonusRewardLabel(combatResult.bonusReward)}</span>
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  {combatResult.playerDefeated && (
-                    <button
-                      type="button"
-                      onClick={handleCloseDefeatModal}
-                      style={{
-                        ...buttonStyle,
-                        marginTop: 8,
-                        padding: "8px 20px",
-                        fontSize: "1rem",
-                        fontWeight: "bold",
-                        background: "#444",
-                        color: "#fff",
-                        border: "2px solid #666",
-                        borderRadius: 8,
-                      }}
-                    >
-                      Close
-                    </button>
-                  )}
-                </div>
-                )}
-                {(() => {
-                  const pi = combatResult.playerIndex ?? 0;
-                  const mt = combatResult.monsterType ?? "Z";
-                  const pendingBonus =
-                    combatResult.won &&
-                    (combatResult.bonusRewardOptions?.length ?? 0) > 0 &&
-                    combatResult.bonusRewardApplied !== true;
-                  if (!pendingBonus || !bonusLootRevealed) return null;
-                  const opts = combatResult.bonusRewardOptions!;
-                  const n = opts.length;
-                  const idx = Math.max(0, Math.min(bonusLootSelectedIndex, n - 1));
-                  const current = opts[idx];
-                  return (
-                    <div className="combat-bonus-loot-panel" style={combatBonusLootPanelStyle}>
-                      <div className="combat-bonus-loot-title" style={combatBonusLootTitleStyle}>
-                        Bonus loot — pick one
-                      </div>
-                      <div
-                        className="combat-bonus-loot-carousel"
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          width: "100%",
-                        }}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", justifyContent: "center" }}>
-                          <button
-                            type="button"
-                            onClick={() => setBonusLootSelectedIndex((i) => (i - 1 + n) % n)}
-                            style={{
-                              ...buttonStyle,
-                              width: 28,
-                              height: 28,
-                              padding: 0,
-                              borderRadius: "50%",
-                              background: "#2a2a2e",
-                              color: "#00ffcc",
-                              border: "1px solid #00ff8866",
-                              fontSize: "1.1rem",
-                              flexShrink: 0,
-                            }}
-                            aria-label="Previous"
-                          >
-                            ‹
-                          </button>
-                          <div
-                            style={{
-                              flex: 1,
-                              minWidth: 0,
-                              maxWidth: 280,
-                              display: "flex",
-                              flexDirection: "column",
-                              alignItems: "center",
-                              gap: 2,
-                              padding: "0 2px",
-                            }}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => handlePickCombatBonusReward(pi, mt, current)}
-                              style={{
-                                ...buttonStyle,
-                                width: "100%",
-                                minHeight: COMBAT_BONUS_LOOT_PICK_MIN_HEIGHT_PX,
-                                boxSizing: "border-box",
-                                background: "#2a2a2e",
-                                color: "#ddd",
-                                border: "1px solid #555",
-                                borderRadius: 8,
-                                padding: "2px 6px 4px",
-                                fontWeight: "bold",
-                                display: "flex",
-                                flexDirection: "column",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                gap: 3,
-                                boxShadow: "0 0 6px rgba(0,0,0,0.3)",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: COMBAT_BONUS_LOOT_ICON_PX,
-                                  height: COMBAT_BONUS_LOOT_ICON_PX,
-                                  flex: "0 0 auto",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  overflow: "hidden",
-                                  lineHeight: 0,
-                                  filter: "drop-shadow(0 0 3px rgba(255,255,255,0.15))",
-                                }}
-                              >
-                                {getBonusRewardIcon(current, COMBAT_BONUS_LOOT_ICON_PX)}
-                              </div>
-                              <span
-                                style={{
-                                  fontSize: "0.78rem",
-                                  lineHeight: 1.15,
-                                  minHeight: "2.2em",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  textAlign: "center",
-                                  width: "100%",
-                                }}
-                              >
-                                {formatMonsterBonusRewardLabel(current)}
-                              </span>
-                            </button>
-                            <span style={{ fontSize: "0.6rem", color: "#889988", fontWeight: 600, lineHeight: 1 }}>
-                              {idx + 1} / {n}
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setBonusLootSelectedIndex((i) => (i + 1) % n)}
-                            style={{
-                              ...buttonStyle,
-                              width: 28,
-                              height: 28,
-                              padding: 0,
-                              borderRadius: "50%",
-                              background: "#2a2a2e",
-                              color: "#00ffcc",
-                              border: "1px solid #00ff8866",
-                              fontSize: "1.05rem",
-                              flexShrink: 0,
-                            }}
-                            aria-label="Next"
-                          >
-                            ›
-                          </button>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="combat-bonus-loot-skip"
-                        onClick={() => handlePickCombatBonusReward(pi, mt, "skip")}
-                        style={{
-                          ...buttonStyle,
-                          marginTop: 0,
-                          width: "100%",
-                          background: "#2a2a2e",
-                          color: "#888",
-                          border: "1px solid #444",
-                          borderRadius: 6,
-                          fontSize: "0.7rem",
-                          padding: "4px 8px",
-                        }}
-                      >
-                        Skip
-                      </button>
-                    </div>
-                  );
-                })()}
-                {!pendingCombatBonusPick && (
-                  <div style={{ fontSize: "0.72rem", color: "#666", marginTop: 12, textAlign: "center" }}>
-                    Closing…
-                  </div>
-                )}
-              </>
+              combatLandscapePostFight ? (
+                <div style={{ width: "100%", minHeight: 0, flexShrink: 0 }} aria-hidden />
+              ) : (
+                renderCombatOutcome()
+              )
             ) : null}
             </div>
             {combatState && lab && (() => {
