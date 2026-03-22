@@ -10,6 +10,9 @@ local.env
 .next/
 out/
 
+# itch.io packaging
+dist/
+
 # TypeScript incremental build cache
 tsconfig.tsbuildinfo
 

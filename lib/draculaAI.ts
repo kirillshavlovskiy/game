@@ -229,12 +229,27 @@ export function applyDraculaAttack(
   eliminated: Set<number>
 ): number | null {
   const targetIdx = dracula.targetPlayerIndex;
-  if (targetIdx == null) return null;
-  if (eliminated.has(targetIdx)) return null;
+  if (targetIdx == null) {
+    dracula.draculaState = "idle";
+    return null;
+  }
+  if (eliminated.has(targetIdx)) {
+    dracula.targetPlayerIndex = null;
+    dracula.draculaState = "idle";
+    return null;
+  }
   const target = players[targetIdx];
-  if (!target) return null;
+  if (!target) {
+    dracula.targetPlayerIndex = null;
+    dracula.draculaState = "idle";
+    return null;
+  }
   const dist = manhattan(dracula.x, dracula.y, target.x, target.y);
-  if (dist !== 1) return null;
+  if (dist !== 1) {
+    // Telegraph resolved but target moved away — leave telegraph or moveMonsters will skip forever
+    dracula.draculaState = "hunt";
+    return null;
+  }
   dracula.draculaCooldowns = dracula.draculaCooldowns ?? { teleport: 0, attack: 0 };
   dracula.draculaCooldowns.attack = DRACULA_CONFIG.attackCooldown;
   dracula.draculaState = "recover";

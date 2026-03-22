@@ -54,10 +54,14 @@
     .cell.goal { color: #ff4444; background: #2e1e1e; }
     .cell.player { color: #00ff88; background: #1e2e24; font-weight: bold; }
     .cell .marker {
-      width: 18px;
-      height: 18px;
+      width: 40px;
+      height: 40px;
       border-radius: 50%;
       margin: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
     }
     .cell .marker.active {
       box-shadow: 0 0 8px currentColor, 0 0 12px currentColor;

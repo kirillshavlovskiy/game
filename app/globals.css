@@ -12,6 +12,20 @@ body {
   background: #0a0a0f;
   color: #c0c0c0;
   overflow-x: auto;
+  /* CrazyGames: prevent tablet double-tap zoom and accidental game selection */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
 }
 
 button:hover:not(:disabled) {
@@ -42,6 +56,63 @@ button {
 /* Combat modal: hide dice hint */
 .combat-dice .hint {
   display: none;
+}
+
+/* Player hurt — inset red pulse on the maze grid only (inside .maze-wrap; not padding around it) */
+@keyframes mazeHitInsetFlash {
+  0% {
+    opacity: 0;
+    box-shadow: inset 0 0 0 transparent;
+  }
+  18% {
+    opacity: 1;
+    box-shadow: inset 0 0 48px rgba(220, 40, 40, 0.55), inset 0 0 20px rgba(255, 80, 80, 0.35);
+  }
+  100% {
+    opacity: 0;
+    box-shadow: inset 0 0 22px rgba(255, 40, 40, 0);
+  }
+}
+
+.maze-hit-flash-overlay {
+  pointer-events: none;
+  background: transparent;
+  animation: mazeHitInsetFlash 0.55s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .maze-hit-flash-overlay {
+    animation-duration: 0.22s;
+  }
+}
+
+/* Player hurt — red ring on that player’s maze avatar */
+@keyframes playerAvatarHitPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 60, 60, 0);
+  }
+  40% {
+    box-shadow:
+      0 0 0 2px rgba(255, 40, 40, 0.95),
+      0 0 16px 6px rgba(255, 60, 60, 0.65),
+      0 0 28px 10px rgba(255, 100, 80, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 60, 60, 0);
+  }
+}
+
+.cell .marker.player-avatar-hit-flash {
+  position: relative;
+  z-index: 4;
+  border-radius: 50%;
+  animation: playerAvatarHitPulse 0.55s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cell .marker.player-avatar-hit-flash {
+    animation-duration: 0.22s;
+  }
 }
 
 /* Bonus loot picker — panel lifts in; title / carousel / skip stagger (no double-fade on panel) */
@@ -156,10 +227,6 @@ button {
   }
 }
 
-.effect-toast {
-  animation: effectPop 0.5s ease-out;
-}
-
 /* Magic hole cell - dark pit */
 .cell.magic.hole {
   background: #12121a !important;
@@ -262,30 +329,6 @@ button {
   animation: collisionFlash 0.6s ease-out forwards;
   border-radius: 4px;
   pointer-events: none;
-}
-
-/* Turn change - banner pulse */
-@keyframes turnChangeBanner {
-  0% {
-    opacity: 0;
-    transform: translateY(-20px) scale(0.9);
-  }
-  15% {
-    opacity: 1;
-    transform: translateY(0) scale(1.05);
-  }
-  85% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-10px) scale(0.95);
-  }
-}
-
-.turn-change-banner {
-  animation: turnChangeBanner 1.8s ease-out forwards;
 }
 
 /* Monster collision - flash effect */

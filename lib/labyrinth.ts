@@ -20,20 +20,40 @@ export const TRAP_HARM = "!";
 export const TRAP_TELEPORT = "P";
 export const TRAP_SLOW = "Q"; // Q for slow (S conflicts with Start display)
 
-/** Artifact cell types (A1-A5) */
+/** Artifact cell types (A1–A8) */
 export const ARTIFACT_DICE = "A1";
 export const ARTIFACT_SHIELD = "A2";
 export const ARTIFACT_TELEPORT = "A3";
 export const ARTIFACT_REVEAL = "A4";
 export const ARTIFACT_HEALING = "A5";
+export const ARTIFACT_TORCH = "A6";
+export const ARTIFACT_HOLY_SWORD = "A7";
+export const ARTIFACT_HOLY_CROSS = "A8";
 
 export const MAX_ROUNDS = 15;
 export const DEFAULT_PLAYER_HP = 5;
 
-/** Clickable stored artifacts (inventory); order used in UI lists. */
-export type StoredArtifactKind = "dice" | "shield" | "teleport" | "reveal" | "healing";
+/** Clickable stored artifacts (inventory); order used in UI lists and “lose one” priority. */
+export type StoredArtifactKind =
+  | "dice"
+  | "shield"
+  | "teleport"
+  | "reveal"
+  | "healing"
+  | "torch"
+  | "holySword"
+  | "holyCross";
 
-export const STORED_ARTIFACT_ORDER: StoredArtifactKind[] = ["dice", "shield", "teleport", "reveal", "healing"];
+export const STORED_ARTIFACT_ORDER: StoredArtifactKind[] = [
+  "dice",
+  "shield",
+  "teleport",
+  "reveal",
+  "healing",
+  "torch",
+  "holySword",
+  "holyCross",
+];
 
 /** Short name — matches Diamonds / Bombs sidebar rows (`Name: n`). */
 export const STORED_ARTIFACT_TITLE: Record<StoredArtifactKind, string> = {
@@ -42,6 +62,9 @@ export const STORED_ARTIFACT_TITLE: Record<StoredArtifactKind, string> = {
   teleport: "Teleport",
   reveal: "Reveal",
   healing: "Heal",
+  torch: "Torch",
+  holySword: "Holy sword",
+  holyCross: "Holy cross",
 };
 
 /** One-line entry for `artifactsCollected` / logs (same wording everywhere). */
@@ -51,6 +74,9 @@ export const STORED_ARTIFACT_LINE: Record<StoredArtifactKind, string> = {
   teleport: "Teleport — map only (after combat)",
   reveal: "Reveal — hidden cells (map only)",
   healing: "Healing — +1 HP (map only)",
+  torch: "Torch — clears fog (map only)",
+  holySword: "Holy sword — same as dice: map roll for moves / combat +1 attack roll",
+  holyCross: "Holy cross — same as shield: +1 shield charge",
 };
 
 export const STORED_ARTIFACT_TOOLTIP: Record<StoredArtifactKind, string> = {
@@ -59,6 +85,9 @@ export const STORED_ARTIFACT_TOOLTIP: Record<StoredArtifactKind, string> = {
   teleport: "Spend: open teleport picker. Only on the map, not during combat.",
   reveal: "Spend: reveal a batch of hidden cells. Only on the map, not during combat.",
   healing: "Spend: restore 1 HP if below max. Only on the map, not during combat.",
+  torch: "Spend on map: light torch and clear fog zones. Not usable during combat.",
+  holySword: "Spend: same as dice — map: roll d6 for bonus moves; combat: +1 to your next attack roll.",
+  holyCross: "Spend: same as shield artifact — +1 shield charge (combat block).",
 };
 
 export function storedArtifactKindFromCell(cell: string): StoredArtifactKind | null {
@@ -67,6 +96,9 @@ export function storedArtifactKindFromCell(cell: string): StoredArtifactKind | n
   if (cell === ARTIFACT_TELEPORT) return "teleport";
   if (cell === ARTIFACT_REVEAL) return "reveal";
   if (cell === ARTIFACT_HEALING) return "healing";
+  if (cell === ARTIFACT_TORCH) return "torch";
+  if (cell === ARTIFACT_HOLY_SWORD) return "holySword";
+  if (cell === ARTIFACT_HOLY_CROSS) return "holyCross";
   return null;
 }
 
@@ -79,7 +111,7 @@ export function peekRevealBatchSize(lab: { hiddenCells: Map<unknown, unknown>; n
 
 /** True if this kind is only meant for the maze phase, not inside the combat modal. */
 export function isStoredArtifactMapOnly(kind: StoredArtifactKind): boolean {
-  return kind === "teleport" || kind === "reveal" || kind === "healing";
+  return kind === "teleport" || kind === "reveal" || kind === "healing" || kind === "torch";
 }
 
 /** One stored artifact per player at maze start — shows under combat "Skills & Artifacts" (cycles by seat). */
@@ -91,6 +123,9 @@ export function getDefaultStarterArtifacts(playerIndex: number): {
   artifactTeleport: number;
   artifactReveal: number;
   artifactHealing: number;
+  artifactTorch: number;
+  artifactHolySword: number;
+  artifactHolyCross: number;
 } {
   const base = {
     artifacts: 1,
@@ -100,8 +135,11 @@ export function getDefaultStarterArtifacts(playerIndex: number): {
     artifactTeleport: 0,
     artifactReveal: 0,
     artifactHealing: 0,
+    artifactTorch: 0,
+    artifactHolySword: 0,
+    artifactHolyCross: 0,
   };
-  switch (playerIndex % 5) {
+  switch (playerIndex % 8) {
     case 0:
       return {
         ...base,
@@ -131,6 +169,24 @@ export function getDefaultStarterArtifacts(playerIndex: number): {
         ...base,
         artifactReveal: 1,
         artifactsCollected: [STORED_ARTIFACT_LINE.reveal],
+      };
+    case 5:
+      return {
+        ...base,
+        artifactTorch: 1,
+        artifactsCollected: [STORED_ARTIFACT_LINE.torch],
+      };
+    case 6:
+      return {
+        ...base,
+        artifactHolySword: 1,
+        artifactsCollected: [STORED_ARTIFACT_LINE.holySword],
+      };
+    case 7:
+      return {
+        ...base,
+        artifactHolyCross: 1,
+        artifactsCollected: [STORED_ARTIFACT_LINE.holyCross],
       };
     default:
       return { ...base, artifactDice: 1, artifactsCollected: [STORED_ARTIFACT_LINE.dice] };
@@ -217,7 +273,16 @@ export function isTrapCell(cell: string): boolean {
 }
 
 export function isArtifactCell(cell: string): boolean {
-  return cell === ARTIFACT_DICE || cell === ARTIFACT_SHIELD || cell === ARTIFACT_TELEPORT || cell === ARTIFACT_REVEAL || cell === ARTIFACT_HEALING;
+  return (
+    cell === ARTIFACT_DICE ||
+    cell === ARTIFACT_SHIELD ||
+    cell === ARTIFACT_TELEPORT ||
+    cell === ARTIFACT_REVEAL ||
+    cell === ARTIFACT_HEALING ||
+    cell === ARTIFACT_TORCH ||
+    cell === ARTIFACT_HOLY_SWORD ||
+    cell === ARTIFACT_HOLY_CROSS
+  );
 }
 
 export function isMultiplierCell(cell: string): cell is "2" | "3" | "4" {
@@ -293,6 +358,9 @@ export class Labyrinth {
     artifactTeleport?: number;
     artifactReveal?: number;
     artifactHealing?: number;
+    artifactTorch?: number;
+    artifactHolySword?: number;
+    artifactHolyCross?: number;
     diceBonus?: number; // +1 to next roll from A1
     attackBonus?: number; // +1 attack from defeating Dracula
     catapultCharges?: number; // bonus from monster defeat - launch without standing on C cell
@@ -316,7 +384,7 @@ export class Labyrinth {
   bombCollectedBy: Map<string, Set<number>> = new Map();
   /** Magic cells used for teleport by player: key "x,y" -> Set of player indices who teleported from that cell */
   teleportUsedFrom: Map<string, Set<number>> = new Map();
-  /** Magic cells teleported TO by player: key "x,y" -> Set of player indices (prevents back-and-forth) */
+  /** Magic cells teleported TO by player, plus departure cells after a teleport: key "x,y" -> Set (blocks reusing that tile as destination; also blocks opening portal from that tile while standing on it) */
   teleportUsedTo: Map<string, Set<number>> = new Map();
   /** Catapult cells used by player: key "x,y" -> Set of player indices (one use per player per cell) */
   catapultUsedFrom: Map<string, Set<number>> = new Map();
@@ -487,7 +555,8 @@ export class Labyrinth {
 
     const mults: ("2" | "3" | "4")[] = ["2", "3", "4"];
     const multCount = Math.round(Math.max(2, Math.min(12, Math.floor(pathCells.length * 0.08 * helperMult))));
-    const magicCount = Math.round(Math.max(1, Math.min(16, Math.floor(pathCells.length * 0.06 * helperMult))));
+    /** Teleport targets are “nearest magic” only — need enough M tiles that rings of options exist */
+    const magicCount = Math.round(Math.max(3, Math.min(18, Math.floor(pathCells.length * 0.075 * helperMult))));
     const catapultCount = Math.round(Math.max(1, Math.min(10, Math.floor(pathCells.length * 0.04 * helperMult))));
     const jumpCount = Math.round(Math.max(1, Math.min(8, Math.floor(pathCells.length * 0.035 * helperMult))));
     const diamondCount = Math.round(Math.max(this.numPlayers * 2, Math.min(this.numPlayers * 6, Math.floor(pathCells.length * 0.1 * helperMult))));
@@ -527,10 +596,19 @@ export class Labyrinth {
     }
     const rest3d = rest3c.filter((c) => !trapCells.some((t) => t[0] === c[0] && t[1] === c[1]));
     const artifactCells = this._pickSpread(rest3d, Math.min(artifactCount, rest3d.length));
-    const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL, ARTIFACT_HEALING];
+    const artifactTypes = [
+      ARTIFACT_DICE,
+      ARTIFACT_SHIELD,
+      ARTIFACT_TELEPORT,
+      ARTIFACT_REVEAL,
+      ARTIFACT_HEALING,
+      ARTIFACT_TORCH,
+      ARTIFACT_HOLY_SWORD,
+      ARTIFACT_HOLY_CROSS,
+    ];
     for (let i = 0; i < artifactCells.length; i++) {
       const [x, y] = artifactCells[i];
-      this.grid[y][x] = artifactTypes[i % 5];
+      this.grid[y][x] = artifactTypes[i % artifactTypes.length];
     }
 
     for (let i = 0; i < multCells.length; i++) {
@@ -641,7 +719,7 @@ export class Labyrinth {
   }
 
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // Dracula first for initial fight
+    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor is Skeleton at (1,0))
     const intersections: [number, number][] = [];
     const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
@@ -903,22 +981,20 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
 
-    // Dracula at (1,0) adjacent to start — triggers combat as soon as player moves toward it
+    // Skeleton at (1,0) adjacent to start — triggers combat as soon as player moves toward it
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "V",
+          type: "K",
           patrolArea,
-          visionRadius: DRACULA_CONFIG.vision,
+          visionRadius: 3,
           spawnX: 1,
           spawnY: 0,
-          hp: getMonsterMaxHp("V"),
-          draculaState: "idle",
-          draculaCooldowns: { teleport: 0, attack: 0 },
-          targetPlayerIndex: null,
+          hp: getMonsterMaxHp("K"),
+          hasShield: true,
         });
       }
     }
@@ -970,22 +1046,20 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
-    // Dracula at (1,0) adjacent to start — triggers combat as soon as player moves toward it
+    // Skeleton at (1,0) adjacent to start — triggers combat as soon as player moves toward it
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "V",
+          type: "K",
           patrolArea,
-          visionRadius: DRACULA_CONFIG.vision,
+          visionRadius: 3,
           spawnX: 1,
           spawnY: 0,
-          hp: getMonsterMaxHp("V"),
-          draculaState: "idle",
-          draculaCooldowns: { teleport: 0, attack: 0 },
-          targetPlayerIndex: null,
+          hp: getMonsterMaxHp("K"),
+          hasShield: true,
         });
       }
     }
@@ -1032,12 +1106,21 @@ export class Labyrinth {
         }
       }
     }
-    const artifactTypes = [ARTIFACT_DICE, ARTIFACT_SHIELD, ARTIFACT_TELEPORT, ARTIFACT_REVEAL, ARTIFACT_HEALING];
-    const artifactCount = Math.min(5, pathCells.length);
+    const artifactTypes = [
+      ARTIFACT_DICE,
+      ARTIFACT_SHIELD,
+      ARTIFACT_TELEPORT,
+      ARTIFACT_REVEAL,
+      ARTIFACT_HEALING,
+      ARTIFACT_TORCH,
+      ARTIFACT_HOLY_SWORD,
+      ARTIFACT_HOLY_CROSS,
+    ];
+    const artifactCount = Math.min(8, pathCells.length);
     for (let i = 0; i < artifactCount && pathCells.length > 0; i++) {
       const idx = Math.floor(Math.random() * pathCells.length);
       const [x, y] = pathCells.splice(idx, 1)[0];
-      this.grid[y][x] = artifactTypes[i % 5];
+      this.grid[y][x] = artifactTypes[i % artifactTypes.length];
     }
     return true;
   }
@@ -1129,26 +1212,36 @@ export class Labyrinth {
     return false;
   }
 
-  getTeleportOptions(playerIndex = 0, maxOptions = 6, maxDistance?: number): [number, number][] {
+  /**
+   * Valid teleport destinations: MAGIC cells only among the **closest** Manhattan distance
+   * (shortest hop to any allowed magic tile). Tie-break: y then x for stable ordering.
+   * @param maxOptions Cap how many destinations the UI lists (random pick uses the same set).
+   */
+  getTeleportOptions(playerIndex = 0, maxOptions = 6, _maxDistanceLegacy?: number): [number, number][] {
     const p = this.players[playerIndex];
     if (!p) return [];
     const dist = (ax: number, ay: number) => Math.abs(ax - p.x) + Math.abs(ay - p.y);
-    const mapSize = Math.min(this.width, this.height);
-    const effectiveMaxDist = maxDistance ?? Math.max(10, Math.floor(mapSize * 0.5));
-    const magicCells: [number, number][] = [];
+    const candidates: [number, number][] = [];
     for (let y = 0; y < this.height; y++)
       for (let x = 0; x < this.width; x++)
         if (
           this.getCellAt(x, y) === MAGIC &&
           (x !== p.x || y !== p.y) &&
-          dist(x, y) <= effectiveMaxDist &&
           !this.hasUsedTeleportFrom(playerIndex, x, y) &&
           !this.hasTeleportedTo(playerIndex, x, y)
         )
-          magicCells.push([x, y]);
-    if (magicCells.length === 0) return [];
-    const sorted = [...magicCells].sort((a, b) => dist(a[0], a[1]) - dist(b[0], b[1]));
-    return sorted.slice(0, maxOptions);
+          candidates.push([x, y]);
+    if (candidates.length === 0) return [];
+    const minDist = Math.min(...candidates.map(([cx, cy]) => dist(cx, cy)));
+    const closestRing = candidates.filter(([cx, cy]) => dist(cx, cy) === minDist);
+    closestRing.sort((a, b) => {
+      const da = dist(a[0], a[1]);
+      const db = dist(b[0], b[1]);
+      if (da !== db) return da - db;
+      if (a[1] !== b[1]) return a[1] - b[1];
+      return a[0] - b[0];
+    });
+    return closestRing.slice(0, maxOptions);
   }
 
   getRandomTeleportDestination(playerIndex: number): [number, number] | null {

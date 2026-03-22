@@ -1,6 +1,6 @@
 "use client";
 
-/** Artifact icon variants mapped to /artifacts/* assets */
+/** Artifact icon variants mapped to `public/artifacts/*` (relative URLs for itch.io subpaths). */
 export type ArtifactIconVariant =
   | "bomb"
   | "diamond"
@@ -19,22 +19,25 @@ export type ArtifactIconVariant =
   | "artifact"; // Generic artifact/box (treasure from monster bonus)
 
 const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
-  bomb: "/artifacts/bmb.PNG",
-  diamond: "/artifacts/diamond.png",
-  shield: "/artifacts/shield.png",
-  magic: "/artifacts/teleport.PNG",
-  web: "/artifacts/spider web.PNG",
-  catapult: "/artifacts/ctplt.PNG",
-  dice: "/artifacts/teleport.PNG",
-  healing: "/artifacts/shield.png",
-  reveal: "/artifacts/teleport.PNG",
-  jump: "/artifacts/ctplt.PNG",
-  torch: "/artifacts/torch.PNG",
-  trap: "/artifacts/trap.PNG",
-  holySword: "/artifacts/holy-sword.png",
-  holyCross: "/artifacts/holy-cross.png",
-  artifact: "/artifacts/diamond.png",
+  bomb: "artifacts/bmb.PNG",
+  diamond: "artifacts/diamond.png",
+  shield: "artifacts/shield.png",
+  magic: "artifacts/teleport.PNG",
+  web: "artifacts/spider web.PNG",
+  catapult: "artifacts/ctplt.PNG",
+  dice: "artifacts/teleport.PNG",
+  healing: "artifacts/shield.png",
+  reveal: "artifacts/teleport.PNG",
+  jump: "artifacts/ctplt.PNG",
+  torch: "artifacts/torch.PNG",
+  trap: "artifacts/trap.PNG",
+  holySword: "artifacts/holy-sword.png",
+  holyCross: "artifacts/holy-cross.png",
+  artifact: "artifacts/diamond.png",
 };
+
+/** Emoji-based artifact rows (🎲 ❤️) only — keeps custom /artifacts images at full size */
+const EMOJI_ARTIFACT_SCALE = 0.5;
 
 interface ArtifactIconProps {
   variant: ArtifactIconVariant;
@@ -55,7 +58,7 @@ export function ArtifactIcon({ variant, size = 28, style, title, opacity = 1, cl
         title={title}
         className={className}
         style={{
-          fontSize: size * 0.9,
+          fontSize: size * 0.9 * EMOJI_ARTIFACT_SCALE,
           lineHeight: 1,
           display: "inline-flex",
           alignItems: "center",
@@ -67,6 +70,29 @@ export function ArtifactIcon({ variant, size = 28, style, title, opacity = 1, cl
         }}
       >
         🎲
+      </span>
+    );
+  }
+  if (variant === "healing") {
+    return (
+      <span
+        role="img"
+        aria-label="healing"
+        title={title}
+        className={className}
+        style={{
+          fontSize: size * 0.92 * EMOJI_ARTIFACT_SCALE,
+          lineHeight: 1,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: size,
+          height: size,
+          opacity,
+          ...style,
+        }}
+      >
+        ❤️
       </span>
     );
   }
