@@ -1,5 +1,5 @@
 /**
- * Next.js API route: generates a labyrinth via LLM in JSON format.
+ * Next.js API route: generates a Creep Labyrinth maze via LLM in JSON format.
  * Supports Anthropic (ANTHROPIC_API_KEY) or OpenAI (OPENAI_API_KEY).
  * Returns { grid } for instant map building.
  */

@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
+import { Creepster } from "next/font/google";
 import "./globals.css";
 
+const creepster = Creepster({ weight: "400", subsets: ["latin"] });
+
 export const metadata: Metadata = {
-  title: "Labyrinth - Maze Game",
-  description: "3D dice labyrinth maze game",
+  title: "Creep Labyrinth",
+  description: "Creep Labyrinth - 3D dice maze game",
 };
 
 export default function RootLayout({
@@ -13,7 +16,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className={creepster.className}>{children}</body>
     </html>
   );
 }

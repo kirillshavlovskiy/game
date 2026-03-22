@@ -1,6 +1,6 @@
-# Labyrinth - Phaser Battle
+# Creep Labyrinth - Phaser Battle
 
-Player vs monster battle gameplay, ported to Phaser 3. Start of the labyrinth game migration.
+Player vs monster battle gameplay, ported to Phaser 3. Start of the Creep Labyrinth game migration.
 
 ## Run
 

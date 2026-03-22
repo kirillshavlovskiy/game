@@ -1,4 +1,4 @@
-# Labyrinth Game
+# Creep Labyrinth
 
 A DOS-style maze game with random labyrinths, AI-generated mazes, and 3D dice.
 
