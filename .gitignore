@@ -19,6 +19,13 @@ tsconfig.tsbuildinfo
 # Dependencies
 node_modules/
 
+# Python venvs / local tooling (e.g. Pillow for cover art) — thousands of site-packages files
+.venv-cover/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
 # Backup
 game_backup_corrupted/
 
