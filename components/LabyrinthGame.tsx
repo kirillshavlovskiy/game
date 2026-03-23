@@ -6661,7 +6661,6 @@ export default function LabyrinthGame() {
                                   </div>
                                 );
                               }
-                              if (showCombatHintText) return null;
                               const hasShield = cp ? (cp.shield ?? 0) > 0 : false;
                               const hasStored = cp
                                 ? STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(cp, k) > 0)
