@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@3d-dice/dice-box-threejs": "^0.0.12",
+    "@fontsource/creepster": "^5.2.7",
     "next": "^14.2.35",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

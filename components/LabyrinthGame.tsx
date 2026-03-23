@@ -680,7 +680,7 @@ function rollCombatSurprise(): MonsterSurpriseState {
 /** Lava Elemental sprite states from manifest */
 function getLavaElementalSprite(type: MonsterType, state: "neutral" | "attacking" | "hurt" | "defeated" | "angry" | "enraged"): string | null {
   if (type !== "L") return null;
-  return `/monsters/lava/${state}.png`;
+  return `monsters/lava/${state}.png`;
 }
 
 /**
@@ -702,59 +702,59 @@ function monsterCalmPortraitFromHp(curHp: number, maxHp: number): "idle" | "reco
 /** Unified monster sprite: returns image path for monsters with assets, null for emoji fallback. */
 function getMonsterSprite(type: MonsterType, state: MonsterSpriteState): string | null {
   if (type === "L") {
-    if (state === "neutral" || state === "idle" || state === "hunt") return "/monsters/lava/neutral.png";
-    if (state === "attack" || state === "rolling") return "/monsters/lava/attacking.png";
-    if (state === "angry") return "/monsters/lava/enraged.png";
-    if (state === "hurt") return "/monsters/lava/hurt.png";
-    if (state === "defeated") return "/monsters/lava/defeated.png";
-    if (state === "recover") return "/monsters/lava/neutral.png";
-    return "/monsters/lava/neutral.png";
+    if (state === "neutral" || state === "idle" || state === "hunt") return "monsters/lava/neutral.png";
+    if (state === "attack" || state === "rolling") return "monsters/lava/attacking.png";
+    if (state === "angry") return "monsters/lava/enraged.png";
+    if (state === "hurt") return "monsters/lava/hurt.png";
+    if (state === "defeated") return "monsters/lava/defeated.png";
+    if (state === "recover") return "monsters/lava/neutral.png";
+    return "monsters/lava/neutral.png";
   }
   if (type === "V") {
-    if (state === "neutral" || state === "idle") return "/monsters/dracula/idle.png";
-    if (state === "hunt") return "/monsters/dracula/hunt.png";
-    if (state === "attack" || state === "rolling") return "/monsters/dracula/attack.png";
-    if (state === "angry") return "/monsters/dracula/hunt.png";
-    if (state === "hurt") return "/monsters/dracula/hurt.png";
-    if (state === "recover") return "/monsters/dracula/recover.png";
-    if (state === "defeated") return "/monsters/dracula/defeated.png";
-    return "/monsters/dracula/idle.png";
+    if (state === "neutral" || state === "idle") return "monsters/dracula/idle.png";
+    if (state === "hunt") return "monsters/dracula/hunt.png";
+    if (state === "attack" || state === "rolling") return "monsters/dracula/attack.png";
+    if (state === "angry") return "monsters/dracula/hunt.png";
+    if (state === "hurt") return "monsters/dracula/hurt.png";
+    if (state === "recover") return "monsters/dracula/recover.png";
+    if (state === "defeated") return "monsters/dracula/defeated.png";
+    return "monsters/dracula/idle.png";
   }
   if (type === "Z") {
-    if (state === "neutral" || state === "idle") return "/monsters/zombie/idle.png";
-    if (state === "hunt") return "/monsters/zombie/hunt.png";
-    if (state === "attack" || state === "angry" || state === "rolling") return "/monsters/zombie/attack.png";
-    if (state === "hurt") return "/monsters/zombie/hurt.png";
-    if (state === "recover") return "/monsters/zombie/recover.png";
-    if (state === "defeated") return "/monsters/zombie/defeated.png";
-    return "/monsters/zombie/idle.png";
+    if (state === "neutral" || state === "idle") return "monsters/zombie/idle.png";
+    if (state === "hunt") return "monsters/zombie/hunt.png";
+    if (state === "attack" || state === "angry" || state === "rolling") return "monsters/zombie/attack.png";
+    if (state === "hurt") return "monsters/zombie/hurt.png";
+    if (state === "recover") return "monsters/zombie/recover.png";
+    if (state === "defeated") return "monsters/zombie/defeated.png";
+    return "monsters/zombie/idle.png";
   }
   if (type === "G") {
-    if (state === "neutral" || state === "idle") return "/monsters/ghost/idle.png";
-    if (state === "hunt") return "/monsters/ghost/hunt.png";
-    if (state === "attack" || state === "angry" || state === "rolling") return "/monsters/ghost/attack.png";
-    if (state === "hurt") return "/monsters/ghost/hurt.png";
-    if (state === "recover") return "/monsters/ghost/recover.png";
-    if (state === "defeated") return "/monsters/ghost/defeated.png";
-    return "/monsters/ghost/idle.png";
+    if (state === "neutral" || state === "idle") return "monsters/ghost/idle.png";
+    if (state === "hunt") return "monsters/ghost/hunt.png";
+    if (state === "attack" || state === "angry" || state === "rolling") return "monsters/ghost/attack.png";
+    if (state === "hurt") return "monsters/ghost/hurt.png";
+    if (state === "recover") return "monsters/ghost/recover.png";
+    if (state === "defeated") return "monsters/ghost/defeated.png";
+    return "monsters/ghost/idle.png";
   }
   if (type === "K") {
-    if (state === "neutral" || state === "idle") return "/monsters/skeleton/idle.png";
-    if (state === "hunt") return "/monsters/skeleton/hunt.png";
-    if (state === "attack" || state === "angry" || state === "rolling") return "/monsters/skeleton/attack.png";
-    if (state === "hurt") return "/monsters/skeleton/hurt.png";
-    if (state === "recover") return "/monsters/skeleton/recover.png";
-    if (state === "defeated") return "/monsters/skeleton/defeated.png";
-    return "/monsters/skeleton/idle.png";
+    if (state === "neutral" || state === "idle") return "monsters/skeleton/idle.png";
+    if (state === "hunt") return "monsters/skeleton/hunt.png";
+    if (state === "attack" || state === "angry" || state === "rolling") return "monsters/skeleton/attack.png";
+    if (state === "hurt") return "monsters/skeleton/hurt.png";
+    if (state === "recover") return "monsters/skeleton/recover.png";
+    if (state === "defeated") return "monsters/skeleton/defeated.png";
+    return "monsters/skeleton/idle.png";
   }
   if (type === "S") {
-    if (state === "neutral" || state === "idle") return "/monsters/spider/idle.png";
-    if (state === "hunt") return "/monsters/spider/hunt.png";
-    if (state === "attack" || state === "angry" || state === "rolling") return "/monsters/spider/attack.png";
-    if (state === "hurt") return "/monsters/spider/hurt.png";
-    if (state === "recover") return "/monsters/spider/recover.png";
-    if (state === "defeated") return "/monsters/spider/defeated.png";
-    return "/monsters/spider/idle.png";
+    if (state === "neutral" || state === "idle") return "monsters/spider/idle.png";
+    if (state === "hunt") return "monsters/spider/hunt.png";
+    if (state === "attack" || state === "angry" || state === "rolling") return "monsters/spider/attack.png";
+    if (state === "hurt") return "monsters/spider/hurt.png";
+    if (state === "recover") return "monsters/spider/recover.png";
+    if (state === "defeated") return "monsters/spider/defeated.png";
+    return "monsters/spider/idle.png";
   }
   return null;
 }
@@ -776,12 +776,12 @@ function getCombatResultMonsterSpriteState(
 
 /** Idle sprite for monsters with all 6 states in assets. Use instead of emoji on grid etc. */
 const MONSTER_IDLE_PATHS: Partial<Record<MonsterType, string>> = {
-  L: "/monsters/lava/neutral.png",
-  V: "/monsters/dracula/idle.png",
-  Z: "/monsters/zombie/idle.png",
-  G: "/monsters/ghost/idle.png",
-  K: "/monsters/skeleton/idle.png",
-  S: "/monsters/spider/idle.png",
+  L: "monsters/lava/neutral.png",
+  V: "monsters/dracula/idle.png",
+  Z: "monsters/zombie/idle.png",
+  G: "monsters/ghost/idle.png",
+  K: "monsters/skeleton/idle.png",
+  S: "monsters/spider/idle.png",
 };
 function getMonsterIdleSprite(type: MonsterType): string | null {
   return MONSTER_IDLE_PATHS[type] ?? null;
@@ -989,6 +989,9 @@ export default function LabyrinthGame() {
     attackTotal: number;
     monsterDefense: number;
     summary: string;
+    /** After glancing hit: monster HP so modal shows correct value (avoids labRef timing) */
+    monsterHp?: number;
+    monsterMaxHp?: number;
   } | null>(null);
   /** Monster sprite phase after taking damage: hurt → recover → ready (before next roll) */
   const [combatRecoveryPhase, setCombatRecoveryPhase] = useState<"hurt" | "recover" | "ready">("ready");
@@ -1083,6 +1086,10 @@ export default function LabyrinthGame() {
   const triggerRoundEndRef = useRef<() => void>(() => {});
   const currentPlayerCellRef = useRef<HTMLDivElement | null>(null);
   const expandDesktopControlsRef = useRef<() => void>(() => {});
+  const mazeWrapRef = useRef<HTMLDivElement>(null);
+  const pinchStartRef = useRef<{ distance: number; zoom: number } | null>(null);
+  const mazeZoomRef = useRef(mazeZoom);
+  mazeZoomRef.current = mazeZoom;
 
   const expandDesktopControls = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -1106,6 +1113,57 @@ export default function LabyrinthGame() {
     return () => {
       mqNarrow.removeEventListener("change", sync);
       mqLandscapeShort.removeEventListener("change", sync);
+    };
+  }, []);
+
+  /** Pinch-to-zoom on map (iOS-style gestures); wheel+ctrl for trackpad pinch. */
+  useEffect(() => {
+    const el = mazeWrapRef.current;
+    if (!el) return;
+    const MIN_ZOOM = 0.5;
+    const MAX_ZOOM = 2;
+
+    const touchDistance = (touches: TouchList) =>
+      Math.hypot(touches[1].clientX - touches[0].clientX, touches[1].clientY - touches[0].clientY);
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        pinchStartRef.current = { distance: touchDistance(e.touches), zoom: mazeZoomRef.current };
+      }
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 && pinchStartRef.current) {
+        e.preventDefault();
+        const start = pinchStartRef.current;
+        const scale = touchDistance(e.touches) / start.distance;
+        const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, start.zoom * scale));
+        setMazeZoom(next);
+      }
+    };
+    const onTouchEndOrCancel = (e: TouchEvent) => {
+      if (e.touches.length < 2) pinchStartRef.current = null;
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = -Math.sign(e.deltaY) * 0.15;
+        setMazeZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z + delta)));
+      }
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEndOrCancel, { passive: true });
+    el.addEventListener("touchcancel", onTouchEndOrCancel, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: false });
+
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEndOrCancel);
+      el.removeEventListener("touchcancel", onTouchEndOrCancel);
+      el.removeEventListener("wheel", onWheel);
     };
   }, []);
 
@@ -2125,11 +2183,16 @@ export default function LabyrinthGame() {
                 : `${glancePart}${
                     !result.won && (result.damage ?? 0) > 0 ? `You took ${result.damage} HP. ` : ""
                   }Roll again or run!`;
+        const glancingHp =
+          (result.glancingDamage ?? 0) > 0 && !result.won
+            ? { monsterHp: Math.max(0, monsterHp - (result.glancingDamage ?? 0)), monsterMaxHp: maxHpM }
+            : {};
         setCombatFooterSnapshot({
           playerRoll: result.playerRoll,
           attackTotal: result.attackTotal,
           monsterDefense: result.monsterDefense,
           summary,
+          ...glancingHp,
         });
         setCombatRecoveryPhase("hurt");
         combatHasRolledRef.current = false;
@@ -4866,8 +4929,8 @@ export default function LabyrinthGame() {
           onClick={(e) => e.stopPropagation()}
         >
             {(() => {
-              /** Same frame as flushSync combat updates: ref holds committed maze before React re-renders `lab`. */
-              const labForCombatFaceoff = labRef.current ?? lab;
+              /** Prefer lab (React state) for monster HP — ensures post-roll updates (e.g. glancing damage) show correctly in the same render. */
+              const labForCombatFaceoff = lab ?? labRef.current;
               const headerPi = combatState?.playerIndex ?? combatResult?.playerIndex ?? 0;
               const headerMt = combatState?.monsterType ?? combatResult?.monsterType;
               const headerMonsterName = headerMt ? getMonsterName(headerMt) : "Monster";
@@ -4886,9 +4949,14 @@ export default function LabyrinthGame() {
                   }
                   if (combatState && labForCombatFaceoff) {
                     const maxHp = getMonsterMaxHp(combatState.monsterType);
-                    const m = labForCombatFaceoff.monsters[combatState.monsterIndex];
-                    const cur = m ? (m.hp ?? maxHp) : maxHp;
-                    return monsterCalmPortraitFromHp(cur, maxHp);
+                    const cur =
+                      combatFooterSnapshot?.monsterHp != null && combatFooterSnapshot?.monsterMaxHp != null
+                        ? combatFooterSnapshot.monsterHp
+                        : (() => {
+                            const m = labForCombatFaceoff.monsters[combatState.monsterIndex];
+                            return m ? (m.hp ?? maxHp) : maxHp;
+                          })();
+                    return monsterCalmPortraitFromHp(cur, combatFooterSnapshot?.monsterMaxHp ?? maxHp);
                   }
                   return combatMonsterStance;
                 }
@@ -4905,9 +4973,14 @@ export default function LabyrinthGame() {
               let monsterCurHp = 1;
               if (headerMt) {
                 if (inActiveFight && labForCombatFaceoff && combatState && !combatResult) {
-                  monsterMaxHp = Math.max(1, getMonsterMaxHp(combatState.monsterType));
-                  const monster = labForCombatFaceoff.monsters[combatState.monsterIndex];
-                  monsterCurHp = Math.min(monsterMaxHp, Math.max(0, monster?.hp ?? monsterMaxHp));
+                  if (combatFooterSnapshot?.monsterHp != null && combatFooterSnapshot?.monsterMaxHp != null) {
+                    monsterCurHp = combatFooterSnapshot.monsterHp;
+                    monsterMaxHp = combatFooterSnapshot.monsterMaxHp;
+                  } else {
+                    monsterMaxHp = Math.max(1, getMonsterMaxHp(combatState.monsterType));
+                    const monster = labForCombatFaceoff.monsters[combatState.monsterIndex];
+                    monsterCurHp = Math.min(monsterMaxHp, Math.max(0, monster?.hp ?? monsterMaxHp));
+                  }
                 } else if (combatResult) {
                   monsterMaxHp = Math.max(1, combatResult.monsterMaxHp ?? getMonsterMaxHp(headerMt));
                   monsterCurHp = Math.min(monsterMaxHp, Math.max(0, combatResult.monsterHp ?? monsterMaxHp));
@@ -5116,7 +5189,8 @@ export default function LabyrinthGame() {
                           <div
                             style={{
                               width: "100%",
-                              minHeight: COMBAT_LANDSCAPE_CENTER_DICE_MAX_H,
+                              minWidth: 0,
+                              minHeight: 0,
                               flexShrink: 0,
                             }}
                             aria-hidden
@@ -5403,6 +5477,7 @@ export default function LabyrinthGame() {
                     {lab &&
                       combatState &&
                       !rolling &&
+                      !showCombatHintText &&
                       (() => {
                         const pi = combatState.playerIndex;
                         const cp = lab.players[pi] ?? lab.players[headerPi];
@@ -6029,6 +6104,7 @@ export default function LabyrinthGame() {
                                   </div>
                                 );
                               }
+                              if (showCombatHintText) return null;
                               const hasShield = cp ? (cp.shield ?? 0) > 0 : false;
                               const hasStored = cp
                                 ? STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(cp, k) > 0)
@@ -6561,6 +6637,7 @@ export default function LabyrinthGame() {
             : {}),
         }}
       >
+        {!isLandscapeCompact && (
         <div
           style={{
             ...mazeZoomControlsStyle,
@@ -6596,11 +6673,13 @@ export default function LabyrinthGame() {
             </div>
           )}
         </div>
+        )}
         <div
+          ref={mazeWrapRef}
           className="maze-wrap"
           style={{
             ...mazeWrapStyle,
-            marginTop: MAZE_MARGIN,
+            marginTop: isLandscapeCompact ? 0 : MAZE_MARGIN,
             position: "relative",
           }}
         >

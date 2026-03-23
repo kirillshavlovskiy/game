@@ -15,7 +15,12 @@ function whenPageFullyLoaded(cb: () => void) {
 
 /**
  * Loads and initializes the CrazyGames HTML5 v3 SDK, then reports loading and gameplay events.
- * Skips all calls when `environment === "disabled"` (e.g. Vercel or non-CrazyGames domains).
+ *
+ * Before `init()`, `SDK.environment` is `"uninitialized"`. After `init()`, it becomes `"local"`,
+ * `"crazygames"`, or `"disabled"`. On hosts that are not localhost / 127.0.0.1 / CrazyGames,
+ * the SDK is disabled — calling `game.*` then throws (often mistaken for "401"). We only
+ * call `game.loadingStart` / `gameplayStart` when not disabled. For LAN or custom hostnames,
+ * open the game with `?useLocalSdk=true` or use http://127.0.0.1 — see CrazyGames HTML5 docs.
  */
 export function CrazyGamesSdk() {
   useEffect(() => {
@@ -29,16 +34,11 @@ export function CrazyGamesSdk() {
       if (cancelled || cgsdkBootstrapStarted) return;
 
       const sdk = window.CrazyGames?.SDK;
-      if (!sdk) {
+      if (!sdk || typeof sdk.init !== "function") {
         attempt += 1;
         if (attempt < maxAttempts) {
           window.setTimeout(tryBootstrap, 100);
         }
-        return;
-      }
-
-      if (sdk.environment === "disabled") {
-        cgsdkBootstrapStarted = true;
         return;
       }
 
@@ -48,6 +48,16 @@ export function CrazyGamesSdk() {
         try {
           await sdk.init();
           if (cancelled) return;
+
+          const env = sdk.environment;
+          if (env === "disabled") {
+            console.info(
+              "[CrazyGames] SDK is disabled on this origin. Use http://localhost or http://127.0.0.1, " +
+                "add ?useLocalSdk=true to the URL, or test on crazygames.com / the developer preview."
+            );
+            return;
+          }
+
           sdk.game.loadingStart();
           whenPageFullyLoaded(() => {
             if (cancelled) return;
