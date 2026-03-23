@@ -5,8 +5,8 @@ import { CrazyGamesSdk } from "@/components/CrazyGamesSdk";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Creep Labyrinth",
-  description: "Creep Labyrinth - 3D dice maze game",
+  title: "Dice Of The Damned",
+  description: "Dice Of The Damned - 3D dice maze game",
 };
 
 export default function RootLayout({

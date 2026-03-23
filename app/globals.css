@@ -28,12 +28,67 @@ textarea,
   user-select: text;
 }
 
-button:hover:not(:disabled) {
-  background: #00cc6a !important;
+/* Default primary-ish buttons: ember hover (replaces legacy green) */
+button:hover:not(:disabled):not(.start-menu-cta):not(.start-menu-avatar-btn):not(.header-menu-trigger):not(.header-menu-dropdown-secondary):not(.secondary) {
+  background: linear-gradient(180deg, #ff8f68 0%, #b02816 100%) !important;
+  color: #140605 !important;
+  border-color: rgba(255, 190, 150, 0.45) !important;
+  filter: brightness(1.04);
+}
+
+/* Primary CTA — same ember gradient, slightly stronger brighten */
+button.start-menu-cta:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ff9a72 0%, #c03018 100%) !important;
+  border-color: rgba(255, 200, 160, 0.55) !important;
+  filter: brightness(1.06);
+}
+
+button.start-menu-avatar-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+  box-shadow: 0 0 0 1px rgba(255, 152, 103, 0.35);
+}
+
+button.header-menu-trigger:hover:not(:disabled) {
+  background: rgba(36, 16, 14, 0.98) !important;
+  border-color: rgba(255, 152, 103, 0.5) !important;
+  color: #ffd4c4 !important;
+}
+
+button.header-menu-trigger:focus-visible {
+  outline: 2px solid rgba(255, 152, 103, 0.85);
+  outline-offset: 2px;
+}
+
+button.header-menu-dropdown-secondary:hover:not(:disabled) {
+  background: rgba(36, 16, 14, 0.98) !important;
+  border-color: rgba(255, 152, 103, 0.5) !important;
+  color: #ffd4c4 !important;
+}
+
+.header-menu-dropdown select:focus-visible,
+.header-menu-dropdown input:focus-visible {
+  outline: 2px solid rgba(255, 152, 103, 0.85);
+  outline-offset: 2px;
+}
+
+.start-menu-panel-enter select,
+.start-menu-panel-enter input[type="text"],
+.start-menu-panel-enter input[type="number"] {
+  accent-color: #dd5f36;
+}
+
+.start-menu-panel-enter select:focus-visible,
+.start-menu-panel-enter input[type="text"]:focus-visible,
+.start-menu-panel-enter input[type="number"]:focus-visible {
+  outline: 2px solid rgba(255, 152, 103, 0.95);
+  outline-offset: 2px;
+  border-color: rgba(255, 152, 103, 0.65) !important;
 }
 
 button.secondary:hover:not(:disabled) {
-  background: #555 !important;
+  background: rgba(40, 18, 16, 0.96) !important;
+  border-color: rgba(255, 152, 103, 0.42) !important;
+  color: #f0d0c4 !important;
 }
 
 button:disabled {
@@ -46,10 +101,12 @@ button {
   touch-action: manipulation;
 }
 
-/* Dice3D: ensure canvas fills container */
+/*
+ * Dice3D / dice-box-threejs: do NOT force width/height with !important.
+ * That overrides WebGLRenderer inline pixel sizes; with a flex parent still
+ * resolving to 0px height, the canvas stays invisible. Renderer sizing wins.
+ */
 .dice-tray [id^="dice-scene-"] canvas {
-  width: 100% !important;
-  height: 100% !important;
   display: block;
 }
 
@@ -415,4 +472,99 @@ button {
 
 .cell.cell-collision {
   animation: collisionFlash 0.6s ease-out forwards;
+}
+
+/* Start menu: loading spinner (ember palette, matches Dracula menu) */
+@keyframes startMenuLoadingSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.start-menu-loading-spinner {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid rgba(200, 90, 60, 0.22);
+  border-top-color: #e86a48;
+  animation: startMenuLoadingSpin 0.88s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .start-menu-loading-spinner {
+    animation: none;
+    border-top-color: rgba(232, 106, 72, 0.65);
+  }
+}
+
+/* Start menu: entrance after loading (panel = motion; children = staggered fade) */
+@keyframes startMenuPanelAppear {
+  from {
+    transform: translateY(26px) scale(0.94);
+  }
+  to {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes startMenuChildReveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.start-menu-panel-enter {
+  animation: startMenuPanelAppear 0.58s cubic-bezier(0.25, 0.9, 0.32, 1) both;
+  transform-origin: center top;
+}
+
+.start-menu-panel-enter > h1,
+.start-menu-panel-enter > p,
+.start-menu-panel-enter > div {
+  opacity: 0;
+  animation: startMenuChildReveal 0.48s cubic-bezier(0.25, 0.9, 0.32, 1) forwards;
+}
+
+.start-menu-panel-enter > h1 {
+  animation-delay: 0.07s;
+}
+
+.start-menu-panel-enter > p {
+  animation-delay: 0.13s;
+}
+
+.start-menu-panel-enter > div:nth-of-type(1) {
+  animation-delay: 0.19s;
+}
+
+.start-menu-panel-enter > div:nth-of-type(2) {
+  animation-delay: 0.26s;
+}
+
+@keyframes startMenuPanelAppearReduced {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .start-menu-panel-enter {
+    animation: startMenuPanelAppearReduced 0.28s ease-out both;
+  }
+
+  .start-menu-panel-enter > h1,
+  .start-menu-panel-enter > p,
+  .start-menu-panel-enter > div {
+    opacity: 1;
+    animation: none;
+    transform: none;
+  }
 }

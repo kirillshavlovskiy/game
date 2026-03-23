@@ -6,6 +6,18 @@ const combatLog = (...args: unknown[]) => {
   if (COMBAT_LOG) console.log("[COMBAT]", ...args);
 };
 
+/** Start menu + loading screen art (`public/menu/`) */
+const START_MENU_COVER_BG = "/menu/dracula-cover-bg.png";
+const START_MENU_LOGO_SRC = "/menu/dice-title-logo.png";
+/** Title / logo reds (gradient ~#ff9867 → #8e2215) — menu chrome + selection */
+const START_MENU_ACCENT_BRIGHT = "#ff9867";
+const START_MENU_BORDER = "rgba(221, 95, 54, 0.55)";
+const START_MENU_BORDER_MUTE = "rgba(160, 65, 48, 0.45)";
+const START_MENU_SELECTED_FILL = "rgba(221, 95, 54, 0.2)";
+const START_MENU_CTRL_BG = "#1a1214";
+/** In-game header + metadata-aligned display name */
+const GAME_DISPLAY_TITLE = "Dice Of The Damned";
+
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
@@ -291,6 +303,16 @@ function storedArtifactCount(
     case "holyCross":
       return p.artifactHolyCross ?? 0;
   }
+}
+
+/** Any stored stack the combat modal may show (map-only kinds are maze-phase only — see `isStoredArtifactMapOnly`). */
+function hasCombatVisibleStoredArtifacts(
+  p: Parameters<typeof storedArtifactCount>[0]
+): boolean {
+  if (!p) return false;
+  return STORED_ARTIFACT_ORDER.some(
+    (k) => !isStoredArtifactMapOnly(k) && storedArtifactCount(p, k) > 0
+  );
 }
 
 function storedArtifactIconVariant(kind: StoredArtifactKind): ArtifactIconVariant {
@@ -1109,6 +1131,9 @@ export default function LabyrinthGame() {
   const [mobileDockInsetPx, setMobileDockInsetPx] = useState(0);
   const mobileDockTouchStartY = useRef<number>(0);
   const [gameStarted, setGameStarted] = useState(false);
+  /** Preload Dracula + logo, then reveal start menu (skipped on return-to-menu after first load). */
+  const [startMenuReady, setStartMenuReady] = useState(false);
+  const startMenuPreloadedRef = useRef(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   /** While header menu or settings modal is open — freeze map gameplay (monsters, moves, timers). */
@@ -1195,6 +1220,38 @@ export default function LabyrinthGame() {
       mqLandscapeShort.removeEventListener("change", sync);
     };
   }, []);
+
+  useEffect(() => {
+    if (gameStarted) return;
+    if (startMenuPreloadedRef.current) {
+      setStartMenuReady(true);
+      return;
+    }
+    let cancelled = false;
+    let timeoutId: number | undefined;
+    const t0 = Date.now();
+    const loadImage = (src: string) =>
+      new Promise<void>((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve();
+        img.onerror = () => resolve();
+        img.src = src;
+      });
+    Promise.all([loadImage(START_MENU_COVER_BG), loadImage(START_MENU_LOGO_SRC)]).then(() => {
+      if (cancelled) return;
+      const minMs = 700;
+      const wait = Math.max(0, minMs - (Date.now() - t0));
+      timeoutId = window.setTimeout(() => {
+        if (cancelled) return;
+        startMenuPreloadedRef.current = true;
+        setStartMenuReady(true);
+      }, wait);
+    });
+    return () => {
+      cancelled = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [gameStarted]);
 
   /** Pinch-to-zoom on map (iOS-style gestures); wheel+ctrl for trackpad pinch. Same behavior portrait/landscape — not tied to `isLandscapeCompact`. Re-binds when a maze exists (ref is absent on first mount before Start / while generating). */
   useEffect(() => {
@@ -4066,6 +4123,22 @@ export default function LabyrinthGame() {
   }, []);
 
   if (!gameStarted) {
+    if (!startMenuReady) {
+      return (
+        <div
+          style={{
+            ...startModalOverlayStyle,
+            justifyContent: "center",
+            alignItems: "center",
+          }}
+        >
+          <div role="status" aria-live="polite" style={startMenuLoadingInnerStyle}>
+            <div className="start-menu-loading-spinner" aria-hidden />
+            <p style={startMenuLoadingTextStyle}>Loading</p>
+          </div>
+        </div>
+      );
+    }
   const startModalRowBase: React.CSSProperties = isMobile
     ? { ...modalRowStyle, flexDirection: "column", alignItems: "stretch", gap: 6, marginBottom: "0.85rem" }
     : modalRowStyle;
@@ -4079,10 +4152,16 @@ export default function LabyrinthGame() {
                 justifyContent: "center",
                 paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
               }
-            : {}),
+            : {
+                justifyContent: "flex-start",
+                alignItems: "center",
+                paddingLeft: "clamp(16px, 4vw, 56px)",
+                paddingRight: "clamp(12px, 2vw, 28px)",
+              }),
         }}
       >
         <div
+          className="start-menu-panel-enter"
           style={{
             ...startModalStyle,
             ...(isMobile
@@ -4095,13 +4174,20 @@ export default function LabyrinthGame() {
               : {}),
           }}
         >
-          <h1
-            style={{
-              ...startModalTitleStyle,
-              ...(isMobile ? { fontSize: "1.5rem", letterSpacing: 2, lineHeight: 1.2 } : {}),
-            }}
-          >
-            CREEP LABYRINTH
+          <h1 style={startModalTitleWrapStyle}>
+            <img
+              src={START_MENU_LOGO_SRC}
+              alt={GAME_DISPLAY_TITLE}
+              width={640}
+              height={200}
+              style={{
+                width: "min(100%, 420px)",
+                height: "auto",
+                display: "block",
+                margin: "0 auto",
+                filter: "drop-shadow(0 4px 22px rgba(0,0,0,0.9))",
+              }}
+            />
           </h1>
           <p
             style={{
@@ -4184,6 +4270,7 @@ export default function LabyrinthGame() {
                         <button
                           key={av}
                           type="button"
+                          className="start-menu-avatar-btn"
                           onClick={() => {
                             setPlayerAvatars((prev) => {
                               const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length])];
@@ -4197,9 +4284,15 @@ export default function LabyrinthGame() {
                             padding: 0,
                             fontSize: AVATAR_PICKER_FONT,
                             lineHeight: 1,
-                            border: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}` : "1px solid #444",
+                            border:
+                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av
+                                ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
+                                : `1px solid ${START_MENU_BORDER_MUTE}`,
                             borderRadius: 6,
-                            background: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? "rgba(0,255,136,0.2)" : "#1a1a24",
+                            background:
+                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av
+                                ? START_MENU_SELECTED_FILL
+                                : START_MENU_CTRL_BG,
                             cursor: "pointer",
                             display: "inline-flex",
                             alignItems: "center",
@@ -4239,6 +4332,7 @@ export default function LabyrinthGame() {
           <div style={startModalButtonsStyle}>
             <button
               type="button"
+              className="start-menu-cta"
               onClick={() => {
                 newGame();
                 setGameStarted(true);
@@ -4720,18 +4814,34 @@ export default function LabyrinthGame() {
           style={
             isMobile
               ? {
-                  ...headerTitleStyle,
-                  fontSize: "1.05rem",
+                  ...headerTitleWrapStyle,
                   flex: 1,
                   minWidth: 0,
                   overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
                 }
-              : headerTitleStyle
+              : headerTitleWrapStyle
           }
         >
-          CREEP LABYRINTH
+          <img
+            src={START_MENU_LOGO_SRC}
+            alt={GAME_DISPLAY_TITLE}
+            width={640}
+            height={200}
+            draggable={false}
+            style={
+              isMobile
+                ? {
+                    ...headerLogoImgStyle,
+                    maxHeight: 40,
+                    maxWidth: "100%",
+                  }
+                : {
+                    ...headerLogoImgStyle,
+                    maxHeight: 48,
+                    maxWidth: 320,
+                  }
+            }
+          />
         </h1>
         {!isMobile ? (
         <div style={headerStatsStyle}>
@@ -4801,6 +4911,7 @@ export default function LabyrinthGame() {
         <div ref={headerMenuRef} style={{ position: "relative", flexShrink: 0 }}>
         <button
             type="button"
+            className="header-menu-trigger"
             onClick={() => setHeaderMenuOpen((o) => !o)}
             aria-expanded={headerMenuOpen}
             aria-haspopup="menu"
@@ -4809,6 +4920,10 @@ export default function LabyrinthGame() {
             style={{
               ...buttonStyle,
               ...headerButtonStyle,
+              ...headerMenuTriggerStyle,
+              background: headerMenuOpen ? "rgba(42, 20, 18, 0.98)" : START_MENU_CTRL_BG,
+              border: `1px solid ${headerMenuOpen ? START_MENU_BORDER : START_MENU_BORDER_MUTE}`,
+              color: headerMenuOpen ? "#ffd4c4" : "#ecc0b0",
               ...(isMobile
                 ? {
                     minWidth: 44,
@@ -4819,10 +4934,6 @@ export default function LabyrinthGame() {
                     justifyContent: "center",
                     fontSize: "1.35rem",
                     lineHeight: 1,
-                    color: "#ccc",
-                    background: headerMenuOpen ? "#2a2a38" : "#1a1a24",
-                    border: "1px solid #444",
-                    borderRadius: 8,
                   }
                 : {
                     display: "inline-flex",
@@ -4843,7 +4954,9 @@ export default function LabyrinthGame() {
           {headerMenuOpen && (
             <div
               role="menu"
+              className="header-menu-dropdown"
               style={{
+                ...headerDropdownPanelStyle,
                 ...(isMobile
                   ? {
                       position: "fixed",
@@ -4862,15 +4975,6 @@ export default function LabyrinthGame() {
                       minWidth: 272,
                       maxWidth: "min(92vw, 340px)",
                     }),
-                padding: "12px 14px",
-                background: "#1a1a24",
-                border: "1px solid #444",
-                borderRadius: 8,
-                boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
-                zIndex: HEADER_Z_INDEX + 2,
-                display: "flex",
-                flexDirection: "column",
-                gap: 12,
               }}
             >
               <div>
@@ -4878,7 +4982,7 @@ export default function LabyrinthGame() {
                   style={{
                     fontSize: "0.65rem",
                     fontWeight: 700,
-                    color: "#888",
+                    color: "#c9a090",
                     textTransform: "uppercase",
                     letterSpacing: "0.08em",
                     marginBottom: 8,
@@ -4886,8 +4990,18 @@ export default function LabyrinthGame() {
                 >
                   Current progress
                 </div>
-                <div style={{ fontSize: "0.8rem", color: "#c8c8d0", lineHeight: 1.45, display: "flex", flexDirection: "column", gap: 6 }}>
-                  <div style={{ fontWeight: 700, color: winner !== null ? (winner >= 0 ? "#00ff88" : "#ff6666") : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88") }}>
+                <div style={headerDropdownBodyStyle}>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      color:
+                        winner !== null
+                          ? winner >= 0
+                            ? START_MENU_ACCENT_BRIGHT
+                            : "#ff6666"
+                          : START_MENU_ACCENT_BRIGHT,
+                    }}
+                  >
                     {winner !== null
                       ? winner >= 0
                         ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
@@ -4895,23 +5009,23 @@ export default function LabyrinthGame() {
                       : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
                   </div>
                   <div>
-                    <span style={{ color: "#888" }}>Maze: </span>
+                    <span style={headerDropdownMutedStyle}>Maze: </span>
                     {lab.width}×{lab.height}
                   </div>
                   <div>
-                    <span style={{ color: "#888" }}>Moves: </span>
+                    <span style={headerDropdownMutedStyle}>Moves: </span>
                     {diceResult !== null ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}` : "—/—"}
                   </div>
                   <div>
-                    <span style={{ color: "#888" }}>Round: </span>
+                    <span style={headerDropdownMutedStyle}>Round: </span>
                     {(lab.round ?? 0) + 1}/{MAX_ROUNDS}
                   </div>
                   <div>
-                    <span style={{ color: "#888" }}>Total moves: </span>
+                    <span style={headerDropdownMutedStyle}>Total moves: </span>
                     {totalMoves}
                   </div>
-                  <div style={{ borderTop: "1px solid #333", paddingTop: 8 }}>
-                    <div style={{ color: "#888", fontSize: "0.72rem", marginBottom: 6 }}>Diamonds</div>
+                  <div style={{ borderTop: `1px solid ${START_MENU_BORDER_MUTE}`, paddingTop: 8 }}>
+                    <div style={{ ...headerDropdownMutedStyle, fontSize: "0.72rem", marginBottom: 6 }}>Diamonds</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       {lab.players.map((p, i) => (
                         <div
@@ -4937,22 +5051,24 @@ export default function LabyrinthGame() {
                 <button
                   type="button"
                   role="menuitem"
+                  className="start-menu-cta"
                   onClick={() => {
                     setHeaderMenuOpen(false);
                     setSettingsOpen(true);
                   }}
-                  style={{ ...buttonStyle, ...headerButtonStyle, width: "100%", justifyContent: "center" }}
+                  style={{ ...startButtonStyle, ...headerButtonStyle, width: "100%", justifyContent: "center", display: "flex" }}
                 >
                   Game setup
                 </button>
                 <button
                   type="button"
                   role="menuitem"
+                  className="header-menu-dropdown-secondary"
                   onClick={() => {
                     setHeaderMenuOpen(false);
                     setGameStarted(false);
                   }}
-                  style={{ ...buttonStyle, ...secondaryButtonStyle, width: "100%", justifyContent: "center" }}
+                  style={headerDropdownSecondaryBtnStyle}
                 >
                   New game
                 </button>
@@ -5439,9 +5555,7 @@ export default function LabyrinthGame() {
                 const cp = lab.players[pi] ?? lab.players[headerPi];
                 if (combatArtifactRerollPrompt) return null;
                 const hasShield = cp ? (cp.shield ?? 0) > 0 : false;
-                const hasStored = cp
-                  ? STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(cp, k) > 0)
-                  : false;
+                const hasStored = hasCombatVisibleStoredArtifacts(cp);
                 const hasSkillRow = hasShield || hasStored;
                 return (
                   <div
@@ -5496,6 +5610,7 @@ export default function LabyrinthGame() {
                           {STORED_ARTIFACT_ORDER.map((kind) => {
                             const n = storedArtifactCount(cp, kind);
                             if (n <= 0) return null;
+                            if (isStoredArtifactMapOnly(kind)) return null;
                             if (kind === "dice") {
                               return (
                                 <CombatSkillItemIcon
@@ -5549,16 +5664,7 @@ export default function LabyrinthGame() {
                                 />
                               );
                             }
-                            const mapTitle = `${STORED_ARTIFACT_LINE[kind]} Locked during combat — use on the map after this fight.`;
-                            return (
-                              <CombatSkillItemIcon
-                                key={kind}
-                                mode="locked"
-                                variant={storedArtifactIconVariant(kind)}
-                                title={mapTitle}
-                                stackCount={n}
-                              />
-                            );
+                            return null;
                           })}
                         </>
                       ) : cp && (cp.artifacts ?? 0) > 0 ? (
@@ -6661,10 +6767,9 @@ export default function LabyrinthGame() {
                                   </div>
                                 );
                               }
+                              if (showCombatHintText) return null;
                               const hasShield = cp ? (cp.shield ?? 0) > 0 : false;
-                              const hasStored = cp
-                                ? STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(cp, k) > 0)
-                                : false;
+                              const hasStored = hasCombatVisibleStoredArtifacts(cp);
                               const hasSkillRow = hasShield || hasStored;
                               return (
                         <div
@@ -6714,6 +6819,7 @@ export default function LabyrinthGame() {
                             {STORED_ARTIFACT_ORDER.map((kind) => {
                                           const n = storedArtifactCount(cp, kind);
                               if (n <= 0) return null;
+                              if (isStoredArtifactMapOnly(kind)) return null;
                               if (kind === "dice") {
                                 return (
                                   <CombatSkillItemIcon
@@ -6767,16 +6873,7 @@ export default function LabyrinthGame() {
                                               />
                                             );
                                           }
-                              const mapTitle = `${STORED_ARTIFACT_LINE[kind]} Locked during combat — use on the map after this fight.`;
-                              return (
-                                <CombatSkillItemIcon
-                                  key={kind}
-                                  mode="locked"
-                                  variant={storedArtifactIconVariant(kind)}
-                                  title={mapTitle}
-                                  stackCount={n}
-                                />
-                              );
+                              return null;
                             })}
                                       </>
                                     ) : cp && (cp.artifacts ?? 0) > 0 ? (
@@ -8598,29 +8695,10 @@ export default function LabyrinthGame() {
               }}
               onClick={(e) => e.stopPropagation()}
             >
-              <h3
-                style={{
-                  margin: "0 0 0.35rem 0",
-                  color: "#00ff88",
-                  fontSize: "clamp(1.2rem, 3.2vw, 1.75rem)",
-                  fontWeight: 800,
-                  textAlign: "center",
-                  letterSpacing: "0.02em",
-                  flexShrink: 0,
-                }}
-              >
+              <h3 style={movementDiceModalTitleStyle}>
                 {playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`} — Roll for moves
               </h3>
-              <p
-                style={{
-                  margin: "0 0 0.75rem 0",
-                  color: "#8a8a9a",
-                  fontSize: "0.92rem",
-                  textAlign: "center",
-                  lineHeight: 1.4,
-                  flexShrink: 0,
-                }}
-              >
+              <p style={movementDiceModalHintStyle}>
                 Click the 3D dice area or use the button below
               </p>
               <div
@@ -8640,9 +8718,10 @@ export default function LabyrinthGame() {
                   minHeight: MOVEMENT_DICE_VIEWPORT_MIN_H,
                   borderRadius: 14,
                   overflow: "hidden",
-                  border: "2px solid rgba(255, 204, 0, 0.35)",
+                  border: `2px solid ${START_MENU_BORDER_MUTE}`,
                   boxSizing: "border-box",
-                  background: "#0a0a0f",
+                  background: "#10080a",
+                  boxShadow: "inset 0 0 24px rgba(40, 12, 10, 0.5)",
                   display: "flex",
                   flexDirection: "column",
                 }}
@@ -8659,10 +8738,11 @@ export default function LabyrinthGame() {
               </div>
               <button
                 type="button"
+                className="start-menu-cta"
                 onClick={() => !rolling && diceRef.current?.roll()}
                 disabled={rolling}
                 style={{
-                  ...buttonStyle,
+                  ...startButtonStyle,
                   alignSelf: "center",
                   marginTop: "clamp(12px, 2dvh, 20px)",
                   flexShrink: 0,
@@ -8671,8 +8751,6 @@ export default function LabyrinthGame() {
                   fontWeight: 800,
                   minWidth: 220,
                   borderRadius: 10,
-                  border: "2px solid #00cc66",
-                  boxShadow: "0 0 24px rgba(0,255,136,0.35)",
                 }}
               >
                 {rolling ? "Rolling…" : "Roll dice"}
@@ -8826,16 +8904,75 @@ const headerStyle: React.CSSProperties = {
   zIndex: HEADER_Z_INDEX,
 };
 
-const headerTitleStyle: React.CSSProperties = {
-  fontFamily: "'Creepster', cursive",
-  fontSize: "1.5rem",
+/** Same distressed logo as start menu — scaled for header bar */
+const headerTitleWrapStyle: React.CSSProperties = {
   margin: 0,
-  color: "#00ff88",
+  lineHeight: 0,
+  display: "flex",
+  alignItems: "center",
+};
+
+const headerLogoImgStyle: React.CSSProperties = {
+  width: "auto",
+  height: "auto",
+  display: "block",
+  objectFit: "contain",
+  objectPosition: "left center",
+  filter: "drop-shadow(0 4px 22px rgba(0,0,0,0.9))",
 };
 
 const headerButtonStyle: React.CSSProperties = {
   padding: "0.4rem 0.8rem",
   fontSize: "0.85rem",
+};
+
+/** Header ☰ / Menu — matches start-menu ember / title reds */
+const headerMenuTriggerStyle: React.CSSProperties = {
+  fontFamily: "inherit",
+  background: START_MENU_CTRL_BG,
+  color: "#ecc0b0",
+  border: `1px solid ${START_MENU_BORDER_MUTE}`,
+  borderRadius: 8,
+  cursor: "pointer",
+};
+
+/** Mobile / desktop header dropdown (role="menu") */
+const headerDropdownPanelStyle: React.CSSProperties = {
+  padding: "12px 14px",
+  background: "rgba(18, 8, 10, 0.97)",
+  border: `1px solid ${START_MENU_BORDER}`,
+  borderRadius: 10,
+  boxShadow: "0 12px 40px rgba(0,0,0,0.55), 0 0 28px rgba(142, 34, 21, 0.22)",
+  zIndex: HEADER_Z_INDEX + 2,
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+};
+
+const headerDropdownMutedStyle: React.CSSProperties = {
+  color: "#9a7268",
+};
+
+const headerDropdownBodyStyle: React.CSSProperties = {
+  fontSize: "0.8rem",
+  color: "#d8c8c0",
+  lineHeight: 1.45,
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+};
+
+const headerDropdownSecondaryBtnStyle: React.CSSProperties = {
+  ...headerButtonStyle,
+  width: "100%",
+  justifyContent: "center",
+  display: "flex",
+  fontFamily: "inherit",
+  background: START_MENU_CTRL_BG,
+  color: "#ecc0b0",
+  border: `1px solid ${START_MENU_BORDER_MUTE}`,
+  borderRadius: 8,
+  cursor: "pointer",
 };
 
 const headerStatsStyle: React.CSSProperties = {
@@ -8861,10 +8998,30 @@ const headerStatDivider: React.CSSProperties = {
   fontSize: "0.8rem",
 };
 
+const startMenuLoadingInnerStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 18,
+};
+
+const startMenuLoadingTextStyle: React.CSSProperties = {
+  margin: 0,
+  color: "#c9a090",
+  fontSize: "0.82rem",
+  letterSpacing: "0.35em",
+  textTransform: "uppercase",
+  fontFamily: "system-ui, sans-serif",
+};
+
 const startModalOverlayStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "linear-gradient(135deg, #0a0a12 0%, #151520 50%, #0f0f18 100%)",
+  backgroundColor: "#050508",
+  backgroundImage: `linear-gradient(90deg, rgba(5,3,6,0.96) 0%, rgba(8,5,9,0.88) min(44vw, 540px), rgba(10,6,10,0.42) 70%, rgba(4,3,5,0.72) 100%), url("${START_MENU_COVER_BG}")`,
+  backgroundSize: "cover, cover",
+  backgroundPosition: "center, 68% center",
+  backgroundRepeat: "no-repeat, no-repeat",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -8876,31 +9033,28 @@ const startModalOverlayStyle: React.CSSProperties = {
 };
 
 const startModalStyle: React.CSSProperties = {
-  background: "#1a1a24",
+  background: "rgba(18, 8, 10, 0.88)",
+  backdropFilter: "blur(12px)",
+  WebkitBackdropFilter: "blur(12px)",
   padding: "2.5rem 2.75rem",
   borderRadius: 14,
-  border: "1px solid #333",
-  boxShadow: "0 0 40px rgba(0,255,136,0.15)",
+  border: `1px solid ${START_MENU_BORDER}`,
+  boxShadow: `0 16px 56px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255, 152, 103, 0.12), 0 0 36px rgba(142, 34, 21, 0.35)`,
   minWidth: 0,
   maxWidth: 620,
   width: "min(calc(100vw - 24px), 620px)",
   boxSizing: "border-box",
-  margin: "0 auto",
+  margin: 0,
 };
 
-const startModalTitleStyle: React.CSSProperties = {
-  fontFamily: "'Creepster', cursive",
-  margin: "0 0 0.35rem 0",
-  color: "#00ff88",
-  fontSize: "2.1rem",
-  fontWeight: "normal",
+const startModalTitleWrapStyle: React.CSSProperties = {
+  margin: "0 0 0.45rem 0",
   textAlign: "center",
-  letterSpacing: 2,
 };
 
 const startModalSubtitleStyle: React.CSSProperties = {
   margin: "0 0 1.75rem 0",
-  color: "#888",
+  color: "#b8a298",
   fontSize: "1rem",
   textAlign: "center",
 };
@@ -8910,13 +9064,13 @@ const startModalFormStyle: React.CSSProperties = {
 };
 
 const startModalLabelStyle: React.CSSProperties = {
-  color: "#aaa",
+  color: "#c9a090",
   fontSize: "0.92rem",
   minWidth: 140,
 };
 
 const startModalLabelStyleMobile: React.CSSProperties = {
-  color: "#aaa",
+  color: "#c9a090",
   fontSize: "0.88rem",
   minWidth: 0,
   width: "100%",
@@ -8926,9 +9080,9 @@ const startModalSelectStyle: React.CSSProperties = {
   padding: "0.5rem 0.75rem",
   fontSize: "0.95rem",
   fontFamily: "inherit",
-  background: "#2a2a35",
-  border: "1px solid #444",
-  color: "#c0c0c0",
+  background: START_MENU_CTRL_BG,
+  border: `1px solid ${START_MENU_BORDER_MUTE}`,
+  color: "#d8c8c0",
   borderRadius: 6,
   flex: 1,
 };
@@ -8937,9 +9091,9 @@ const startModalInputStyle: React.CSSProperties = {
   padding: "0.5rem 0.75rem",
   fontSize: "0.95rem",
   fontFamily: "inherit",
-  background: "#2a2a35",
-  border: "1px solid #444",
-  color: "#c0c0c0",
+  background: START_MENU_CTRL_BG,
+  border: `1px solid ${START_MENU_BORDER_MUTE}`,
+  color: "#d8c8c0",
   borderRadius: 6,
   width: "4.5rem",
 };
@@ -8954,13 +9108,13 @@ const startButtonStyle: React.CSSProperties = {
   padding: "0.75rem 1.5rem",
   fontSize: "1rem",
   fontWeight: "bold",
-  background: "#00ff88",
-  color: "#0a0a0f",
-  border: "none",
+  background: "linear-gradient(180deg, #f07852 0%, #9a2818 100%)",
+  color: "#140605",
+  border: "1px solid rgba(255, 160, 120, 0.35)",
   borderRadius: 8,
   cursor: "pointer",
   transition: "all 0.2s",
-  boxShadow: "0 0 12px rgba(0,255,136,0.4)",
+  boxShadow: "0 0 22px rgba(180, 50, 30, 0.45), inset 0 1px 0 rgba(255, 200, 170, 0.25)",
 };
 
 const startSecondaryButtonStyle: React.CSSProperties = {
@@ -9005,11 +9159,11 @@ const MOVEMENT_DICE_MODAL_MAX_W = 720;
 const MOVEMENT_DICE_VIEWPORT_MIN_H = 260;
 
 const movementDiceModalPanelStyle: React.CSSProperties = {
-  background: "linear-gradient(180deg, #1e1e2a 0%, #14141c 100%)",
+  background: "linear-gradient(180deg, rgba(34, 16, 18, 0.98) 0%, rgba(12, 6, 8, 0.99) 100%)",
   padding: "clamp(0.75rem, 3dvh, 2rem) clamp(1.25rem, 4vw, 2.75rem)",
   borderRadius: 16,
-  border: "2px solid rgba(0, 255, 136, 0.35)",
-  boxShadow: "0 0 48px rgba(0,255,136,0.18), 0 20px 60px rgba(0,0,0,0.55)",
+  border: `2px solid ${START_MENU_BORDER}`,
+  boxShadow: "0 0 44px rgba(142, 34, 21, 0.3), 0 20px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255, 152, 103, 0.08)",
   display: "flex",
   flexDirection: "column",
   alignItems: "stretch",
@@ -9018,6 +9172,25 @@ const movementDiceModalPanelStyle: React.CSSProperties = {
   maxWidth: MOVEMENT_DICE_MODAL_MAX_W,
   minHeight: 0,
   boxSizing: "border-box",
+};
+
+const movementDiceModalTitleStyle: React.CSSProperties = {
+  margin: "0 0 0.35rem 0",
+  color: START_MENU_ACCENT_BRIGHT,
+  fontSize: "clamp(1.2rem, 3.2vw, 1.75rem)",
+  fontWeight: 800,
+  textAlign: "center",
+  letterSpacing: "0.02em",
+  flexShrink: 0,
+};
+
+const movementDiceModalHintStyle: React.CSSProperties = {
+  margin: "0 0 0.75rem 0",
+  color: "#b8a090",
+  fontSize: "0.92rem",
+  textAlign: "center",
+  lineHeight: 1.4,
+  flexShrink: 0,
 };
 
 const combatModalStyle: React.CSSProperties = {

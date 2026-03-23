@@ -6,6 +6,13 @@ export interface Dice3DRef {
   roll: () => Promise<number>;
 }
 
+/** Internal dice-box API we need for layout sync (not in package typings). */
+type DiceBoxInstance = {
+  roll: (notation: string) => Promise<unknown>;
+  initialize: () => Promise<void>;
+  setDimensions: (size: { x: number; y: number }) => void;
+};
+
 export interface Dice3DProps {
   onRollComplete: (value: number) => void;
   disabled?: boolean;
@@ -14,6 +21,34 @@ export interface Dice3DProps {
   /** Hide overlay hint (e.g. when parent shows instructions) */
   hideHint?: boolean;
 }
+
+/** Base URL for `public/dice-roller/` (works on itch subpaths via relative resolution). */
+function getDiceRollerAssetBase(): string {
+  if (typeof window === "undefined") return "/dice-roller/";
+  return new URL("./dice-roller/", window.location.href).href;
+}
+
+/** WebGL viewport chrome: original dark grey behind the canvas */
+const DICE_VIEWPORT_BG = "#10080a";
+
+/**
+ * Solid plastic d6 (`texture: "none"`). Faces: darker coral→ember (same family as menu title `#ff9867` → `#8e2215`).
+ */
+const DICE_OF_THE_DAMNED_COLORSET = {
+  name: "dice-of-the-damned",
+  foreground: "#ffffff",
+  background: [
+    "#d97850",
+    "#c26a44",
+    "#ae5d3a",
+    "#964d31",
+    "#7f3e28",
+    "#5c140c",
+  ],
+  outline: "#2a0c08",
+  texture: "none",
+  material: "plastic",
+} as const;
 
 function getValueFromResult(result: unknown): number {
   if (result && typeof result === "object") {
@@ -40,9 +75,7 @@ function getValueFromResult(result: unknown): number {
 const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
   function Dice3D({ onRollComplete, disabled = false, fitContainer = false, hideHint = false }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
-    const diceBoxRef = useRef<{
-      roll: (notation: string) => Promise<unknown>;
-    } | null>(null);
+    const diceBoxRef = useRef<DiceBoxInstance | null>(null);
 
     useImperativeHandle(
       ref,
@@ -57,7 +90,8 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
           }
 
           try {
-            const result = await box.roll("1d6");
+            /** `dpip` = same physics as d6, faces drawn with pips (●) instead of digits */
+            const result = await box.roll("1dpip");
             const v = getValueFromResult(result);
             onRollComplete(v);
             return v;
@@ -74,6 +108,7 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
     useEffect(() => {
       if (!containerRef.current) return;
       let mounted = true;
+      let resizeObserver: ResizeObserver | null = null;
 
       const initDice = async () => {
         const el = containerRef.current;
@@ -120,22 +155,49 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
         if (!target || !mounted) return;
 
         const box = new DiceBox("#" + id, {
-          assetPath: "https://cdn.jsdelivr.net/gh/MajorVictory/3DDiceRoller@master/textures/envmap/",
-          theme_surface: "taverntable",
+          assetPath: getDiceRollerAssetBase(),
+          theme_surface: "mahogany",
           theme_material: "plastic",
-          theme_customColorset: { background: "#00ff88", foreground: "#000000", outline: "#00ff88" },
+          theme_customColorset: { ...DICE_OF_THE_DAMNED_COLORSET },
+          color_spotlight: 0xff9867,
+          light_intensity: 1.15,
           sounds: false,
           shadows: true,
           baseScale: 100,
           strength: 1.2,
+        }) as unknown as DiceBoxInstance;
+        try {
+          await box.initialize();
+        } catch (e) {
+          console.error("Dice3D: dice-box initialize failed", e);
+          return;
+        }
+        if (!mounted || !el.isConnected) return;
+
+        diceBoxRef.current = box;
+
+        const syncDimensions = () => {
+          const node = containerRef.current;
+          const b = diceBoxRef.current;
+          if (!node || !b) return;
+          const w = node.clientWidth;
+          const h = node.clientHeight;
+          if (w < 2 || h < 2) return;
+          b.setDimensions({ x: w, y: h });
+        };
+
+        syncDimensions();
+        resizeObserver = new ResizeObserver(() => {
+          requestAnimationFrame(syncDimensions);
         });
-        await box.initialize();
-        if (mounted) diceBoxRef.current = box;
+        resizeObserver.observe(el);
       };
 
-      initDice();
+      void initDice();
       return () => {
         mounted = false;
+        resizeObserver?.disconnect();
+        resizeObserver = null;
         diceBoxRef.current = null;
       };
     }, []);
@@ -158,7 +220,7 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
       minWidth: 0,
       borderRadius: 10,
       overflow: "hidden",
-      background: "#0d0d12",
+      background: DICE_VIEWPORT_BG,
       pointerEvents: disabled ? "none" : "auto",
       opacity: disabled ? 0.6 : 1,
       ...(fitContainer
@@ -179,7 +241,7 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
               right: 0,
               textAlign: "center",
               fontSize: "0.7rem",
-              color: "#555",
+              color: "#888",
             }}
           >
             Click dice area or &quot;Roll dice&quot; button
