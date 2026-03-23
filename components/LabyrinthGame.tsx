@@ -1,14 +1,15 @@
 "use client";
 
-/** Combat debug logging — filter console by [COMBAT] to trace flow */
-const COMBAT_LOG = true;
+/** Combat debug logging — set true to trace flow in console ([COMBAT] prefix) */
+const COMBAT_LOG = false;
 const combatLog = (...args: unknown[]) => {
   if (COMBAT_LOG) console.log("[COMBAT]", ...args);
 };
 
 /** Start menu + loading screen art (`public/menu/`) */
 const START_MENU_COVER_BG = "/menu/dracula-cover-bg.png";
-const START_MENU_LOGO_SRC = "/menu/dice-title-logo.png";
+/** Transparent PNG title label (used in start menu, header, and preloaded with cover). */
+const GAME_TITLE_LABEL_SRC = "/menu/dice-of-the-damned-label.png";
 /** Title / logo reds (gradient ~#ff9867 → #8e2215) — menu chrome + selection */
 const START_MENU_ACCENT_BRIGHT = "#ff9867";
 const START_MENU_BORDER = "rgba(221, 95, 54, 0.55)";
@@ -1237,7 +1238,7 @@ export default function LabyrinthGame() {
         img.onerror = () => resolve();
         img.src = src;
       });
-    Promise.all([loadImage(START_MENU_COVER_BG), loadImage(START_MENU_LOGO_SRC)]).then(() => {
+    Promise.all([loadImage(START_MENU_COVER_BG), loadImage(GAME_TITLE_LABEL_SRC)]).then(() => {
       if (cancelled) return;
       const minMs = 700;
       const wait = Math.max(0, minMs - (Date.now() - t0));
@@ -4176,12 +4177,12 @@ export default function LabyrinthGame() {
         >
           <h1 style={startModalTitleWrapStyle}>
             <img
-              src={START_MENU_LOGO_SRC}
+              src={GAME_TITLE_LABEL_SRC}
               alt={GAME_DISPLAY_TITLE}
-              width={640}
-              height={200}
+              width={1024}
+              height={419}
               style={{
-                width: "min(100%, 420px)",
+                width: "min(100%, min(92vw, 520px))",
                 height: "auto",
                 display: "block",
                 margin: "0 auto",
@@ -4823,22 +4824,22 @@ export default function LabyrinthGame() {
           }
         >
           <img
-            src={START_MENU_LOGO_SRC}
+            src={GAME_TITLE_LABEL_SRC}
             alt={GAME_DISPLAY_TITLE}
-            width={640}
-            height={200}
+            width={1024}
+            height={419}
             draggable={false}
             style={
               isMobile
                 ? {
                     ...headerLogoImgStyle,
-                    maxHeight: 40,
-                    maxWidth: "100%",
+                    maxHeight: 36,
+                    maxWidth: "min(100%, 220px)",
                   }
                 : {
                     ...headerLogoImgStyle,
-                    maxHeight: 48,
-                    maxWidth: 320,
+                    maxHeight: 44,
+                    maxWidth: "min(100%, 280px)",
                   }
             }
           />
@@ -5548,154 +5549,7 @@ export default function LabyrinthGame() {
               const combatPlayerAvatarPx = isLandscapeCompact ? COMBAT_LANDSCAPE_SPRITE_PX : COMBAT_PLAYER_AVATAR_PX;
               const lsSpritePx = showCombatLandscapeVersus ? COMBAT_LANDSCAPE_SPRITE_PX : combatSpritePx;
               const lsPlayerAvatarPx = showCombatLandscapeVersus ? COMBAT_LANDSCAPE_SPRITE_PX : combatPlayerAvatarPx;
-              /** Landscape: skills/artifacts live in the center column; roll + retreat sit under HP bars (exclusive with dice in center). */
-              const renderLandscapeFaceoffSkillsPanel = (): React.ReactNode => {
-                if (!lab || !combatState) return null;
-                const pi = combatState.playerIndex;
-                const cp = lab.players[pi] ?? lab.players[headerPi];
-                if (combatArtifactRerollPrompt) return null;
-                const hasShield = cp ? (cp.shield ?? 0) > 0 : false;
-                const hasStored = hasCombatVisibleStoredArtifacts(cp);
-                const hasSkillRow = hasShield || hasStored;
-                return (
-                  <div
-                    style={{
-                      position: "relative",
-                      zIndex: 1,
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: 5,
-                      width: "100%",
-                      maxWidth: "min(100%, 680px)",
-                      minHeight: Math.max(64, COMBAT_LANDSCAPE_CENTER_DICE_MAX_H - 36),
-                      height: "auto",
-                      maxHeight: "min(58vh, 400px)",
-                      overflowY: "auto",
-                      WebkitOverflowScrolling: "touch",
-                      padding: "8px 8px 10px",
-                      background: "rgba(0,0,0,0.45)",
-                      borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                      border: "1px solid rgba(170,102,255,0.45)",
-                      boxSizing: "border-box",
-                      flexShrink: 0,
-                    }}
-                  >
-                    <div style={{ color: "#b8a0e8", fontSize: "0.65rem", fontWeight: 700, lineHeight: 1 }}>Skills</div>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexWrap: "wrap",
-                        justifyContent: "center",
-                        alignItems: "center",
-                        alignContent: "center",
-                        gap: "6px 8px",
-                        rowGap: 6,
-                        minHeight: 28,
-                        width: "100%",
-                      }}
-                    >
-                      {hasSkillRow ? (
-                        <>
-                          {hasShield && (
-                            <CombatSkillItemIcon
-                              mode="toggle"
-                              variant="shield"
-                              selected={combatUseShield}
-                              disabled={rolling || combatArtifactRerollPrompt}
-                              onClick={() => !rolling && !combatArtifactRerollPrompt && setCombatUseShield((v) => !v)}
-                              title="Shield: tap to use / not use on this roll (blocks damage if you lose)"
-                            />
-                          )}
-                          {STORED_ARTIFACT_ORDER.map((kind) => {
-                            const n = storedArtifactCount(cp, kind);
-                            if (n <= 0) return null;
-                            if (isStoredArtifactMapOnly(kind)) return null;
-                            if (kind === "dice") {
-                              return (
-                                <CombatSkillItemIcon
-                                  key={kind}
-                                  mode="toggle"
-                                  variant="dice"
-                                  selected={combatDiceRerollReserved}
-                                  disabled={rolling || combatArtifactRerollPrompt}
-                                  onClick={() => !rolling && !combatArtifactRerollPrompt && handleCombatDiceArtifactRerollToggle()}
-                                  title={`${STORED_ARTIFACT_LINE.dice} — before you roll: tap to mark a reroll. After the roll, choose whether to spend 1 dice artifact for a second strike roll (only that reroll).`}
-                                  stackCount={n}
-                                />
-                              );
-                            }
-                            if (kind === "shield") {
-                              return (
-                                <CombatSkillItemIcon
-                                  key={kind}
-                                  mode="consume"
-                                  variant="shield"
-                                  disabled={rolling}
-                                  onClick={() => !rolling && handleUseArtifact("shield")}
-                                  title={`${STORED_ARTIFACT_LINE.shield}. ${STORED_ARTIFACT_TOOLTIP.shield}`}
-                                  stackCount={n}
-                                />
-                              );
-                            }
-                            if (kind === "holySword") {
-                              return (
-                                <CombatSkillItemIcon
-                                  key={kind}
-                                  mode="consume"
-                                  variant="holySword"
-                                  disabled={rolling}
-                                  onClick={() => !rolling && handleUseArtifact("holySword")}
-                                  title={`${STORED_ARTIFACT_LINE.holySword}. ${STORED_ARTIFACT_TOOLTIP.holySword}`}
-                                  stackCount={n}
-                                />
-                              );
-                            }
-                            if (kind === "holyCross") {
-                              return (
-                                <CombatSkillItemIcon
-                                  key={kind}
-                                  mode="consume"
-                                  variant="holyCross"
-                                  disabled={rolling}
-                                  onClick={() => !rolling && handleUseArtifact("holyCross")}
-                                  title={`${STORED_ARTIFACT_LINE.holyCross}. ${STORED_ARTIFACT_TOOLTIP.holyCross}`}
-                                  stackCount={n}
-                                />
-                              );
-                            }
-                            return null;
-                          })}
-                        </>
-                      ) : cp && (cp.artifacts ?? 0) > 0 ? (
-                        <span
-                          style={{
-                            fontSize: "0.58rem",
-                            color: "#9a9aaa",
-                            textAlign: "center",
-                            lineHeight: 1.2,
-                            padding: "0 2px",
-                          }}
-                        >
-                          Artifacts {(cp.artifacts ?? 0)}/3 — map only
-                        </span>
-                      ) : (
-                        <span
-                          style={{
-                            fontSize: "0.58rem",
-                            color: "#666",
-                            textAlign: "center",
-                            lineHeight: 1.2,
-                            padding: "0 2px",
-                          }}
-                        >
-                          {cp ? "No combat skills" : "—"}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              };
+              /** Skills & artifacts: single stack below versus row for every orientation (same rules as 35b3926 — map-only hidden). */
               return (
                 <div
                   style={{
@@ -5993,7 +5847,6 @@ export default function LabyrinthGame() {
                                 <span style={{ fontWeight: 700, opacity: 0.95 }}>({lastCombatStrikeDiceFace})</span>
                               </span>
                             ) : null}
-                            {renderLandscapeFaceoffSkillsPanel()}
                           </div>
                         ) : (
                           <div
@@ -6621,7 +6474,7 @@ export default function LabyrinthGame() {
                     </div>
                     </div>
                   )}
-                  {combatState && !useCombatLandscapeFaceoff && (
+                  {combatState && (
                     <div
                       style={{
                         width: "100%",
@@ -6672,6 +6525,9 @@ export default function LabyrinthGame() {
                             (() => {
                               const pi = combatState.playerIndex;
                               const cp = lab.players[pi] ?? lab.players[headerPi];
+                              if (combatArtifactRerollPrompt && useCombatLandscapeFaceoff) {
+                                return null;
+                              }
                               if (combatArtifactRerollPrompt) {
                                 return (
                                   <div
@@ -6767,7 +6623,6 @@ export default function LabyrinthGame() {
                                   </div>
                                 );
                               }
-                              if (showCombatHintText) return null;
                               const hasShield = cp ? (cp.shield ?? 0) > 0 : false;
                               const hasStored = hasCombatVisibleStoredArtifacts(cp);
                               const hasSkillRow = hasShield || hasStored;
@@ -7139,7 +6994,7 @@ export default function LabyrinthGame() {
               )
             ) : null}
             </div>
-            {combatState && lab && !useCombatLandscapeFaceoff && (() => {
+            {combatState && lab && (() => {
               const [dMin, dMax] = getMonsterDamageRange(combatState.monsterType);
               return (
                 <div style={combatModalFooterDiceStyle}>
@@ -8904,7 +8759,7 @@ const headerStyle: React.CSSProperties = {
   zIndex: HEADER_Z_INDEX,
 };
 
-/** Same distressed logo as start menu — scaled for header bar */
+/** Title label image (`GAME_TITLE_LABEL_SRC`) — scaled for header bar */
 const headerTitleWrapStyle: React.CSSProperties = {
   margin: 0,
   lineHeight: 0,
