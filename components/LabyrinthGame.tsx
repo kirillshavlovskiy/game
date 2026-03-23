@@ -180,6 +180,8 @@ const MOBILE_DOCK_COLLAPSED_H = 40;
 const MOBILE_DOCK_SWIPE_THRESHOLD = 48;
 /** Compact move pad cell size (floating overlay). */
 const MOBILE_MOVE_PAD_CELL_PX = 36;
+/** Reserve space when scrolling the maze so the pawn isn’t left under the fixed ↑←→↓ pad (3×3 grid + gaps + padding + border). */
+const MOBILE_MOVE_PAD_SCROLL_PADDING_RIGHT_PX = MOBILE_MOVE_PAD_CELL_PX * 3 + 2 * 2 + 8 * 2 + 12;
 /** Compact artifact chip min width. */
 const MOBILE_ARTIFACT_CHIP_W = 56;
 type MobileDockAction = "bomb" | StoredArtifactKind;
@@ -944,6 +946,20 @@ function useDraggable(getInitial: () => { x: number; y: number }) {
   return { pos, onMouseDown, onTouchStart, dragging };
 }
 
+/** Crosshair for “focus pawn on maze” in the center of the move pad (↑←→↓). */
+function MovePadFocusTargetIcon({ size }: { size: number }) {
+  const stroke = "#00ff88";
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={{ display: "block" }}>
+      <circle cx="12" cy="12" r="5" stroke={stroke} strokeWidth="1.75" />
+      <line x1="12" y1="2" x2="12" y2="6" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="12" y1="18" x2="12" y2="22" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="2" y1="12" x2="6" y2="12" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="18" y1="12" x2="22" y2="12" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export default function LabyrinthGame() {
   const [lab, setLab] = useState<Labyrinth | null>(null);
   const [currentPlayer, setCurrentPlayer] = useState(0);
@@ -1180,8 +1196,9 @@ export default function LabyrinthGame() {
     };
   }, []);
 
-  /** Pinch-to-zoom on map (iOS-style gestures); wheel+ctrl for trackpad pinch. */
+  /** Pinch-to-zoom on map (iOS-style gestures); wheel+ctrl for trackpad pinch. Same behavior portrait/landscape — not tied to `isLandscapeCompact`. Re-binds when a maze exists (ref is absent on first mount before Start / while generating). */
   useEffect(() => {
+    if (lab == null) return;
     const el = mazeWrapRef.current;
     if (!el) return;
     const MIN_ZOOM = 0.5;
@@ -1229,7 +1246,7 @@ export default function LabyrinthGame() {
       el.removeEventListener("touchcancel", onTouchEndOrCancel);
       el.removeEventListener("wheel", onWheel);
     };
-  }, []);
+  }, [lab?.width, lab?.height, lab?.numPlayers]);
 
   useLayoutEffect(() => {
     if (!isMobile) {
@@ -3102,6 +3119,19 @@ export default function LabyrinthGame() {
     []
   );
 
+  /** After `setLab` commits, keep the current player cell in view (keyboard / floating move pad). Uses `nearest` + scroll-padding on the maze area. */
+  const scheduleScrollCurrentPlayerCellAfterMove = useCallback(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        currentPlayerCellRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+          inline: "nearest",
+        });
+      });
+    });
+  }, []);
+
   const doMove = useCallback(
     (dx: number, dy: number, jumpOnly = false) => {
       if (winner !== null || !lab) return;
@@ -3386,12 +3416,14 @@ export default function LabyrinthGame() {
             prevY,
           });
           setLab(next);
+          scheduleScrollCurrentPlayerCellAfterMove();
           return;
         }
         if (next.hasWon(currentPlayer)) {
           setWinner(currentPlayer);
         }
         setLab(next);
+        scheduleScrollCurrentPlayerCellAfterMove();
         const hadCollision = !!collision;
         if (movesLeftRef.current <= 0 && winnerRef.current === null && !hadCollision && !teleportedThisMove && !teleportPickerSet) {
           const cp = next.players[currentPlayer];
@@ -3454,7 +3486,16 @@ export default function LabyrinthGame() {
         }
       }
     },
-    [lab, currentPlayer, movesLeft, winner, diceResult, triggerRoundEnd, releaseSinglePlayerEncounterShell]
+    [
+      lab,
+      currentPlayer,
+      movesLeft,
+      winner,
+      diceResult,
+      triggerRoundEnd,
+      releaseSinglePlayerEncounterShell,
+      scheduleScrollCurrentPlayerCellAfterMove,
+    ]
   );
 
   // Game starts only when user clicks Start in the start modal
@@ -7149,6 +7190,12 @@ export default function LabyrinthGame() {
                 paddingBottom: `calc(${MAZE_MARGIN + mobileDockInsetPx + 10}px + env(safe-area-inset-bottom, 0px))`,
               }
             : {}),
+          ...(isMobile && showMoveGrid
+            ? {
+                scrollPaddingBottom: `calc(${mobileDockInsetPx}px + env(safe-area-inset-bottom, 0px))`,
+                scrollPaddingRight: `calc(${MOBILE_MOVE_PAD_SCROLL_PADDING_RIGHT_PX}px + env(safe-area-inset-right, 0px))`,
+              }
+            : {}),
         }}
       >
         {!isLandscapeCompact && (
@@ -7994,6 +8041,28 @@ export default function LabyrinthGame() {
               >
                 <button type="button" onClick={() => doMove(0, -1, false)} disabled={!canMoveUp} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 2, gridRow: 1, fontSize: "1rem" }} title="Up">↑</button>
                 <button type="button" onClick={() => doMove(-1, 0, false)} disabled={!canMoveLeft} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 1, gridRow: 2, fontSize: "1rem" }} title="Left">←</button>
+                <button
+                  type="button"
+                  onClick={scrollToCurrentPlayerOnMap}
+                  disabled={winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)}
+                  style={{
+                    ...moveButtonStyle,
+                    width: MOBILE_MOVE_PAD_CELL_PX,
+                    height: MOBILE_MOVE_PAD_CELL_PX,
+                    minWidth: MOBILE_MOVE_PAD_CELL_PX,
+                    minHeight: MOBILE_MOVE_PAD_CELL_PX,
+                    gridColumn: 2,
+                    gridRow: 2,
+                    background: "#1a2e22",
+                    border: "1px solid #00ff88",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                  title="Center map on your pawn"
+                >
+                  <MovePadFocusTargetIcon size={Math.max(16, Math.round(MOBILE_MOVE_PAD_CELL_PX * 0.5))} />
+                </button>
                 <button type="button" onClick={() => doMove(1, 0, false)} disabled={!canMoveRight} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 3, gridRow: 2, fontSize: "1rem" }} title="Right">→</button>
                 <button type="button" onClick={() => doMove(0, 1, false)} disabled={!canMoveDown} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 2, gridRow: 3, fontSize: "1rem" }} title="Down">↓</button>
               </div>
@@ -8406,6 +8475,24 @@ export default function LabyrinthGame() {
                         title="Move left"
                       >
                         ←
+                      </button>
+                      <button
+                        type="button"
+                        onClick={scrollToCurrentPlayerOnMap}
+                        disabled={winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)}
+                        style={{
+                          ...moveButtonStyle,
+                          gridColumn: 2,
+                          gridRow: 2,
+                          background: "#1a2e22",
+                          border: "1px solid #00ff88",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                        title="Center map on your pawn"
+                      >
+                        <MovePadFocusTargetIcon size={20} />
                       </button>
                       <button
                         type="button"
