@@ -69,6 +69,20 @@ import {
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
 import {
+  adjacentWallFogFromIntensityMap,
+  basePathStyle,
+  MAZE_FLOOR_MUD_TEXTURE,
+  MAZE_FLOOR_TEXTURE,
+  MAZE_NOISE_TEXTURE,
+  MAZE_STAIN_TEXTURES,
+  MAZE_WALL_TEXTURE,
+  mazeCorridorLightAngleDeg,
+  pathFloorWallLightCount,
+  pathFogVisualIntensity,
+  wallStyleWithOptionalSconce,
+} from "@/lib/mazeCellTheme";
+import { applyMazeSimplexNoiseToElement } from "@/lib/mazeProceduralNoise";
+import {
   resolveCombat,
   getMonsterHint,
   getMonsterBonusRewardChoices,
@@ -246,6 +260,8 @@ const COMBAT_LANDSCAPE_SPRITE_PX = 172;
 const COMBAT_LANDSCAPE_CENTER_DICE_MAX_H = 128;
 /** Wider clamp so dice/skills use horizontal space between portraits (vw-heavy: short landscape height no longer caps width as aggressively as min(32vw,40vh)) */
 const COMBAT_LANDSCAPE_CENTER_COL_WIDTH = "clamp(160px, min(44vw, 56vh), 340px)";
+/** No `vh` in the middle term — short landscape height must not narrow the dice reroll dialog. */
+const COMBAT_LANDSCAPE_CENTER_COL_WIDTH_REROLL = "clamp(160px, 44vw, 340px)";
 const COMBAT_LANDSCAPE_CENTER_COL_MAX_W = "min(64vw, 400px)";
 /** Combat modal uses maxHeight only so it fits viewport; no fixed height. */
 /** Bonus loot carousel — icon fits inside a fixed slot so the pick button does not resize per asset */
@@ -1305,6 +1321,27 @@ export default function LabyrinthGame() {
       el.removeEventListener("wheel", onWheel);
     };
   }, [lab?.width, lab?.height, lab?.numPlayers]);
+
+  const mazeSimplexNoiseAppliedRef = useRef(false);
+  useEffect(() => {
+    if (lab == null || mazeSimplexNoiseAppliedRef.current) return;
+    const run = () => {
+      const wrap = mazeWrapRef.current;
+      if (!wrap || mazeSimplexNoiseAppliedRef.current) return;
+      applyMazeSimplexNoiseToElement(wrap);
+      mazeSimplexNoiseAppliedRef.current = true;
+    };
+    requestAnimationFrame(() => requestAnimationFrame(run));
+  }, [lab?.width, lab?.height]);
+
+  /** Warm decode for maze tile PNGs so first paint shows textures, not flat fallback colors. */
+  useEffect(() => {
+    if (lab == null) return;
+    for (const src of [MAZE_FLOOR_TEXTURE, MAZE_FLOOR_MUD_TEXTURE, MAZE_NOISE_TEXTURE, MAZE_WALL_TEXTURE, ...MAZE_STAIN_TEXTURES]) {
+      const img = new Image();
+      img.src = src;
+    }
+  }, [lab?.width, lab?.height]);
 
   useLayoutEffect(() => {
     if (!isMobile) {
@@ -3839,7 +3876,22 @@ export default function LabyrinthGame() {
     passThroughMagic ||
     gamePaused;
   const showSecretCells = movesLeft > 0;
-  const jumpTargets = lab && cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [];
+  const jumpTargets = useMemo(
+    () =>
+      lab && cp && (cp.jumps ?? 0) > 0 && !moveDisabled ? lab.getJumpTargets(currentPlayer) : [],
+    [lab, cp, currentPlayer, moveDisabled],
+  );
+  const jumpTargetByCoord = useMemo(() => {
+    const m = new Map<string, (typeof jumpTargets)[number]>();
+    for (const t of jumpTargets) m.set(`${t.x},${t.y}`, t);
+    return m;
+  }, [jumpTargets]);
+  const webCellKeySet = useMemo(() => {
+    const s = new Set<string>();
+    const wp = lab?.webPositions;
+    if (wp) for (const [wx, wy] of wp) s.add(`${wx},${wy}`);
+    return s;
+  }, [lab?.webPositions]);
   const canMoveUp = !moveDisabled && lab?.canMoveOnly(0, -1, currentPlayer);
   const canMoveLeft = !moveDisabled && lab?.canMoveOnly(-1, 0, currentPlayer);
   const canMoveRight = !moveDisabled && lab?.canMoveOnly(1, 0, currentPlayer);
@@ -4074,7 +4126,7 @@ export default function LabyrinthGame() {
         return;
       }
       if (moveDisabled || !cp) return;
-      const jumpTarget = jumpTargets.find((t) => t.x === cellX && t.y === cellY);
+      const jumpTarget = jumpTargetByCoord.get(`${cellX},${cellY}`);
       if (jumpTarget) {
         doMove(jumpTarget.dx, jumpTarget.dy, true);
         return;
@@ -4097,7 +4149,7 @@ export default function LabyrinthGame() {
         doMove(stepX, 0, false);
       }
     },
-    [moveDisabled, cp, jumpTargets, lab, currentPlayer, doMove, teleportPicker, handleTeleportSelect]
+    [moveDisabled, cp, jumpTargetByCoord, lab, currentPlayer, doMove, teleportPicker, handleTeleportSelect]
   );
 
   const handleMagicPortalOpen = useCallback(() => {
@@ -5549,7 +5601,154 @@ export default function LabyrinthGame() {
               const combatPlayerAvatarPx = isLandscapeCompact ? COMBAT_LANDSCAPE_SPRITE_PX : COMBAT_PLAYER_AVATAR_PX;
               const lsSpritePx = showCombatLandscapeVersus ? COMBAT_LANDSCAPE_SPRITE_PX : combatSpritePx;
               const lsPlayerAvatarPx = showCombatLandscapeVersus ? COMBAT_LANDSCAPE_SPRITE_PX : combatPlayerAvatarPx;
-              /** Skills & artifacts: single stack below versus row for every orientation (same rules as 35b3926 — map-only hidden). */
+              /** Landscape: skills/artifacts in the center column; roll + retreat under HP bars (pre–e26e59e4 layout). */
+              const renderLandscapeFaceoffSkillsPanel = (): React.ReactNode => {
+                if (!lab || !combatState) return null;
+                const pi = combatState.playerIndex;
+                const cp = lab.players[pi] ?? lab.players[headerPi];
+                if (combatArtifactRerollPrompt) return null;
+                const hasShield = cp ? (cp.shield ?? 0) > 0 : false;
+                const hasStored = hasCombatVisibleStoredArtifacts(cp);
+                const hasSkillRow = hasShield || hasStored;
+                return (
+                  <div
+                    style={{
+                      position: "relative",
+                      zIndex: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 5,
+                      width: "100%",
+                      maxWidth: "min(100%, 680px)",
+                      minHeight: Math.max(64, COMBAT_LANDSCAPE_CENTER_DICE_MAX_H - 36),
+                      height: "auto",
+                      maxHeight: "min(58vh, 400px)",
+                      overflowY: "auto",
+                      WebkitOverflowScrolling: "touch",
+                      padding: "8px 8px 10px",
+                      background: "rgba(0,0,0,0.45)",
+                      borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                      border: "1px solid rgba(170,102,255,0.45)",
+                      boxSizing: "border-box",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <div style={{ color: "#b8a0e8", fontSize: "0.65rem", fontWeight: 700, lineHeight: 1 }}>Skills</div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        justifyContent: "center",
+                        alignItems: "center",
+                        alignContent: "center",
+                        gap: "6px 8px",
+                        rowGap: 6,
+                        minHeight: 28,
+                        width: "100%",
+                      }}
+                    >
+                      {hasSkillRow ? (
+                        <>
+                          {hasShield && (
+                            <CombatSkillItemIcon
+                              mode="toggle"
+                              variant="shield"
+                              selected={combatUseShield}
+                              disabled={rolling || combatArtifactRerollPrompt}
+                              onClick={() => !rolling && !combatArtifactRerollPrompt && setCombatUseShield((v) => !v)}
+                              title="Shield: tap to use / not use on this roll (blocks damage if you lose)"
+                            />
+                          )}
+                          {STORED_ARTIFACT_ORDER.map((kind) => {
+                            const n = storedArtifactCount(cp, kind);
+                            if (n <= 0) return null;
+                            if (isStoredArtifactMapOnly(kind)) return null;
+                            if (kind === "dice") {
+                              return (
+                                <CombatSkillItemIcon
+                                  key={kind}
+                                  mode="toggle"
+                                  variant="dice"
+                                  selected={combatDiceRerollReserved}
+                                  disabled={rolling || combatArtifactRerollPrompt}
+                                  onClick={() => !rolling && !combatArtifactRerollPrompt && handleCombatDiceArtifactRerollToggle()}
+                                  title={`${STORED_ARTIFACT_LINE.dice} — before you roll: tap to mark a reroll. After the roll, choose whether to spend 1 dice artifact for a second strike roll (only that reroll).`}
+                                  stackCount={n}
+                                />
+                              );
+                            }
+                            if (kind === "shield") {
+                              return (
+                                <CombatSkillItemIcon
+                                  key={kind}
+                                  mode="consume"
+                                  variant="shield"
+                                  disabled={rolling}
+                                  onClick={() => !rolling && handleUseArtifact("shield")}
+                                  title={`${STORED_ARTIFACT_LINE.shield}. ${STORED_ARTIFACT_TOOLTIP.shield}`}
+                                  stackCount={n}
+                                />
+                              );
+                            }
+                            if (kind === "holySword") {
+                              return (
+                                <CombatSkillItemIcon
+                                  key={kind}
+                                  mode="consume"
+                                  variant="holySword"
+                                  disabled={rolling}
+                                  onClick={() => !rolling && handleUseArtifact("holySword")}
+                                  title={`${STORED_ARTIFACT_LINE.holySword}. ${STORED_ARTIFACT_TOOLTIP.holySword}`}
+                                  stackCount={n}
+                                />
+                              );
+                            }
+                            if (kind === "holyCross") {
+                              return (
+                                <CombatSkillItemIcon
+                                  key={kind}
+                                  mode="consume"
+                                  variant="holyCross"
+                                  disabled={rolling}
+                                  onClick={() => !rolling && handleUseArtifact("holyCross")}
+                                  title={`${STORED_ARTIFACT_LINE.holyCross}. ${STORED_ARTIFACT_TOOLTIP.holyCross}`}
+                                  stackCount={n}
+                                />
+                              );
+                            }
+                            return null;
+                          })}
+                        </>
+                      ) : cp && (cp.artifacts ?? 0) > 0 ? (
+                        <span
+                          style={{
+                            fontSize: "0.58rem",
+                            color: "#9a9aaa",
+                            textAlign: "center",
+                            lineHeight: 1.2,
+                            padding: "0 2px",
+                          }}
+                        >
+                          Artifacts {(cp.artifacts ?? 0)}/3 — map only
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: "0.58rem",
+                            color: "#666",
+                            textAlign: "center",
+                            lineHeight: 1.2,
+                            padding: "0 2px",
+                          }}
+                        >
+                          {cp ? "No combat skills" : "—"}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              };
               return (
                 <div
                   style={{
@@ -5701,7 +5900,9 @@ export default function LabyrinthGame() {
                       <div
                         style={{
                           flex: "0 0 auto",
-                          width: COMBAT_LANDSCAPE_CENTER_COL_WIDTH,
+                          width: combatArtifactRerollPrompt
+                            ? COMBAT_LANDSCAPE_CENTER_COL_WIDTH_REROLL
+                            : COMBAT_LANDSCAPE_CENTER_COL_WIDTH,
                           maxWidth: COMBAT_LANDSCAPE_CENTER_COL_MAX_W,
                           alignSelf: "flex-end",
                           display: "flex",
@@ -5729,37 +5930,65 @@ export default function LabyrinthGame() {
                               position: "relative",
                               zIndex: 100,
                               width: "100%",
-                              padding: "6px 8px",
+                              padding: "8px 10px",
                               boxSizing: "border-box",
                               borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
                               border: "2px solid #aa66ff",
-                              background: "linear-gradient(180deg, rgba(58,32,96,0.75) 0%, rgba(20,12,32,0.98) 100%)",
+                              background: "linear-gradient(180deg, rgba(58,32,96,0.55) 0%, rgba(20,12,32,0.95) 100%)",
                               display: "flex",
                               flexDirection: "column",
-                              gap: 4,
-                              maxHeight: "min(38vh, 200px)",
+                              gap: 6,
+                              flexShrink: 0,
+                              maxHeight: 280,
                               overflowY: "auto",
                             }}
                           >
                             <span
                               style={{
-                                fontSize: "0.62rem",
+                                fontSize: "0.72rem",
                                 color: "#e8ddff",
-                                lineHeight: 1.25,
+                                lineHeight: 1.3,
                                 textAlign: "center",
                               }}
                             >
-                              🎲 <strong>Roll again?</strong> Spend <strong>1 Dice</strong>.
+                              🎲 <strong>Roll again?</strong> Spend <strong>1 Dice</strong> — one reroll only; the new strike
+                              replaces the first, then HP updates.
                             </span>
-                            <div style={{ display: "flex", flexDirection: "row", gap: 4, width: "100%" }}>
+                            {lastCombatStrikeDiceFace != null &&
+                            lastCombatStrikeDiceFace >= 1 &&
+                            lastCombatStrikeDiceFace <= 6 ? (
+                              <span
+                                style={{
+                                  fontSize: "0.72rem",
+                                  fontWeight: 800,
+                                  color: "#00ff88",
+                                  letterSpacing: "0.04em",
+                                  lineHeight: 1.2,
+                                  textAlign: "center",
+                                  textShadow: "0 0 12px rgba(0, 255, 136, 0.35)",
+                                }}
+                                aria-label={`Last strike roll ${lastCombatStrikeDiceFace}`}
+                              >
+                                Last roll: {COMBAT_STRIKE_DICE_FACE_CHARS[lastCombatStrikeDiceFace - 1]}{" "}
+                                <span style={{ fontWeight: 700, opacity: 0.95 }}>({lastCombatStrikeDiceFace})</span>
+                              </span>
+                            ) : null}
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: isMobile ? "column" : "row",
+                                gap: 6,
+                                width: "100%",
+                              }}
+                            >
                               <button
                                 type="button"
                                 onClick={handleCombatArtifactRerollDecline}
                                 style={{
                                   ...buttonStyle,
                                   flex: 1,
-                                  fontSize: "0.62rem",
-                                  padding: "5px 6px",
+                                  fontSize: "0.72rem",
+                                  padding: "6px 8px",
                                   background: "#2a2a32",
                                   color: "#ddd",
                                   border: "1px solid #555",
@@ -5767,7 +5996,7 @@ export default function LabyrinthGame() {
                                   fontWeight: 700,
                                 }}
                               >
-                                No
+                                No — keep first roll
                               </button>
                               <button
                                 type="button"
@@ -5775,8 +6004,8 @@ export default function LabyrinthGame() {
                                 style={{
                                   ...buttonStyle,
                                   flex: 1,
-                                  fontSize: "0.62rem",
-                                  padding: "5px 6px",
+                                  fontSize: "0.72rem",
+                                  padding: "6px 8px",
                                   background: "#3a2060",
                                   color: "#e8ddff",
                                   border: "2px solid #aa66ff",
@@ -5784,7 +6013,7 @@ export default function LabyrinthGame() {
                                   fontWeight: 700,
                                 }}
                               >
-                                Yes
+                                Yes — roll again
                               </button>
                             </div>
                           </div>
@@ -5847,6 +6076,7 @@ export default function LabyrinthGame() {
                                 <span style={{ fontWeight: 700, opacity: 0.95 }}>({lastCombatStrikeDiceFace})</span>
                               </span>
                             ) : null}
+                            {renderLandscapeFaceoffSkillsPanel()}
                           </div>
                         ) : (
                           <div
@@ -5986,16 +6216,18 @@ export default function LabyrinthGame() {
                             border: "2px solid rgba(255, 204, 0, 0.55)",
                             boxShadow: "0 12px 40px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.06)",
                           };
+                          /** `fixed` + viewport center: absolute % was relative to the short portrait-row box, not the modal. */
                           const landscapeOutcomePopoverWrapStyle: React.CSSProperties = {
-                            position: "absolute",
+                            position: "fixed",
                             left: "50%",
                             top: "50%",
                             transform: "translate(-50%, -50%)",
-                            zIndex: 130,
+                            zIndex: COMBAT_MODAL_Z + 30,
                             width: "min(340px, calc(100vw - 40px))",
                             maxWidth: "92%",
                             maxHeight: "min(72dvh, 420px)",
                             pointerEvents: "auto",
+                            boxSizing: "border-box",
                           };
                           if (pendingCombatBonusPick && bonusLootRevealed) {
                             return (
@@ -6474,7 +6706,7 @@ export default function LabyrinthGame() {
                     </div>
                     </div>
                   )}
-                  {combatState && (
+                  {combatState && !useCombatLandscapeFaceoff && (
                     <div
                       style={{
                         width: "100%",
@@ -6563,19 +6795,28 @@ export default function LabyrinthGame() {
                             textAlign: "center",
                           }}
                         >
-                                        🎲 <strong>Roll again?</strong> Spend <strong>1 Dice</strong> — first roll discarded; HP updates after the second roll only (no further rerolls).
+                                        🎲 <strong>Roll again?</strong> Spend <strong>1 Dice</strong> — one reroll only; the new strike
+                                        replaces the first, then HP updates.
                                       </span>
-                            <span
-                              style={{
-                                          fontSize: "0.65rem",
-                                          color: "#c4b8e8",
-                                          lineHeight: 1.35,
-                                          textAlign: "center",
-                                        }}
-                                      >
-                                        <strong>Yes</strong> — spend 1 dice artifact and roll again (the first strike roll is discarded).{" "}
-                                        <strong>No</strong> — keep the first roll; the dice artifact stays in your inventory.
-                            </span>
+                                      {lastCombatStrikeDiceFace != null &&
+                                      lastCombatStrikeDiceFace >= 1 &&
+                                      lastCombatStrikeDiceFace <= 6 ? (
+                                        <span
+                                          style={{
+                                            fontSize: "0.72rem",
+                                            fontWeight: 800,
+                                            color: "#00ff88",
+                                            letterSpacing: "0.04em",
+                                            lineHeight: 1.2,
+                                            textAlign: "center",
+                                            textShadow: "0 0 12px rgba(0, 255, 136, 0.35)",
+                                          }}
+                                          aria-label={`Last strike roll ${lastCombatStrikeDiceFace}`}
+                                        >
+                                          Last roll: {COMBAT_STRIKE_DICE_FACE_CHARS[lastCombatStrikeDiceFace - 1]}{" "}
+                                          <span style={{ fontWeight: 700, opacity: 0.95 }}>({lastCombatStrikeDiceFace})</span>
+                                        </span>
+                                      ) : null}
                                       <div
                                         style={{
                                           display: "flex",
@@ -6994,7 +7235,7 @@ export default function LabyrinthGame() {
               )
             ) : null}
             </div>
-            {combatState && lab && (() => {
+            {combatState && lab && !useCombatLandscapeFaceoff && (() => {
               const [dMin, dMax] = getMonsterDamageRange(combatState.monsterType);
               return (
                 <div style={combatModalFooterDiceStyle}>
@@ -7188,18 +7429,21 @@ export default function LabyrinthGame() {
         )}
         <div
           ref={mazeWrapRef}
-          className="maze-wrap"
+          className="maze-wrap maze-horror-render"
           style={{
             ...mazeWrapStyle,
             marginTop: isLandscapeCompact ? 0 : MAZE_MARGIN,
             position: "relative",
           }}
         >
-        <div style={{ position: "relative", display: "inline-block" }}>
+        <div className="maze-stack" style={{ position: "relative", display: "inline-block" }}>
         <div
           className="maze"
           style={{
             ...mazeStyle,
+            ...({
+              "--maze-cell-px": `${CELL_SIZE * mazeZoom}px`,
+            } as React.CSSProperties),
             gridTemplateColumns: `repeat(${lab.width}, ${CELL_SIZE * mazeZoom}px)`,
             gridTemplateRows: lab ? `repeat(${lab.height}, ${CELL_SIZE * mazeZoom}px)` : undefined,
           }}
@@ -7408,94 +7652,48 @@ export default function LabyrinthGame() {
 
               if ((fogIntensityMap.get(`${x},${y}`) ?? 0) > 0) content = null;
 
+              const effectiveCellSize = CELL_SIZE * mazeZoom;
+              const corridorLightDeg = mazeCorridorLightAngleDeg(lab, x, y);
+              const rawCellFog = fogIntensityMap.get(`${x},${y}`) ?? 0;
+              const chFog = lab.grid[y]?.[x];
+              const walkableForFog = chFog ? isWalkable(chFog) : false;
+              const walkableForFloor = chFog ? isWalkable(chFog) : false;
+              const adjacentWallFog = walkableForFloor
+                ? adjacentWallFogFromIntensityMap(lab, x, y, fogIntensityMap)
+                : undefined;
+              const wallLightCount = walkableForFog
+                ? pathFloorWallLightCount(lab, x, y, adjacentWallFog)
+                : 0;
+              const cellFogVisual = walkableForFog
+                ? pathFogVisualIntensity(rawCellFog, wallLightCount)
+                : rawCellFog;
               const cellBg: React.CSSProperties = {};
               if (cellClass.includes("wall")) {
-                cellBg.background = "#2a2a35";
-                cellBg.color = "#555";
-              } else if (cellClass.includes("path")) {
-                cellBg.background = "#1e1e28";
-                cellBg.color = "#333";
+                Object.assign(cellBg, wallStyleWithOptionalSconce(effectiveCellSize, x, y, lab));
+              } else if (walkableForFloor) {
+                Object.assign(
+                  cellBg,
+                  basePathStyle(
+                    effectiveCellSize,
+                    corridorLightDeg,
+                    lab,
+                    x,
+                    y,
+                    rawCellFog,
+                    adjacentWallFog,
+                  ),
+                );
               }
               if (cellClass.includes("start")) {
-                cellBg.background = "#1e2e24";
                 cellBg.color = "#00ff88";
               }
               if (cellClass.includes("goal")) {
-                cellBg.background = "#2e1e1e";
                 cellBg.color = "#ff4444";
               }
               if (cellClass.includes("multiplier")) {
                 cellBg.color = "#ffcc00";
                 cellBg.fontWeight = "bold";
                 cellBg.fontSize = "0.85rem";
-              }
-              if (cellClass.includes("magic")) {
-                cellBg.background = cellClass.includes("artifact-inactive") ? "#15151a" : "#1e1e2e";
-                cellBg.color = cellClass.includes("artifact-inactive") ? "#555" : "#aa66ff";
-                cellBg.fontWeight = "bold";
-                if (isTeleportOption && !cellClass.includes("artifact-inactive")) {
-                  cellBg.boxShadow = "inset 0 0 12px #aa66ff66, 0 0 8px #aa66ff";
-                  cellBg.border = "2px solid #aa66ff";
-                }
-              }
-              if (cellClass.includes("catapult") && cellClass.includes("artifact-inactive")) {
-                cellBg.background = "#15151a";
-                cellBg.color = "#444";
-              } else if (cellClass.includes("catapult")) {
-                cellBg.background = "#2e2e1e";
-                cellBg.color = "#ffcc00";
-                cellBg.fontWeight = "bold";
-              }
-              if (cellClass.includes("jump")) {
-                cellBg.background = "#1e2e2e";
-                cellBg.color = "#66aaff";
-                cellBg.fontWeight = "bold";
-              }
-              if (cellClass.includes("shield")) {
-                cellBg.background = "#1e2e1e";
-                cellBg.color = "#44ff88";
-                cellBg.fontWeight = "bold";
-              }
-              if (cellClass.includes("artifact")) {
-                if (cellClass.includes("artifact-hidden")) {
-                  cellBg.background = "#1a1e24";
-                  cellBg.boxShadow = "inset 0 0 8px rgba(170,102,255,0.12)";
-                } else {
-                  cellBg.background = "#1e2e2e";
-                  cellBg.color = "#aa66ff";
-                  cellBg.fontWeight = "bold";
-                }
-              }
-              if (cellClass.includes("trap")) {
-                cellBg.background = "#2e2e1e";
-                cellBg.color = "#ffaa00";
-                cellBg.fontWeight = "bold";
-              }
-              if (cellClass.includes("bomb")) {
-                cellBg.background = "#2e1e1e";
-                cellBg.color = "#ff8844";
-                cellBg.fontWeight = "bold";
-              }
-              if (cellClass.includes("collectible")) {
-                const ownerMatch = cellClass.match(/collectible-p(\d+)/);
-                const owner = ownerMatch ? parseInt(ownerMatch[1], 10) : null;
-                const c = owner !== null && owner < PLAYER_COLORS.length ? PLAYER_COLORS[owner] : "#888";
-                cellBg.color = c;
-                cellBg.fontWeight = "bold";
-                cellBg.fontSize = "1rem";
-                if (owner !== null) {
-                  cellBg.background = `${c}22`;
-                  cellBg.boxShadow = `inset 0 0 8px ${c}44`;
-                }
-              }
-              if (cellClass.includes("monster")) {
-                cellBg.background = "#2e1e1e";
-              }
-              if (cellClass.includes("dracula-telegraph")) {
-                cellBg.boxShadow = "inset 0 0 16px rgba(255,80,80,0.6), 0 0 12px #ff4444";
-                cellBg.border = "2px solid #ff4444";
-                cellBg.color = "#ff6666";
-                cellBg.zIndex = 5;
               }
 
               const isTeleportFrom = teleportAnimation?.from[0] === x && teleportAnimation?.from[1] === y;
@@ -7504,7 +7702,7 @@ export default function LabyrinthGame() {
                 fallAnim && lab.players[fallAnim.playerIndex]
                   ? PLAYER_COLORS_ACTIVE[fallAnim.playerIndex] ?? "#888"
                   : "#888";
-              const jumpTarget = jumpTargets.find((t) => t.x === x && t.y === y);
+              const jumpTarget = jumpTargetByCoord.get(`${x},${y}`);
 
               /** Slingshot mode blocks taps only when you have no moves left — then you must launch or Cancel. If you still have moves, you can tap to walk off the catapult cell (doMove clears catapult state). */
               const isTappable =
@@ -7512,18 +7710,16 @@ export default function LabyrinthGame() {
                 ((!!teleportPicker && isTeleportOption) ||
                   (!moveDisabled && (!catapultMode || movesLeft > 0) && (cellClass.includes("path") || !!jumpTarget)));
 
-              const effectiveCellSize = CELL_SIZE * mazeZoom;
               const isCurrentPlayerCell = cp && x === cp.x && y === cp.y;
               const isCollisionCell = collisionEffect && collisionEffect.x === x && collisionEffect.y === y;
               if (isCollisionCell) cellClass += " cell-collision";
-              const cellFog = fogIntensityMap.get(`${x},${y}`) ?? 0;
-              const cellOpacity = cellFog > 0 ? 1 - 0.75 * cellFog : 1;
+              const cellOpacity = rawCellFog > 0 ? 1 - 0.75 * cellFogVisual : 1;
               return (
                 <div
                   key={`${x}-${y}`}
                   ref={isCurrentPlayerCell ? (el) => { currentPlayerCellRef.current = el; } : undefined}
                   className={cellClass}
-                  title={lab.webPositions?.some(([wx, wy]) => wx === x && wy === y) ? "Spider web: costs 3 moves to cross" : undefined}
+                  title={webCellKeySet.has(`${x},${y}`) ? "Spider web: costs 3 moves to cross" : undefined}
                   style={{
                     ...cellStyle,
                     ...cellBg,
@@ -7574,7 +7770,7 @@ export default function LabyrinthGame() {
                 </div>
               );
                   })()}
-                  {(lab.webPositions?.some(([wx, wy]) => wx === x && wy === y)) && (
+                  {webCellKeySet.has(`${x},${y}`) && (
                     <div className="spider-web" style={{ position: "absolute", inset: 0, zIndex: 0 }}>
                       <SpiderWebCell />
                     </div>
@@ -7619,7 +7815,7 @@ export default function LabyrinthGame() {
         </div>
                   )}
                   {(() => {
-                    const effectiveFog = cellFog;
+                    const effectiveFog = cellFogVisual;
                     if (effectiveFog <= 0) return null;
                     const baseOpacity = 0.08 + effectiveFog * 0.92;
                     return (
@@ -7706,7 +7902,13 @@ export default function LabyrinthGame() {
                 })) : clearance;
                 const effectiveClearance = isWallCell ? adjacentClearance : clearance;
                 const rawFog = isWallCell ? (hasAdjacentFog ? 1 : 0) : fogIntensity;
-                return Math.max(0, rawFog * (1 - effectiveClearance));
+                const raw = Math.max(0, rawFog * (1 - effectiveClearance));
+                const tile = lab.grid[cy]?.[cx];
+                if (tile && isWalkable(tile)) {
+                  const adj = adjacentWallFogFromIntensityMap(lab, cx, cy, fogIntensityMap);
+                  return pathFogVisualIntensity(raw, pathFloorWallLightCount(lab, cx, cy, adj));
+                }
+                return raw;
               };
               const getGradientFactor = (cx: number, cy: number): number => {
                 const hAway = playerOnLeft ? Math.max(0, cx - px) : Math.max(0, px - cx);
@@ -7757,33 +7959,53 @@ export default function LabyrinthGame() {
           const traj = lab.getCatapultTrajectory(p.x, p.y, -dx, -dy, strength, false);
           if (!traj) return null;
           const cs = CELL_SIZE * mazeZoom;
-          const pathD = traj.arcPoints.map(([px, py], i) => `${i === 0 ? "M" : "L"} ${px * cs} ${py * cs}`).join(" ");
-          const destX = (traj.destX + 0.5) * cs;
-          const destY = (traj.destY + 0.5) * cs;
-            return (
+          const pts = traj.arcPoints;
+          if (pts.length < 2) return null;
+          const pathD = pts.map(([px, py], i) => `${i === 0 ? "M" : "L"} ${px * cs} ${py * cs}`).join(" ");
+          const [sx, sy] = pts[0]!;
+          const [ex, ey] = pts[pts.length - 1]!;
+          const x1 = sx * cs;
+          const y1 = sy * cs;
+          const x2 = ex * cs;
+          const y2 = ey * cs;
+          return (
             <svg
-                  style={{
+              style={{
                 position: "absolute",
                 top: 0,
                 left: 0,
                 width: lab.width * cs,
                 height: lab.height * cs,
                 pointerEvents: "none",
-                zIndex: 10,
+                zIndex: 55,
               }}
               viewBox={`0 0 ${lab.width * cs} ${lab.height * cs}`}
+              aria-hidden
             >
+              <defs>
+                <linearGradient
+                  id="catapult-aim-traj-fade"
+                  gradientUnits="userSpaceOnUse"
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                >
+                  <stop offset="0%" stopColor="#ffcc66" stopOpacity={0.95} />
+                  <stop offset="38%" stopColor="#ffcc00" stopOpacity={0.55} />
+                  <stop offset="72%" stopColor="#ffaa33" stopOpacity={0.2} />
+                  <stop offset="100%" stopColor="#ffcc00" stopOpacity={0} />
+                </linearGradient>
+              </defs>
               <path
                 d={pathD}
                 fill="none"
-                stroke="#ffcc00"
+                stroke="url(#catapult-aim-traj-fade)"
                 strokeWidth={3}
-                strokeDasharray="8 6"
+                strokeDasharray="7 5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                opacity={0.9}
               />
-              <circle cx={destX} cy={destY} r={8} fill="#ffcc00" opacity={0.6} stroke="#ffdd44" strokeWidth={2} />
             </svg>
           );
         })()}
@@ -7801,9 +8023,10 @@ export default function LabyrinthGame() {
                 width: lab.width * cs,
                 height: lab.height * cs,
                 pointerEvents: "none",
-                zIndex: 15,
+                zIndex: 60,
               }}
               viewBox={`0 0 ${lab.width * cs} ${lab.height * cs}`}
+              aria-hidden
             >
               <circle r={12} fill={c} stroke="#fff" strokeWidth={2}>
                 <animateMotion dur="0.6s" fill="freeze" calcMode="linear" path={pathD} />
