@@ -11,14 +11,16 @@
     "package:crazygames": "bash scripts/package-crazygames.sh",
     "clean": "rm -rf .next node_modules package-lock.json && npm install",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "textures:maze": "python3 scripts/generate-maze-textures.py"
   },
   "dependencies": {
     "@3d-dice/dice-box-threejs": "^0.0.12",
     "@fontsource/creepster": "^5.2.7",
     "next": "^14.2.35",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "simplex-noise": "^4.0.3"
   },
   "devDependencies": {
     "@types/node": "^20",

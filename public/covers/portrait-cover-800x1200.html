@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=800, height=1200" />
+    <title>Dice Of The Damned — portrait cover (800×1200)</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #111;
+        font-family: system-ui, sans-serif;
+      }
+      .hint {
+        position: fixed;
+        bottom: 12px;
+        left: 12px;
+        right: 12px;
+        font-size: 12px;
+        color: #888;
+        text-align: center;
+        max-width: 720px;
+        margin: 0 auto;
+        line-height: 1.4;
+      }
+      .canvas {
+        position: relative;
+        width: 800px;
+        height: 1200px;
+        flex-shrink: 0;
+        overflow: hidden;
+        background: #050508;
+        box-shadow: 0 0 0 1px #333;
+      }
+      .canvas img {
+        display: block;
+        width: 800px;
+        height: 1200px;
+        object-fit: cover;
+        object-position: center center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="canvas" id="cover">
+      <img
+        src="/covers/dice-of-the-damned-portrait-800x1200.png"
+        width="800"
+        height="1200"
+        alt="Dice Of The Damned — portrait cover"
+      />
+    </div>
+    <p class="hint">
+      Open from a local server (e.g. <code>npm run dev</code> →
+      <code>http://localhost:3000/covers/portrait-cover-800x1200.html</code>). Set viewport to
+      800×1200 in DevTools, then capture the <code>.canvas</code> node. PNG:
+      <code>public/covers/dice-of-the-damned-portrait-800x1200.png</code> (bottom-right crop anchor for the
+      on-art title).
+    </p>
+  </body>
+</html>

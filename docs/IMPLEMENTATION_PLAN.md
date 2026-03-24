@@ -3,6 +3,8 @@
 **Engine:** Pure TypeScript (no Phaser involvement)  
 **Design Priority:** `clarity > speed > tension > fairness > complexity`
 
+**Maze look & lighting (stylized horror, Kenney + decals, fog/telegraphs):** see [`MAZE_VISUAL_PLAN.md`](./MAZE_VISUAL_PLAN.md).
+
 ---
 
 ## 1. Architecture Overview

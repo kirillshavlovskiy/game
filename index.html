@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dice Of The Damned</title>
   <style>
+    :root {
+      --maze-wall-tex: url("/textures/maze/Stone/Horror_Stone_02-256x256.png");
+      --maze-floor-tex: url("/textures/maze/Brick/Horror_Brick_07-256x256.png");
+      --maze-noise-tex: url("/textures/maze/noise_grain.png");
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -34,11 +39,50 @@
       filter: drop-shadow(0 4px 18px rgba(0,0,0,0.85));
     }
     .maze-wrap {
+      position: relative;
       background: #1a1a24;
       padding: 1.5rem;
       border-radius: 8px;
       border: 1px solid #333;
       box-shadow: 0 0 20px rgba(0,255,136,0.1);
+      isolation: isolate;
+    }
+    .maze-wrap.maze-horror-render::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: inherit;
+      z-index: 1;
+      background:
+        radial-gradient(ellipse 32% 28% at 18% 38%, rgba(255, 228, 200, 0.1) 0%, transparent 70%),
+        radial-gradient(ellipse 30% 26% at 82% 55%, rgba(220, 200, 255, 0.09) 0%, transparent 68%),
+        radial-gradient(ellipse 36% 30% at 52% 18%, rgba(255, 240, 220, 0.07) 0%, transparent 65%),
+        radial-gradient(ellipse 68% 58% at 50% 44%, rgba(200, 190, 230, 0.08) 0%, transparent 52%),
+        radial-gradient(ellipse 88% 78% at 50% 42%, transparent 22%, rgba(0, 0, 0, 0.55) 100%);
+    }
+    .maze-wrap.maze-horror-render::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: inherit;
+      z-index: 1;
+      opacity: 0.11;
+      mix-blend-mode: overlay;
+      background-image: var(--maze-noise-tex);
+      background-size: 96px 96px;
+      background-repeat: repeat;
+    }
+    .maze-wrap.maze-horror-render > h1,
+    .maze-wrap.maze-horror-render .maze-stack {
+      position: relative;
+      z-index: 2;
+    }
+    .maze-stack {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
     }
     .maze {
       display: grid;
@@ -56,11 +100,66 @@
       align-items: center;
       justify-content: center;
     }
-    .cell.wall { color: #555; background: #2a2a35; }
-    .cell.path { color: #333; background: #1e1e28; }
-    .cell.start { color: #00ff88; background: #1e2e24; }
-    .cell.goal { color: #ff4444; background: #2e1e1e; }
-    .cell.player { color: #00ff88; background: #1e2e24; font-weight: bold; }
+    .cell.wall {
+      color: #8a88a0;
+      background-color: #181820;
+      background-image:
+        linear-gradient(180deg, rgba(110, 96, 150, 0.2) 0%, rgba(20, 18, 32, 0.05) 40%, rgba(0, 0, 0, 0.38) 100%),
+        linear-gradient(155deg, rgba(22, 16, 40, 0.48) 0%, rgba(12, 8, 24, 0.42) 45%, rgba(28, 20, 44, 0.52) 100%),
+        var(--maze-wall-tex);
+      background-size: auto, auto, 32px 32px;
+      background-repeat: no-repeat, no-repeat, repeat;
+      box-shadow: none;
+      border: none;
+      outline: none;
+    }
+    .cell.path {
+      color: #6a6478;
+      background-color: #0f0f14;
+      background-image:
+        linear-gradient(180deg, rgba(130, 118, 100, 0.16) 0%, rgba(30, 26, 22, 0.08) 45%, rgba(0, 0, 0, 0.52) 100%),
+        linear-gradient(168deg, rgba(14, 12, 18, 0.62) 0%, rgba(6, 5, 10, 0.55) 52%, rgba(18, 14, 12, 0.65) 100%),
+        var(--maze-floor-tex);
+      background-size: auto, auto, 32px 32px;
+      background-repeat: no-repeat, no-repeat, repeat;
+      box-shadow:
+        inset 0 1px 0 rgba(90, 82, 72, 0.08),
+        inset 0 2px 10px rgba(0, 0, 0, 0.32);
+    }
+    .cell.start {
+      color: #00ff88;
+      background-color: #0f0f14;
+      background-image:
+        linear-gradient(rgba(30, 56, 42, 0.9), rgba(30, 56, 42, 0.9)),
+        linear-gradient(180deg, rgba(130, 118, 100, 0.16) 0%, rgba(30, 26, 22, 0.08) 45%, rgba(0, 0, 0, 0.52) 100%),
+        linear-gradient(168deg, rgba(14, 12, 18, 0.62) 0%, rgba(6, 5, 10, 0.55) 52%, rgba(18, 14, 12, 0.65) 100%),
+        var(--maze-floor-tex);
+      background-size: auto, auto, auto, 32px 32px;
+      background-repeat: no-repeat, no-repeat, no-repeat, repeat;
+    }
+    .cell.goal {
+      color: #ff4444;
+      background-color: #0f0f14;
+      background-image:
+        linear-gradient(rgba(52, 34, 34, 0.9), rgba(52, 34, 34, 0.9)),
+        linear-gradient(180deg, rgba(130, 118, 100, 0.16) 0%, rgba(30, 26, 22, 0.08) 45%, rgba(0, 0, 0, 0.52) 100%),
+        linear-gradient(168deg, rgba(14, 12, 18, 0.62) 0%, rgba(6, 5, 10, 0.55) 52%, rgba(18, 14, 12, 0.65) 100%),
+        var(--maze-floor-tex);
+      background-size: auto, auto, auto, 32px 32px;
+      background-repeat: no-repeat, no-repeat, no-repeat, repeat;
+    }
+    .cell.player {
+      color: #00ff88;
+      font-weight: bold;
+      background-color: #0f0f14;
+      background-image:
+        linear-gradient(rgba(30, 56, 42, 0.88), rgba(30, 56, 42, 0.88)),
+        linear-gradient(180deg, rgba(130, 118, 100, 0.16) 0%, rgba(30, 26, 22, 0.08) 45%, rgba(0, 0, 0, 0.52) 100%),
+        linear-gradient(168deg, rgba(14, 12, 18, 0.62) 0%, rgba(6, 5, 10, 0.55) 52%, rgba(18, 14, 12, 0.65) 100%),
+        var(--maze-floor-tex);
+      background-size: auto, auto, auto, 32px 32px;
+      background-repeat: no-repeat, no-repeat, no-repeat, repeat;
+    }
     .cell .marker {
       width: 40px;
       height: 40px;
@@ -209,9 +308,11 @@
 </head>
 <body>
   <div class="main">
-    <div class="maze-wrap">
-      <h1><img class="game-title-label" src="public/menu/dice-of-the-damned-label.png" width="1024" height="419" alt="Dice Of The Damned" /></h1>
-      <div id="maze" class="maze"></div>
+    <div class="maze-wrap maze-horror-render">
+      <div class="maze-stack">
+        <h1><img class="game-title-label" src="/menu/dice-of-the-damned-label.png" width="1024" height="419" alt="Dice Of The Damned" /></h1>
+        <div id="maze" class="maze"></div>
+      </div>
     </div>
     <div class="controls-panel">
       <div class="info">

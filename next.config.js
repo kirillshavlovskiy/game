@@ -3,6 +3,10 @@ const itchExport = process.env.ITCH_EXPORT === "1";
 
 const nextConfig = {
   eslint: { ignoreDuringBuilds: true },
+  /** Baked at build time so maze `url(...)` matches itch.io CDN paths (see `lib/mazeCellTheme.ts`). */
+  env: {
+    NEXT_PUBLIC_ITCH_STATIC: itchExport ? "1" : "0",
+  },
   /** Set ITCH_EXPORT=1 for static HTML in `out/` (itch.io). Omit for Vercel / API routes. */
   ...(itchExport
     ? {
