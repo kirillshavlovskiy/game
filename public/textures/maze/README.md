@@ -53,9 +53,9 @@ Use OGA (and packs like this `Stains/` / `Misc/` set) for **decals only** — cr
 
 ## Wiring texture URLs (Next.js)
 
-1. [`lib/mazeCellTheme.ts`](../../lib/mazeCellTheme.ts) — `MAZE_WALL_TEXTURE`, `MAZE_FLOOR_TEXTURE`, `MAZE_NOISE_TEXTURE` (React cell styles use explicit `url(...)`).  
-2. [`app/globals.css`](../../app/globals.css) — `:root` `--maze-wall-tex`, `--maze-floor-tex`, `--maze-noise-tex` for stylesheet-only consumers.  
-3. [`index.html`](../../index.html) — same `:root` block for the static demo.
+1. [`lib/mazeCellTheme.ts`](../../lib/mazeCellTheme.ts) — `MAZE_WALL_TEXTURE`, `MAZE_FLOOR_TEXTURE`, `MAZE_NOISE_TEXTURE` (document-relative `./textures/...` URLs).  
+2. [`app/layout.tsx`](../../app/layout.tsx) — inline `:root` `--maze-wall-tex`, `--maze-floor-tex`, `--maze-noise-tex` (same paths; must stay inline so portals resolve from the HTML URL, not `/_next/static/`).  
+3. [`index.html`](../../index.html) — static demo `:root` block (update if you change filenames).
 
 ---
 

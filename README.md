@@ -40,7 +40,7 @@ Without an API key, the "Generate with AI" button will show an error; the random
 
 ## CrazyGames (HTML5)
 
-The [CrazyGames HTML5 v3 SDK](https://docs.crazygames.com/sdk/intro/) is loaded from `sdk.crazygames.com`, initialized on the client, and reports `loadingStart` / `loadingStop` / `gameplayStart` when the environment is `local` or `crazygames`. On other domains the SDK is disabled and no calls are made.
+The [CrazyGames HTML5 v3 SDK](https://docs.crazygames.com/sdk/intro/) is **not** an npm dependency: `app/layout.tsx` loads `https://sdk.crazygames.com/crazygames-sdk-v3.js` (required for automatic updates on the portal). `components/CrazyGamesSdk.tsx` then calls `window.CrazyGames.SDK.init()` and reports `loadingStart` / `loadingStop` / `gameplayStart` when the environment is `local` or `crazygames`. On other domains the SDK is disabled and no calls are made.
 
 **Production zip for upload**
 

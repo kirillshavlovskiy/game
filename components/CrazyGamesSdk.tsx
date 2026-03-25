@@ -2,7 +2,11 @@
 
 import { useEffect } from "react";
 
-let cgsdkBootstrapStarted = false;
+/** After `init()` resolved and environment is not `disabled` (skip duplicate bootstraps). */
+let cgsdkInitSucceeded = false;
+let cgsdkInitInFlight = false;
+/** One-shot `loadingStop` + `gameplayStart` (React Strict Mode must not drop this on effect cleanup). */
+let cgsdkLoadLifecycleDone = false;
 
 function whenPageFullyLoaded(cb: () => void) {
   if (typeof document === "undefined") return;
@@ -24,14 +28,12 @@ function whenPageFullyLoaded(cb: () => void) {
  */
 export function CrazyGamesSdk() {
   useEffect(() => {
-    if (cgsdkBootstrapStarted) return;
-
     let cancelled = false;
     let attempt = 0;
     const maxAttempts = 40;
 
     const tryBootstrap = () => {
-      if (cancelled || cgsdkBootstrapStarted) return;
+      if (cancelled || cgsdkInitSucceeded || cgsdkInitInFlight) return;
 
       const sdk = window.CrazyGames?.SDK;
       if (!sdk || typeof sdk.init !== "function") {
@@ -42,12 +44,11 @@ export function CrazyGamesSdk() {
         return;
       }
 
-      cgsdkBootstrapStarted = true;
+      cgsdkInitInFlight = true;
 
       (async () => {
         try {
           await sdk.init();
-          if (cancelled) return;
 
           const env = sdk.environment;
           if (env === "disabled") {
@@ -58,9 +59,12 @@ export function CrazyGamesSdk() {
             return;
           }
 
+          cgsdkInitSucceeded = true;
+
           sdk.game.loadingStart();
           whenPageFullyLoaded(() => {
-            if (cancelled) return;
+            if (cgsdkLoadLifecycleDone) return;
+            cgsdkLoadLifecycleDone = true;
             try {
               sdk.game.loadingStop();
               sdk.game.gameplayStart();
@@ -70,6 +74,8 @@ export function CrazyGamesSdk() {
           });
         } catch (e) {
           console.warn("CrazyGames SDK (init):", e);
+        } finally {
+          cgsdkInitInFlight = false;
         }
       })();
     };

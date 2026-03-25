@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build static HTML (out/) and zip for CrazyGames HTML5 upload.
+# Build static HTML (out/) and zip for CrazyGames HTML5 upload (full maze textures).
+# Smaller bundle without PNG tiles: npm run package:crazygames-lite
 # Upload dist/creep-labyrinth-crazygames.zip via developer.crazygames.com
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -1,5 +1,6 @@
 /** Minimal typings for https://sdk.crazygames.com/crazygames-sdk-v3.js (see CrazyGames HTML5 docs). */
-export type CrazyGamesEnvironment = "local" | "crazygames" | "disabled";
+/** Before `init()` resolves, the SDK may report `"uninitialized"`; after init: `local` | `crazygames` | `disabled`. */
+export type CrazyGamesEnvironment = "uninitialized" | "local" | "crazygames" | "disabled";
 
 export interface CrazyGamesGameModule {
   loadingStart(): void;

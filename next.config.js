@@ -1,13 +1,17 @@
 /** @type {import('next').NextConfig} */
 const itchExport = process.env.ITCH_EXPORT === "1";
+/**
+ * Crazy Games **lite** HTML5 zip only (`npm run build:crazygames-lite`). Do not set for Vercel, dev, or itch.io.
+ * Inlined as `NEXT_PUBLIC_CRAZYGAMES_LITE` so random `.env` keys cannot enable gradient-only maze on other builds.
+ */
+const crazygamesMazeLiteBuild = process.env.CRAZYGAMES_LITE === "1";
 
 const nextConfig = {
   eslint: { ignoreDuringBuilds: true },
-  /** Baked at build time so maze `url(...)` matches itch.io CDN paths (see `lib/mazeCellTheme.ts`). */
   env: {
-    NEXT_PUBLIC_ITCH_STATIC: itchExport ? "1" : "0",
+    NEXT_PUBLIC_CRAZYGAMES_LITE: crazygamesMazeLiteBuild ? "1" : "0",
   },
-  /** Set ITCH_EXPORT=1 for static HTML in `out/` (itch.io). Omit for Vercel / API routes. */
+  /** Set ITCH_EXPORT=1 for static HTML in `out/` (itch.io / Crazy Games HTML5). Omit for Vercel / API routes. */
   ...(itchExport
     ? {
         output: "export",

@@ -1,14 +1,17 @@
 import type { CSSProperties } from "react";
-import { isWalkable } from "./labyrinth";
+import { isWalkable, PLAYER_COLORS } from "./labyrinth";
 
 /**
- * `public/` URLs for maze PNGs. Itch static export (`ITCH_EXPORT=1`) uses `./textures/...`
- * so requests stay under the game folder on CDNs; dev/Vercel use `/textures/...`.
+ * Document-relative `public/` URLs (`./textures/...`). Root-absolute `/textures/...` breaks on
+ * portal hosts (Crazy Games, itch.io): the browser resolves against the site root, not the game folder.
  */
 function mazeAssetPath(relativeFromPublic: string): string {
   const p = relativeFromPublic.replace(/^\//, "");
-  return process.env.NEXT_PUBLIC_ITCH_STATIC === "1" ? `./${p}` : `/${p}`;
+  return `./${p}`;
 }
+
+/** `true` only in Crazy Games lite production build (`CRAZYGAMES_LITE=1` → `next.config.js` inlines `NEXT_PUBLIC_CRAZYGAMES_LITE`). */
+export const MAZE_LITE_TEXTURES = process.env.NEXT_PUBLIC_CRAZYGAMES_LITE === "1";
 
 /** Primary walkable floor — mossy square/course stone (kept dark via veil + `floorDarkVeil`). */
 export const MAZE_FLOOR_TEXTURE = mazeAssetPath("textures/maze/Brick/Horror_Brick_07-256x256.png");
@@ -518,6 +521,106 @@ export function pathTintedStyle(
     backgroundColor: "#030308",
     ...merged,
   };
+}
+
+/**
+ * Solid tile fills from the pre–texture maze (`d670654^` / pre–`afab7a1` LabyrinthGame): walls, path, start/goal,
+ * specials. Crazy Games lite build only (`NEXT_PUBLIC_CRAZYGAMES_LITE`).
+ */
+export function classicFlatMazeCellBackground(
+  cellClass: string,
+  opts: { isTeleportOption: boolean },
+): CSSProperties {
+  const cellBg: CSSProperties = {};
+  if (cellClass.includes("wall")) {
+    cellBg.background = "#2a2a35";
+    cellBg.color = "#555";
+  } else if (cellClass.includes("path")) {
+    cellBg.background = "#1e1e28";
+    cellBg.color = "#333";
+  }
+  if (cellClass.includes("start")) {
+    cellBg.background = "#1e2e24";
+    cellBg.color = "#00ff88";
+  }
+  if (cellClass.includes("goal")) {
+    cellBg.background = "#2e1e1e";
+    cellBg.color = "#ff4444";
+  }
+  if (cellClass.includes("multiplier")) {
+    cellBg.color = "#ffcc00";
+    cellBg.fontWeight = "bold";
+    cellBg.fontSize = "0.85rem";
+  }
+  if (cellClass.includes("magic")) {
+    cellBg.background = cellClass.includes("artifact-inactive") ? "#15151a" : "#1e1e2e";
+    cellBg.color = cellClass.includes("artifact-inactive") ? "#555" : "#aa66ff";
+    cellBg.fontWeight = "bold";
+    if (opts.isTeleportOption && !cellClass.includes("artifact-inactive")) {
+      cellBg.boxShadow = "inset 0 0 12px #aa66ff66, 0 0 8px #aa66ff";
+      cellBg.border = "2px solid #aa66ff";
+    }
+  }
+  if (cellClass.includes("catapult") && cellClass.includes("artifact-inactive")) {
+    cellBg.background = "#15151a";
+    cellBg.color = "#444";
+  } else if (cellClass.includes("catapult")) {
+    cellBg.background = "#2e2e1e";
+    cellBg.color = "#ffcc00";
+    cellBg.fontWeight = "bold";
+  }
+  if (cellClass.includes("jump")) {
+    cellBg.background = "#1e2e2e";
+    cellBg.color = "#66aaff";
+    cellBg.fontWeight = "bold";
+  }
+  if (cellClass.includes("shield")) {
+    cellBg.background = "#1e2e2e";
+    cellBg.color = "#44ff88";
+    cellBg.fontWeight = "bold";
+  }
+  if (cellClass.includes("artifact")) {
+    if (cellClass.includes("artifact-hidden")) {
+      cellBg.background = "#1a1e24";
+      cellBg.boxShadow = "inset 0 0 8px rgba(170,102,255,0.12)";
+    } else {
+      cellBg.background = "#1e2e2e";
+      cellBg.color = "#aa66ff";
+      cellBg.fontWeight = "bold";
+    }
+  }
+  if (cellClass.includes("trap")) {
+    cellBg.background = "#2e2e1e";
+    cellBg.color = "#ffaa00";
+    cellBg.fontWeight = "bold";
+  }
+  if (cellClass.includes("bomb")) {
+    cellBg.background = "#2e1e1e";
+    cellBg.color = "#ff8844";
+    cellBg.fontWeight = "bold";
+  }
+  if (cellClass.includes("collectible")) {
+    const ownerMatch = cellClass.match(/collectible-p(\d+)/);
+    const owner = ownerMatch ? parseInt(ownerMatch[1], 10) : null;
+    const c = owner !== null && owner < PLAYER_COLORS.length ? PLAYER_COLORS[owner] : "#888";
+    cellBg.color = c;
+    cellBg.fontWeight = "bold";
+    cellBg.fontSize = "1rem";
+    if (owner !== null) {
+      cellBg.background = `${c}22`;
+      cellBg.boxShadow = `inset 0 0 8px ${c}44`;
+    }
+  }
+  if (cellClass.includes("monster")) {
+    cellBg.background = "#2e1e1e";
+  }
+  if (cellClass.includes("dracula-telegraph")) {
+    cellBg.boxShadow = "inset 0 0 16px rgba(255,80,80,0.6), 0 0 12px #ff4444";
+    cellBg.border = "2px solid #ff4444";
+    cellBg.color = "#ff6666";
+    cellBg.zIndex = 5;
+  }
+  return cellBg;
 }
 
 export function hexToRgba(hex: string, alpha: number): string {

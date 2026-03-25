@@ -7,9 +7,9 @@ const combatLog = (...args: unknown[]) => {
 };
 
 /** Start menu + loading screen art (`public/menu/`) */
-const START_MENU_COVER_BG = "/menu/dracula-cover-bg.png";
+const START_MENU_COVER_BG = "./menu/dracula-cover-bg.png";
 /** Transparent PNG title label (used in start menu, header, and preloaded with cover). */
-const GAME_TITLE_LABEL_SRC = "/menu/dice-of-the-damned-label.png";
+const GAME_TITLE_LABEL_SRC = "./menu/dice-of-the-damned-label.png";
 /** Title / logo reds (gradient ~#ff9867 → #8e2215) — menu chrome + selection */
 const START_MENU_ACCENT_BRIGHT = "#ff9867";
 const START_MENU_BORDER = "rgba(221, 95, 54, 0.55)";
@@ -71,8 +71,10 @@ import {
 import {
   adjacentWallFogFromIntensityMap,
   basePathStyle,
+  classicFlatMazeCellBackground,
   MAZE_FLOOR_MUD_TEXTURE,
   MAZE_FLOOR_TEXTURE,
+  MAZE_LITE_TEXTURES,
   MAZE_NOISE_TEXTURE,
   MAZE_STAIN_TEXTURES,
   MAZE_WALL_TEXTURE,
@@ -216,7 +218,7 @@ type MobileDockAction = "bomb" | StoredArtifactKind;
 /** Let catapult / teleport visuals finish before turn change or clearing flight overlay */
 const SPECIAL_MOVE_SETTLE_MS = 2000;
 /** Pause before switching to the next player so the final pawn position on the maze is visible */
-const TURN_CHANGE_PAUSE_MS = 3000;
+const TURN_CHANGE_PAUSE_MS = 1000;
 /** Player + monster portraits in combat header */
 const COMBAT_FACEOFF_SPRITE_PX = 180;
 /** Player portrait in combat modal — matches monster column height */
@@ -1324,7 +1326,7 @@ export default function LabyrinthGame() {
 
   const mazeSimplexNoiseAppliedRef = useRef(false);
   useEffect(() => {
-    if (lab == null || mazeSimplexNoiseAppliedRef.current) return;
+    if (lab == null || MAZE_LITE_TEXTURES || mazeSimplexNoiseAppliedRef.current) return;
     const run = () => {
       const wrap = mazeWrapRef.current;
       if (!wrap || mazeSimplexNoiseAppliedRef.current) return;
@@ -1336,7 +1338,7 @@ export default function LabyrinthGame() {
 
   /** Warm decode for maze tile PNGs so first paint shows textures, not flat fallback colors. */
   useEffect(() => {
-    if (lab == null) return;
+    if (lab == null || MAZE_LITE_TEXTURES) return;
     for (const src of [MAZE_FLOOR_TEXTURE, MAZE_FLOOR_MUD_TEXTURE, MAZE_NOISE_TEXTURE, MAZE_WALL_TEXTURE, ...MAZE_STAIN_TEXTURES]) {
       const img = new Image();
       img.src = src;
@@ -7429,7 +7431,7 @@ export default function LabyrinthGame() {
         )}
         <div
           ref={mazeWrapRef}
-          className="maze-wrap maze-horror-render"
+          className={MAZE_LITE_TEXTURES ? "maze-wrap" : "maze-wrap maze-horror-render"}
           style={{
             ...mazeWrapStyle,
             marginTop: isLandscapeCompact ? 0 : MAZE_MARGIN,
@@ -7668,32 +7670,36 @@ export default function LabyrinthGame() {
                 ? pathFogVisualIntensity(rawCellFog, wallLightCount)
                 : rawCellFog;
               const cellBg: React.CSSProperties = {};
-              if (cellClass.includes("wall")) {
-                Object.assign(cellBg, wallStyleWithOptionalSconce(effectiveCellSize, x, y, lab));
-              } else if (walkableForFloor) {
-                Object.assign(
-                  cellBg,
-                  basePathStyle(
-                    effectiveCellSize,
-                    corridorLightDeg,
-                    lab,
-                    x,
-                    y,
-                    rawCellFog,
-                    adjacentWallFog,
-                  ),
-                );
-              }
-              if (cellClass.includes("start")) {
-                cellBg.color = "#00ff88";
-              }
-              if (cellClass.includes("goal")) {
-                cellBg.color = "#ff4444";
-              }
-              if (cellClass.includes("multiplier")) {
-                cellBg.color = "#ffcc00";
-                cellBg.fontWeight = "bold";
-                cellBg.fontSize = "0.85rem";
+              if (MAZE_LITE_TEXTURES) {
+                Object.assign(cellBg, classicFlatMazeCellBackground(cellClass, { isTeleportOption: !!isTeleportOption }));
+              } else {
+                if (cellClass.includes("wall")) {
+                  Object.assign(cellBg, wallStyleWithOptionalSconce(effectiveCellSize, x, y, lab));
+                } else if (walkableForFloor) {
+                  Object.assign(
+                    cellBg,
+                    basePathStyle(
+                      effectiveCellSize,
+                      corridorLightDeg,
+                      lab,
+                      x,
+                      y,
+                      rawCellFog,
+                      adjacentWallFog,
+                    ),
+                  );
+                }
+                if (cellClass.includes("start")) {
+                  cellBg.color = "#00ff88";
+                }
+                if (cellClass.includes("goal")) {
+                  cellBg.color = "#ff4444";
+                }
+                if (cellClass.includes("multiplier")) {
+                  cellBg.color = "#ffcc00";
+                  cellBg.fontWeight = "bold";
+                  cellBg.fontSize = "0.85rem";
+                }
               }
 
               const isTeleportFrom = teleportAnimation?.from[0] === x && teleportAnimation?.from[1] === y;

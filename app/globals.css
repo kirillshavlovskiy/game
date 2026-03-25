@@ -564,12 +564,8 @@ button {
 }
 
 /* --- Maze horror render (textures via TS + overlay stack) --- */
-/* Swap these URLs after dropping CC0 diffuse PNGs into public/textures/maze/ (see README there). */
-:root {
-  --maze-wall-tex: url("/textures/maze/Stone/Horror_Stone_02-256x256.png");
-  --maze-floor-tex: url("/textures/maze/Brick/Horror_Brick_07-256x256.png");
-  --maze-noise-tex: url("/textures/maze/noise_grain.png");
-}
+/* --maze-*-tex URLs live in `app/layout.tsx` as document-relative `./textures/...` so portals work.
+   Do not put url() here: bundled CSS lives under `/_next/static/` and `./textures` would 404. */
 
 .maze-wrap.maze-horror-render {
   isolation: isolate;
