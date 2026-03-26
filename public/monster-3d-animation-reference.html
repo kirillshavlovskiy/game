@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Monster 3D — animation clip map (static)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(180deg, #0e0c10 0%, #1a1520 100%);
+      color: #e8e4ec;
+      font-family: system-ui, Segoe UI, sans-serif;
+      padding: clamp(16px, 4vw, 40px);
+      line-height: 1.5;
+    }
+    main { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 1.65rem; color: #ffcba4; margin: 0 0 8px; }
+    h2 { font-size: 1.15rem; color: #b8f0c8; margin: 28px 0 12px; }
+    .note {
+      background: rgba(255, 152, 103, 0.1);
+      border: 1px solid rgba(255, 152, 103, 0.25);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 20px;
+      font-size: 0.92rem;
+      color: #c4b8d4;
+    }
+    .note a { color: #ff9867; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid rgba(255, 255, 255, 0.06); vertical-align: top; }
+    thead tr { background: rgba(255, 152, 103, 0.12); }
+    code { font-family: ui-monospace, monospace; color: #7ec8ff; }
+    td.mono { font-family: ui-monospace, monospace; font-size: 0.84rem; }
+    .muted { color: #a89cb0; font-size: 0.95rem; margin-bottom: 24px; }
+    .footer { font-size: 0.9rem; color: #7a7088; margin-top: 28px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Monster 3D — animation clip map</h1>
+    <p class="muted">
+      The repo does not include <code>.glb</code> files. When you add models under <code>public/models/monsters/</code>
+      and set <code>NEXT_PUBLIC_MONSTER_3D=1</code>, the combat portrait picks <strong>glTF animation clips by name</strong>
+      using the tables below. Keep this file in sync with <code>lib/monsterModels3d.ts</code> when clip lists change.
+    </p>
+    <div class="note">
+      <strong>Live / authoritative:</strong> With the app running, use the same data from source at
+      <a href="/monster-3d-animations">/monster-3d-animations</a> (e.g. <code>http://localhost:3000/monster-3d-animations</code>).
+    </div>
+
+    <h2>Portrait state → preferred clip names</h2>
+    <table>
+      <thead>
+        <tr><th>State</th><th>Combat UI (summary)</th><th>Clip names tried (first match wins)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>idle</code></td><td>Calm portrait; monster HP above ~⅓.</td><td class="mono">Idle → idle → Rest → rest → Neutral → neutral</td></tr>
+        <tr><td><code>hunt</code></td><td>Default threatening stance.</td><td class="mono">Hunt → hunt → Walk → walk → Run → run → Aggro → aggro → Idle → idle</td></tr>
+        <tr><td><code>attack</code></td><td>Monster attacking.</td><td class="mono">Attack → attack → Strike → strike → Slash → slash</td></tr>
+        <tr><td><code>angry</code></td><td>Hard surprise stance.</td><td class="mono">Hunt → hunt → Walk → walk → Run → run → Aggro → aggro → Idle → idle</td></tr>
+        <tr><td><code>rolling</code></td><td>Dice rolling (same clip list as attack).</td><td class="mono">Attack → attack → Strike → strike → Slash → slash</td></tr>
+        <tr><td><code>hurt</code></td><td>Monster took a hit.</td><td class="mono">Hurt → hurt → Hit → hit → Damage → damage</td></tr>
+        <tr><td><code>defeated</code></td><td>Monster eliminated.</td><td class="mono">Death → death → Defeated → defeated → Die → die → Down → down</td></tr>
+        <tr><td><code>recover</code></td><td>Low HP portrait band (~≤⅓).</td><td class="mono">Recover → recover → Weak → weak → Tired → tired → Idle → idle</td></tr>
+        <tr><td><code>neutral</code></td><td>Some UI fallbacks.</td><td class="mono">Idle → idle → Rest → rest → Neutral → neutral</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Monster type → GLB file</h2>
+    <table>
+      <thead>
+        <tr><th>Type</th><th>Name</th><th>Path</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>V</code></td><td>Dracula</td><td class="mono">/models/monsters/dracula.glb</td></tr>
+        <tr><td><code>Z</code></td><td>Zombie</td><td class="mono">/models/monsters/zombie.glb</td></tr>
+        <tr><td><code>S</code></td><td>Spider</td><td class="mono">/models/monsters/spider.glb</td></tr>
+        <tr><td><code>G</code></td><td>Ghost</td><td class="mono">/models/monsters/ghost.glb</td></tr>
+        <tr><td><code>K</code></td><td>Skeleton</td><td class="mono">/models/monsters/skeleton.glb</td></tr>
+        <tr><td><code>L</code></td><td>Lava elemental</td><td class="mono">/models/monsters/lava.glb</td></tr>
+      </tbody>
+    </table>
+
+    <p class="footer">
+      Runtime also does fuzzy name matching and an idle-like fallback if nothing matches — see <code>components/MonsterModel3D.tsx</code>.
+    </p>
+    <p><a href="/" style="color: #ff9867;">← Back to game</a></p>
+  </main>
+</body>
+</html>

@@ -719,28 +719,30 @@ export class Labyrinth {
     return area;
   }
 
-  /** Skeleton east of (0,0) — first combat after moving right; matches _addMonsters (shield on). */
-  private _placeStartNeighborSkeleton(): void {
+  /** Dracula east of (0,0) — first combat after moving right; prepended so it is monsters[0]. */
+  private _placeStartNeighborDracula(): void {
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "K",
+          type: "V",
           patrolArea,
           visionRadius: 3,
           spawnX: 1,
           spawnY: 0,
-          hasShield: true,
-          hp: getMonsterMaxHp("K"),
+          hp: getMonsterMaxHp("V"),
+          draculaState: "idle",
+          draculaCooldowns: { teleport: 0, attack: 0 },
+          targetPlayerIndex: null,
         });
       }
     }
   }
 
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor skeleton is unshifted in generate/loadGrid)
+    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor Dracula is unshifted in generate/loadGrid)
     const intersections: [number, number][] = [];
     const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
@@ -890,6 +892,8 @@ export class Labyrinth {
     const indices = activePlayerIndex !== undefined ? [activePlayerIndex] : Array.from({ length: this.players.length }, (_, i) => i);
     for (let mi = 0; mi < this.monsters.length; mi++) {
       const m = this.monsters[mi];
+      const aliveHp = m.hp ?? getMonsterMaxHp(m.type);
+      if (aliveHp <= 0) continue;
       for (const i of indices) {
         if (this.eliminatedPlayers.has(i)) continue;
         const p = this.players[i];
@@ -1002,7 +1006,7 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
 
-    this._placeStartNeighborSkeleton();
+    this._placeStartNeighborDracula();
   }
 
   loadGrid(grid: string[][]): boolean {
@@ -1051,7 +1055,7 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
-    this._placeStartNeighborSkeleton();
+    this._placeStartNeighborDracula();
     // Add hidden cells and spider webs from path cells for AI-loaded mazes
     const pathCells: [number, number][] = [];
     for (let y = 1; y < this.height - 1; y++)

@@ -14,15 +14,19 @@
     "clean": "rm -rf .next node_modules package-lock.json && npm install",
     "start": "next start",
     "lint": "next lint",
-    "textures:maze": "python3 scripts/generate-maze-textures.py"
+    "textures:maze": "python3 scripts/generate-maze-textures.py",
+    "reorder-dracula-attack": "node scripts/reorder-dracula-attack-clips.mjs"
   },
   "dependencies": {
     "@3d-dice/dice-box-threejs": "^0.0.12",
     "@fontsource/creepster": "^5.2.7",
+    "@react-three/drei": "^9.92.7",
+    "@react-three/fiber": "^8.15.19",
     "next": "^14.2.35",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "simplex-noise": "^4.0.3"
+    "simplex-noise": "^4.0.3",
+    "three": "^0.160.0"
   },
   "devDependencies": {
     "@types/node": "^20",
