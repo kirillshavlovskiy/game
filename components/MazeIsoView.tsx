@@ -24,6 +24,10 @@ type Props = {
   onCellClick?: (x: number, y: number) => void;
   teleportOptions?: [number, number][];
   teleportMode?: boolean;
+  /** Slingshot / catapult aim in 3D: raised camera + trajectory overlay. */
+  catapultMode?: boolean;
+  /** Grid-space arc samples from `Labyrinth.getCatapultTrajectory` (preview). */
+  catapultArcPoints?: [number, number][] | null;
   focusVersion?: number;
   miniMonsters?: MiniMonster[];
   fogIntensityMap?: Map<string, number>;
@@ -896,6 +900,84 @@ function FloorStains({
 }
 
 /* ------------------------------------------------------------------ */
+/*  Slingshot aim trajectory (above maze, fades before “impact”)       */
+/* ------------------------------------------------------------------ */
+const CATAPULT_TRAJ_VERT = `
+attribute float alpha;
+varying float vAlpha;
+void main() {
+  vAlpha = alpha;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const CATAPULT_TRAJ_FRAG = `
+uniform vec3 uColor;
+varying float vAlpha;
+void main() {
+  if (vAlpha < 0.02) discard;
+  gl_FragColor = vec4(uColor, vAlpha * 0.88);
+}
+`;
+
+function CatapultTrajectory3D({ arcPoints }: { arcPoints: [number, number][] }) {
+  const linePayload = useMemo(() => {
+    const n = arcPoints.length;
+    if (n < 2) return null;
+    const positions = new Float32Array(n * 3);
+    const alphas = new Float32Array(n);
+    const aerial = 2.25;
+    for (let i = 0; i < n; i++) {
+      const t = n <= 1 ? 0 : i / (n - 1);
+      const [gx, gy] = arcPoints[i]!;
+      const wx = gx * CS;
+      const wz = gy * CS;
+      let wy = FLOOR_Y + 0.68 + aerial * Math.sin(Math.PI * t) * (1 - 0.3 * t);
+      if (t > 0.55) {
+        const u = (t - 0.55) / 0.45;
+        wy += u * u * 4.8;
+      }
+      positions[i * 3] = wx;
+      positions[i * 3 + 1] = wy;
+      positions[i * 3 + 2] = wz;
+      let a = 1;
+      if (t > 0.38) {
+        a *= 1 - THREE.MathUtils.smoothstep(t, 0.38, 0.86);
+      }
+      if (t > 0.78) {
+        a *= 1 - THREE.MathUtils.smoothstep(t, 0.78, 0.96);
+      }
+      alphas[i] = Math.max(0, Math.min(1, a));
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("alpha", new THREE.BufferAttribute(alphas, 1));
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: { uColor: { value: new THREE.Color("#ffcc66") } },
+      vertexShader: CATAPULT_TRAJ_VERT,
+      fragmentShader: CATAPULT_TRAJ_FRAG,
+    });
+    const line = new THREE.Line(geometry, material);
+    line.frustumCulled = false;
+    line.renderOrder = 920;
+    return { line, geometry, material };
+  }, [arcPoints]);
+
+  useEffect(() => {
+    if (!linePayload) return undefined;
+    return () => {
+      linePayload.geometry.dispose();
+      linePayload.material.dispose();
+    };
+  }, [linePayload]);
+
+  if (!linePayload) return null;
+  return <primitive object={linePayload.line} />;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Camera controller: smooth follow, pan default, rotate on demand    */
 /* ------------------------------------------------------------------ */
 /** Camera height above the look-at target (lower, closer to ground). */
@@ -908,7 +990,7 @@ const CAM_POS_LERP = 0.2;
 const CAM_ROT_LERP = 0.18;
 
 function CameraController({
-  grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy, zoom, rotateMode, resetTick, teleportMode, focusVersion,
+  grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy, zoom, rotateMode, resetTick, teleportMode, catapultMode, focusVersion,
 }: {
   grid: string[][];
   mapWidth: number;
@@ -921,6 +1003,7 @@ function CameraController({
   rotateMode: boolean;
   resetTick: number;
   teleportMode: boolean;
+  catapultMode: boolean;
   focusVersion?: number;
 }) {
   const { camera, gl } = useThree();
@@ -944,10 +1027,21 @@ function CameraController({
       // Magic portal targeting gets extra zoom-out to expose destination options.
       camera.fov = teleportMode
         ? THREE.MathUtils.clamp(baseFov + 18, 72, 108)
-        : baseFov;
+        : catapultMode
+          ? THREE.MathUtils.clamp(baseFov + 11, 64, 100)
+          : baseFov;
       camera.updateProjectionMatrix();
     }
-  }, [camera, zoom, teleportMode]);
+  }, [camera, zoom, teleportMode, catapultMode]);
+
+  const prevCatapultRef = useRef(false);
+  useEffect(() => {
+    if (catapultMode && !prevCatapultRef.current) {
+      hasManualCameraRef.current = false;
+      manualOffsetRef.current = null;
+    }
+    prevCatapultRef.current = catapultMode;
+  }, [catapultMode]);
 
   /* Manual rotation via Ctrl+drag or when rotateMode is active.
      OrbitControls stays in pan-only mode always ? we orbit the camera ourselves. */
@@ -1027,8 +1121,8 @@ function CameraController({
     const px = playerX * CS;
     const pz = playerY * CS;
     const desiredTarget = new THREE.Vector3(px, 0, pz);
-    const followDist = teleportMode ? CAM_BEHIND * 2 : CAM_BEHIND;
-    const followHeight = teleportMode ? CAM_HEIGHT * 1.7 : CAM_HEIGHT;
+    const followDist = teleportMode ? CAM_BEHIND * 2 : catapultMode ? CAM_BEHIND * 1.52 : CAM_BEHIND;
+    const followHeight = teleportMode ? CAM_HEIGHT * 1.7 : catapultMode ? CAM_HEIGHT * 1.38 : CAM_HEIGHT;
     const autoCameraPos = new THREE.Vector3(
       px - (desiredDir.dx / len) * followDist,
       followHeight,
@@ -1036,7 +1130,7 @@ function CameraController({
     );
     const autoOffset = autoCameraPos.clone().sub(desiredTarget);
     const desiredOffset =
-      hasManualCameraRef.current && manualOffsetRef.current && !teleportMode
+      hasManualCameraRef.current && manualOffsetRef.current && !teleportMode && !catapultMode
         ? manualOffsetRef.current.clone()
         : autoOffset.clone();
 
@@ -1489,8 +1583,15 @@ function Monsters3D({
 
 function MazeScene({
   grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
-  zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, focusVersion, miniMonsters, fogIntensityMap,
-}: Omit<Props, "visible"> & { rotateMode: boolean; resetTick: number; teleportOptions?: [number, number][]; teleportMode?: boolean }) {
+  zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, catapultMode, catapultArcPoints, focusVersion, miniMonsters, fogIntensityMap,
+}: Omit<Props, "visible"> & {
+  rotateMode: boolean;
+  resetTick: number;
+  teleportOptions?: [number, number][];
+  teleportMode?: boolean;
+  catapultMode?: boolean;
+  catapultArcPoints?: [number, number][] | null;
+}) {
   const shadowRange = Math.max(mapWidth, mapHeight) * CS;
   return (
     <>
@@ -1537,6 +1638,9 @@ function MazeScene({
         <Monsters3D monsters={miniMonsters} playerX={playerX} playerY={playerY} />
       )}
       <PlayerMarker playerX={playerX} playerY={playerY} facingDx={facingDx} facingDy={facingDy} />
+      {catapultArcPoints && catapultArcPoints.length >= 2 && (
+        <CatapultTrajectory3D arcPoints={catapultArcPoints} />
+      )}
       <CameraController
         grid={grid}
         mapWidth={mapWidth}
@@ -1549,6 +1653,7 @@ function MazeScene({
         rotateMode={rotateMode}
         resetTick={resetTick}
         teleportMode={!!teleportMode}
+        catapultMode={!!catapultMode}
         focusVersion={focusVersion}
       />
       {teleportMode && !!teleportOptions?.length && (
@@ -1838,6 +1943,8 @@ export default function MazeIsoView({
   onCellClick,
   teleportOptions,
   teleportMode,
+  catapultMode = false,
+  catapultArcPoints = null,
   focusVersion,
   miniMonsters,
   fogIntensityMap,
@@ -1944,6 +2051,8 @@ export default function MazeIsoView({
           resetTick={resetTick}
           teleportOptions={teleportOptions}
           teleportMode={teleportMode}
+          catapultMode={catapultMode}
+          catapultArcPoints={catapultArcPoints}
           focusVersion={focusVersion}
           miniMonsters={miniMonsters}
           fogIntensityMap={fogIntensityMap}

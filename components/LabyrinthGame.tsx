@@ -11,6 +11,43 @@ const combatLog = (message: string, ...args: unknown[]) => {
   console.log("[COMBAT]", message, ...args);
 };
 
+/** TEMP: `false` restores movement dice and finite moves. */
+const TEMP_INFINITE_MOVES = true;
+const INFINITE_MOVES_POOL = 999_999;
+
+const ISO_MINIMAP_ZOOM_BASELINE = 1;
+const ISO_MINIMAP_ZOOM_MIN = 0.65;
+const ISO_MINIMAP_ZOOM_MAX = 2.4;
+const ISO_MINIMAP_ZOOM_STEP = 0.12;
+
+type MovementDiceTransition = {
+  movesLeftRef: { current: number };
+  setMovesLeft: (v: number | ((p: number) => number)) => void;
+  setDiceResult: (v: number | null) => void;
+  setShowDiceModal: (v: boolean) => void;
+  setRolling: (v: boolean) => void;
+};
+
+function grantInfiniteMovesIfTemp(t: MovementDiceTransition): boolean {
+  if (!TEMP_INFINITE_MOVES) return false;
+  t.movesLeftRef.current = INFINITE_MOVES_POOL;
+  t.setMovesLeft(INFINITE_MOVES_POOL);
+  t.setDiceResult(INFINITE_MOVES_POOL);
+  t.setShowDiceModal(false);
+  t.setRolling(false);
+  return true;
+}
+
+/** After the active player index is set: infinite pool or open roll modal. */
+function showMovementDiceOrInfinite(t: MovementDiceTransition): void {
+  if (grantInfiniteMovesIfTemp(t)) return;
+  t.movesLeftRef.current = 0;
+  t.setMovesLeft(0);
+  t.setDiceResult(null);
+  t.setShowDiceModal(true);
+  t.setRolling(false);
+}
+
 /** Start menu + loading screen art (`public/menu/`) */
 const START_MENU_COVER_BG = "./menu/dracula-cover-bg.png";
 /** Transparent PNG title label (used in start menu, header, and preloaded with cover). */
@@ -24,7 +61,18 @@ const START_MENU_CTRL_BG = "#1a1214";
 /** In-game header + metadata-aligned display name */
 const GAME_DISPLAY_TITLE = "Dice Of The Damned";
 
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from "react";
 import { flushSync } from "react-dom";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import MazeIsoView from "@/components/MazeIsoView";
@@ -194,6 +242,32 @@ function releaseDraculaTelegraphIfPending(lab: Labyrinth, mi: number): void {
   }
 }
 
+/** ↑/↓/←/→ and WASD as forward/back/left/right from the pawn’s last move facing (same as marker + move pad highlights). */
+function getRelativeDirectionsFromFacing(
+  playerIndex: number,
+  facingMap: Record<number, { dx: number; dy: number }>
+): {
+  forward: { dx: number; dy: number };
+  backward: { dx: number; dy: number };
+  left: { dx: number; dy: number };
+  right: { dx: number; dy: number };
+} {
+  const activeFacing = facingMap[playerIndex] ?? { dx: 0, dy: 1 };
+  const sdx = Math.sign(activeFacing.dx || 0);
+  const sdy = Math.sign(activeFacing.dy || 0);
+  const facing =
+    sdx === 0 && sdy === 0
+      ? { dx: 0, dy: 1 }
+      : Math.abs(sdx) >= Math.abs(sdy)
+        ? { dx: sdx, dy: 0 }
+        : { dx: 0, dy: sdy };
+  const forward = { dx: facing.dx, dy: facing.dy };
+  const backward = { dx: -facing.dx, dy: -facing.dy };
+  const left = { dx: facing.dy, dy: -facing.dx };
+  const right = { dx: -facing.dy, dy: facing.dx };
+  return { forward, backward, left, right };
+}
+
 const CELL_SIZE = 44;
 /** Viewport at or below this width: hide sidebar, bottom dock = mobile (select + Use). */
 const MOBILE_BREAKPOINT_PX = 768;
@@ -209,6 +283,115 @@ function matchesMobileLayout(): boolean {
     ).matches
   );
 }
+
+/** 3D iso immersive layer — above header chrome; below movement dice / modals that use higher z-index. */
+const ISO_IMMERSIVE_Z = 10000;
+const ISO_IMMERSIVE_HUD_Z = 10050;
+/** Full-screen 3D HUD: circular move ring + bottom sheet offset */
+const ISO_HUD_MOVE_RING_PX = 132;
+const ISO_HUD_DIR_BTN_PX = 40;
+
+/** In-play fullscreen top strip (3D or 2D): menu, stats, exit FS, view switch. */
+const PLAY_FULLSCREEN_TOP_BAR_STYLE: React.CSSProperties = {
+  flexShrink: 0,
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  flexWrap: "wrap",
+  paddingLeft: "max(10px, env(safe-area-inset-left, 0px))",
+  paddingRight: "max(10px, env(safe-area-inset-right, 0px))",
+  paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
+  paddingBottom: 8,
+  background: "rgba(10,10,16,0.94)",
+  borderBottom: "1px solid #333",
+  zIndex: ISO_IMMERSIVE_HUD_Z + 20,
+};
+
+function getFullscreenElement(): Element | null {
+  if (typeof document === "undefined") return null;
+  const d = document as Document & {
+    webkitFullscreenElement?: Element | null;
+    mozFullScreenElement?: Element | null;
+    msFullscreenElement?: Element | null;
+  };
+  return (
+    document.fullscreenElement ??
+    d.webkitFullscreenElement ??
+    d.mozFullScreenElement ??
+    d.msFullscreenElement ??
+    null
+  );
+}
+
+async function requestFullscreenOnElement(el: HTMLElement): Promise<void> {
+  const anyEl = el as HTMLElement & {
+    requestFullscreen?: () => Promise<void>;
+    webkitRequestFullscreen?: () => void;
+    webkitRequestFullScreen?: () => void;
+    mozRequestFullScreen?: () => void;
+    msRequestFullscreen?: () => void;
+  };
+  if (anyEl.requestFullscreen) {
+    await anyEl.requestFullscreen();
+    return;
+  }
+  if (anyEl.webkitRequestFullscreen) {
+    anyEl.webkitRequestFullscreen();
+    return;
+  }
+  if (anyEl.webkitRequestFullScreen) {
+    anyEl.webkitRequestFullScreen();
+    return;
+  }
+  if (anyEl.mozRequestFullScreen) {
+    anyEl.mozRequestFullScreen();
+    return;
+  }
+  if (anyEl.msRequestFullscreen) {
+    anyEl.msRequestFullscreen();
+    return;
+  }
+  throw new Error("fullscreen unsupported");
+}
+
+async function exitDocumentFullscreen(): Promise<void> {
+  if (typeof document === "undefined") return;
+  if (!getFullscreenElement()) return;
+  const d = document as Document & {
+    webkitExitFullscreen?: () => void;
+    webkitCancelFullScreen?: () => void;
+    mozCancelFullScreen?: () => void;
+    msExitFullscreen?: () => void;
+  };
+  /** Browsers reject when the document is not active (tab unfocused, embedded, etc.). */
+  const safe = async (run: () => void | Promise<void>) => {
+    try {
+      await run();
+    } catch {
+      /* ignore */
+    }
+  };
+  if (document.exitFullscreen) {
+    await safe(() => document.exitFullscreen!());
+    return;
+  }
+  if (d.webkitExitFullscreen) {
+    await safe(() => d.webkitExitFullscreen!());
+    return;
+  }
+  if (d.webkitCancelFullScreen) {
+    await safe(() => d.webkitCancelFullScreen!());
+    return;
+  }
+  if (d.mozCancelFullScreen) {
+    await safe(() => d.mozCancelFullScreen!());
+    return;
+  }
+  if (d.msExitFullscreen) {
+    await safe(() => d.msExitFullscreen!());
+  }
+}
+
 /** Mobile dock collapsed: thin strip height (swipe up to expand). */
 const MOBILE_DOCK_COLLAPSED_H = 40;
 /** Swipe threshold (px) to trigger expand/collapse. */
@@ -415,6 +598,310 @@ function BottomDockInventoryIcon({ variant }: { variant: ArtifactIconVariant }) 
         }}
       >
         <ArtifactIcon variant={variant} size={slot} />
+      </div>
+    </div>
+  );
+}
+
+/** Same 2D grid mini map as the iso bottom dock (− / % / +, wheel & pinch zoom, fog, ▲ facing). */
+function IsoDockGridMiniMap({
+  lab,
+  currentPlayer,
+  playerFacing,
+  fogIntensityMap,
+  playerCells,
+  isoMiniMapZoom,
+  setIsoMiniMapZoom,
+  isoMiniMapPinchStartRef,
+  onOpenGrid,
+}: {
+  lab: Labyrinth;
+  currentPlayer: number;
+  playerFacing: Record<number, { dx: number; dy: number }>;
+  fogIntensityMap: Map<string, number>;
+  playerCells: Record<string, number>;
+  isoMiniMapZoom: number;
+  setIsoMiniMapZoom: Dispatch<SetStateAction<number>>;
+  isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
+  onOpenGrid: () => void;
+}) {
+  const miniCellBase = Math.max(3, Math.min(10, Math.floor(Math.min(180 / lab.width, 120 / lab.height))));
+  const miniCell = Math.max(3, Math.min(22, Math.round(miniCellBase * isoMiniMapZoom)));
+  const activeFacing = playerFacing[currentPlayer] ?? { dx: 0, dy: 1 };
+  const activeFacingLen = Math.hypot(activeFacing.dx, activeFacing.dy) || 1;
+  const activeFacingAngleDeg =
+    (Math.atan2(activeFacing.dy / activeFacingLen, activeFacing.dx / activeFacingLen) * 180) / Math.PI + 90;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpenGrid}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpenGrid();
+        }
+      }}
+      title="Switch to full 2D grid map"
+      onWheel={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const direction = -Math.sign(e.deltaY);
+        if (direction === 0) return;
+        setIsoMiniMapZoom((z) =>
+          Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z + direction * ISO_MINIMAP_ZOOM_STEP))
+        );
+      }}
+      onTouchStart={(e) => {
+        if (e.touches.length !== 2) return;
+        const [a, b] = [e.touches[0], e.touches[1]];
+        if (!a || !b) return;
+        isoMiniMapPinchStartRef.current = {
+          distance: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY),
+          zoom: isoMiniMapZoom,
+        };
+      }}
+      onTouchMove={(e) => {
+        if (e.touches.length !== 2 || !isoMiniMapPinchStartRef.current) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const [a, b] = [e.touches[0], e.touches[1]];
+        if (!a || !b) return;
+        const distance = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+        const start = isoMiniMapPinchStartRef.current;
+        const scale = distance / Math.max(1, start.distance);
+        const nextZoom = start.zoom * scale;
+        setIsoMiniMapZoom(Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, nextZoom)));
+      }}
+      onTouchEnd={(e) => {
+        if (e.touches.length < 2) isoMiniMapPinchStartRef.current = null;
+      }}
+      onTouchCancel={() => {
+        isoMiniMapPinchStartRef.current = null;
+      }}
+      style={{
+        width: "100%",
+        height: 140,
+        borderRadius: 6,
+        border: "1px solid #3a3a46",
+        background: "#0f0f16",
+        overflow: "hidden",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+        position: "relative",
+        touchAction: "none",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: 6,
+          right: 6,
+          zIndex: 3,
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "2px 4px",
+          borderRadius: 4,
+          border: "1px solid rgba(98,98,120,0.65)",
+          background: "rgba(8,8,12,0.72)",
+          fontFamily: "monospace",
+        }}
+      >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsoMiniMapZoom((z) =>
+              Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z - ISO_MINIMAP_ZOOM_STEP))
+            );
+          }}
+          title="Zoom out mini map"
+          style={{
+            width: 18,
+            height: 18,
+            borderRadius: 4,
+            border: "1px solid #4d4d63",
+            background: "rgba(18,18,28,0.95)",
+            color: "#d2d8e4",
+            fontSize: "0.82rem",
+            lineHeight: 1,
+            cursor: "pointer",
+          }}
+        >
+          -
+        </button>
+        <span
+          style={{
+            minWidth: 36,
+            textAlign: "center",
+            color: "#b9c4d6",
+            fontSize: "0.64rem",
+          }}
+        >
+          {Math.round((isoMiniMapZoom / ISO_MINIMAP_ZOOM_BASELINE) * 100)}%
+        </span>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsoMiniMapZoom((z) =>
+              Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z + ISO_MINIMAP_ZOOM_STEP))
+            );
+          }}
+          title="Zoom in mini map"
+          style={{
+            width: 18,
+            height: 18,
+            borderRadius: 4,
+            border: "1px solid #4d4d63",
+            background: "rgba(18,18,28,0.95)",
+            color: "#d2d8e4",
+            fontSize: "0.82rem",
+            lineHeight: 1,
+            cursor: "pointer",
+          }}
+        >
+          +
+        </button>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${lab.width}, ${miniCell}px)`,
+          gridTemplateRows: `repeat(${lab.height}, ${miniCell}px)`,
+          position: "relative",
+          boxShadow: "0 0 0 1px rgba(255,255,255,0.08)",
+        }}
+      >
+        {Array.from({ length: lab.height }).map((_, y) =>
+          Array.from({ length: lab.width }).map((_, x) => {
+            const cellType = lab.grid[y]?.[x] ?? "#";
+            const isWallCell = cellType === "#";
+            const rawCellFog = fogIntensityMap.get(`${x},${y}`) ?? 0;
+            const walkableForFloor = isWalkable(cellType);
+            const adjacentWallFog = walkableForFloor
+              ? adjacentWallFogFromIntensityMap(lab, x, y, fogIntensityMap)
+              : undefined;
+            const wallLightCount = walkableForFloor ? pathFloorWallLightCount(lab, x, y, adjacentWallFog) : 0;
+            const cellFogVisual = walkableForFloor ? pathFogVisualIntensity(rawCellFog, wallLightCount) : rawCellFog;
+            const corridorLightDeg = mazeCorridorLightAngleDeg(lab, x, y);
+            const bg: React.CSSProperties = MAZE_LITE_TEXTURES
+              ? classicFlatMazeCellBackground(isWallCell ? "cell wall" : "cell path", { isTeleportOption: false })
+              : isWallCell
+                ? wallStyleWithOptionalSconce(miniCell, x, y, lab)
+                : basePathStyle(miniCell, corridorLightDeg, lab, x, y, rawCellFog, adjacentWallFog);
+            const monster = lab.monsters.find((m) => m.x === x && m.y === y);
+            const pi = playerCells[`${x},${y}`];
+            const showPlayer = pi !== undefined && !lab.eliminatedPlayers.has(pi);
+            const isHiddenCell = lab.hiddenCells.has(`${x},${y}`);
+            const showArtifactDot =
+              !isWallCell &&
+              !isHiddenCell &&
+              rawCellFog <= 0 &&
+              isArtifactCell(cellType) &&
+              !monster &&
+              !showPlayer;
+            return (
+              <div
+                key={`mini-${x}-${y}`}
+                style={{
+                  width: miniCell,
+                  height: miniCell,
+                  position: "relative",
+                  ...bg,
+                }}
+              >
+                {monster && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: "50%",
+                      top: "50%",
+                      transform: "translate(-50%, -50%)",
+                      width: Math.max(2, miniCell * 0.36),
+                      height: Math.max(2, miniCell * 0.36),
+                      borderRadius: "50%",
+                      background: "#ff4f4f",
+                      boxShadow: "0 0 4px rgba(255,80,80,0.7)",
+                      zIndex: 3,
+                    }}
+                  />
+                )}
+                {showPlayer && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: "50%",
+                      top: "50%",
+                      transform: "translate(-50%, -50%)",
+                      width: Math.max(2, miniCell * 0.44),
+                      height: Math.max(2, miniCell * 0.44),
+                      borderRadius: "50%",
+                      background: pi === currentPlayer ? "#00ff88" : "#6fb8ff",
+                      boxShadow:
+                        pi === currentPlayer
+                          ? "0 0 5px rgba(0,255,136,0.75)"
+                          : "0 0 4px rgba(100,180,255,0.55)",
+                      zIndex: 4,
+                    }}
+                  />
+                )}
+                {showPlayer && pi === currentPlayer && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: "50%",
+                      top: "50%",
+                      transform: `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
+                      color: "#062214",
+                      fontSize: `${Math.max(7, miniCell * 0.85)}px`,
+                      fontWeight: 900,
+                      lineHeight: 1,
+                      textShadow: "0 0 2px rgba(0,255,136,0.95)",
+                      pointerEvents: "none",
+                      zIndex: 5,
+                    }}
+                    title="Active player facing direction"
+                  >
+                    ▲
+                  </span>
+                )}
+                {showArtifactDot && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: "50%",
+                      top: "50%",
+                      transform: "translate(-50%, -50%)",
+                      width: Math.max(2, miniCell * 0.3),
+                      height: Math.max(2, miniCell * 0.3),
+                      borderRadius: "50%",
+                      background: "#ffd166",
+                      boxShadow: "0 0 4px rgba(255,209,102,0.8)",
+                      zIndex: 2,
+                    }}
+                  />
+                )}
+                {cellFogVisual > 0 && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      background: `rgba(3, 3, 8, ${Math.min(0.95, 0.1 + cellFogVisual * 0.85)})`,
+                      pointerEvents: "none",
+                      zIndex: 1,
+                    }}
+                  />
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
     </div>
   );
@@ -1137,13 +1624,9 @@ export default function LabyrinthGame() {
   const MAZE_ZOOM_MIN = 1;
   const MAZE_ZOOM_MAX = 4;
   const MAZE_ZOOM_STEP = 0.25;
-  const ISO_MINIMAP_ZOOM_BASELINE = 1;
-  const ISO_MINIMAP_ZOOM_MIN = 0.65;
-  const ISO_MINIMAP_ZOOM_MAX = 2.4;
-  const ISO_MINIMAP_ZOOM_STEP = 0.12;
   const [mazeZoom, setMazeZoom] = useState(MAZE_ZOOM_BASELINE);
   const [isoMiniMapZoom, setIsoMiniMapZoom] = useState(ISO_MINIMAP_ZOOM_BASELINE);
-  /** `grid` = playable CSS map; `iso` = isometric 2.5D (readability). Slingshot/teleport force grid. */
+  /** `grid` = playable CSS map; `iso` = 3D isometric view. Magic teleport can switch to iso; slingshot stays in current view. */
   const [mazeMapView, setMazeMapView] = useState<"grid" | "iso">("iso");
   const [playerFacing, setPlayerFacing] = useState<Record<number, { dx: number; dy: number }>>({});
   const [isMobile, setIsMobile] = useState(false);
@@ -1155,6 +1638,8 @@ export default function LabyrinthGame() {
   const [desktopControlsCollapsed, setDesktopControlsCollapsed] = useState(false);
   /** Mobile: selected item in bottom dock before tapping Use. */
   const [mobileDockAction, setMobileDockAction] = useState<MobileDockAction | null>(null);
+  /** Full-screen 3D HUD: selected bomb/artifact in center strip (shows advice sheet below). */
+  const [immersiveInventoryPick, setImmersiveInventoryPick] = useState<MobileDockAction | null>(null);
   /** Mobile: full Move & items vs compact artifacts-only strip. */
   /** Mobile: ▼/▲ toggles move pad + inventory together (starts open). */
   const [mobileDockExpanded, setMobileDockExpanded] = useState(true);
@@ -1214,6 +1699,7 @@ export default function LabyrinthGame() {
   const [combatArtifactRerollPrompt, setCombatArtifactRerollPrompt] = useState(false);
   const applyCombatPostResolveRef = useRef<(result: CombatResult) => void>(() => {});
   const currentPlayerRef = useRef(currentPlayer);
+  const playerFacingRef = useRef<Record<number, { dx: number; dy: number }>>({});
   const labRef = useRef(lab);
   const teleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Absolute deadline (ms) for idle auto-pick; survives effect re-runs / gamePaused toggles so the full MAGIC_TELEPORT_PICK_IDLE_MS is preserved. */
@@ -1229,6 +1715,8 @@ export default function LabyrinthGame() {
   const currentPlayerCellRef = useRef<HTMLDivElement | null>(null);
   const expandDesktopControlsRef = useRef<() => void>(() => {});
   const mazeWrapRef = useRef<HTMLDivElement>(null);
+  /** Grid play fullscreen includes zoom row + maze + bottom dock (sibling of wrap). */
+  const mazeAreaRef = useRef<HTMLDivElement>(null);
   const pinchStartRef = useRef<{ distance: number; zoom: number } | null>(null);
   const isoMiniMapPinchStartRef = useRef<{ distance: number; zoom: number } | null>(null);
   const mazeZoomRef = useRef(mazeZoom);
@@ -1362,17 +1850,17 @@ export default function LabyrinthGame() {
   }, [lab?.width, lab?.height]);
 
   useEffect(() => {
-    if (catapultPicker || catapultMode) {
-      setMazeMapView("grid");
-      return;
-    }
     if (teleportPicker?.sourceType === "magic") {
       setMazeMapView("iso");
     }
-  }, [catapultPicker, catapultMode, teleportPicker?.sourceType]);
+  }, [teleportPicker?.sourceType]);
 
   useLayoutEffect(() => {
     if (!isMobile) {
+      setMobileDockInsetPx(0);
+      return;
+    }
+    if (mazeMapView !== "grid") {
       setMobileDockInsetPx(0);
       return;
     }
@@ -1435,7 +1923,7 @@ export default function LabyrinthGame() {
       ro.disconnect();
       window.removeEventListener("resize", measureExpanded);
     };
-  }, [isMobile, mobileDockExpanded, lab, movesLeft, combatState, winner]);
+  }, [isMobile, mazeMapView, mobileDockExpanded, lab, movesLeft, combatState, winner]);
 
   useLayoutEffect(() => {
     gamePausedRef.current = gamePaused;
@@ -1971,7 +2459,17 @@ export default function LabyrinthGame() {
     combatHasRolledRef.current = false;
     setLastCombatStrikeDiceFace(null);
     setRolling(false);
-    setShowDiceModal(true);
+    if (
+      !grantInfiniteMovesIfTemp({
+        movesLeftRef,
+        setMovesLeft,
+        setDiceResult,
+        setShowDiceModal,
+        setRolling,
+      })
+    ) {
+      setShowDiceModal(true);
+    }
   }, [getDimensions, numPlayers, difficulty]);
 
   const generateWithAI = useCallback(async () => {
@@ -2027,13 +2525,16 @@ export default function LabyrinthGame() {
         setCurrentPlayer(0);
         setMazeMapView("iso");
         setPlayerFacing({});
-        movesLeftRef.current = 0;
-        setMovesLeft(0);
-        setShowDiceModal(true);
+        showMovementDiceOrInfinite({
+          movesLeftRef,
+          setMovesLeft,
+          setDiceResult,
+          setShowDiceModal,
+          setRolling,
+        });
         setTotalMoves(0);
         setPlayerTurns(Array(n).fill(0));
         setPlayerMoves(Array(n).fill(0));
-        setDiceResult(null);
         setWinner(null);
         setError("");
         setBonusAdded(null);
@@ -2147,6 +2648,8 @@ export default function LabyrinthGame() {
       let shieldAbsorbedFlag = false;
 
       const gdam = result.glancingDamage ?? 0;
+      /** Pre-roll snapshot: glancing kills the monster this roll — setLab skips player-hit branch, so shield/player “continue” flags must not fire. */
+      const fatalGlancingKill = !result.won && gdam > 0 && monsterHp <= gdam;
       const glancingMonsterSurvives = !result.won && gdam > 0 && monsterHp > gdam;
       const wonMonsterSurvivesPartial =
         result.won &&
@@ -2156,11 +2659,13 @@ export default function LabyrinthGame() {
       const playerHpBeforeRoll = p?.hp ?? DEFAULT_PLAYER_HP;
       const shieldWouldAbsorb =
         !result.won &&
+        !fatalGlancingKill &&
         combatUseShieldRef.current &&
         (p?.shield ?? 0) > 0 &&
         result.damage > 0;
       const playerHitSurvives =
         !result.won &&
+        !fatalGlancingKill &&
         result.damage > 0 &&
         !shieldWouldAbsorb &&
         playerHpBeforeRoll - result.damage > 0;
@@ -2175,6 +2680,7 @@ export default function LabyrinthGame() {
 
       combatLog("applyPost branch flags", {
         skeletonShield: result.monsterEffect === "skeleton_shield",
+        fatalGlancingKill,
         glancingMonsterSurvives,
         wonMonsterSurvivesPartial,
         ghostContinues,
@@ -2380,17 +2886,19 @@ export default function LabyrinthGame() {
                 playerHpAtEnd: defeatPlayerHp,
               });
               // Always pass turn after combat respawn — do not gate on currentPlayerRef (it can lag useEffect during flushSync and skip advance).
-              movesLeftRef.current = 0;
-              setMovesLeft(0);
-              setDiceResult(null);
               let nextP = (pi + 1) % next.numPlayers;
               while (next.eliminatedPlayers.has(nextP) && nextP !== pi) {
                 nextP = (nextP + 1) % next.numPlayers;
               }
               currentPlayerRef.current = nextP;
               setCurrentPlayer(nextP);
-              setShowDiceModal(true);
-              setRolling(false);
+              showMovementDiceOrInfinite({
+                movesLeftRef,
+                setMovesLeft,
+                setDiceResult,
+                setShowDiceModal,
+                setRolling,
+              });
               const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
               const firstLiving = living.length > 0 ? Math.min(...living) : -1;
               const roundComplete = living.length <= 1 || nextP === firstLiving;
@@ -2628,11 +3136,13 @@ export default function LabyrinthGame() {
       }
       currentPlayerRef.current = nextP;
       setCurrentPlayer(nextP);
-      movesLeftRef.current = 0;
-      setMovesLeft(0);
-      setDiceResult(null);
-      setShowDiceModal(true);
-      setRolling(false);
+      showMovementDiceOrInfinite({
+        movesLeftRef,
+        setMovesLeft,
+        setDiceResult,
+        setShowDiceModal,
+        setRolling,
+      });
       const living = [...Array(lab.numPlayers).keys()].filter((i) => !lab.eliminatedPlayers.has(i));
       const firstLiving = living.length > 0 ? Math.min(...living) : -1;
       const roundComplete = living.length <= 1 || nextP === firstLiving;
@@ -2808,6 +3318,7 @@ export default function LabyrinthGame() {
   );
 
   const handleMovementRollComplete = useCallback((value: number) => {
+    if (TEMP_INFINITE_MOVES) return;
     if (combatStateRef.current) return;
     const labNow = labRef.current;
     const p = labNow?.players[currentPlayerRef.current];
@@ -2890,6 +3401,7 @@ export default function LabyrinthGame() {
   }, []);
 
   const rollDice = useCallback(async () => {
+    if (TEMP_INFINITE_MOVES) return;
     if (winner !== null || !lab) return;
     if (combatState) return;
     if (movesLeft > 0) return;
@@ -3001,7 +3513,7 @@ export default function LabyrinthGame() {
       movesLeftBefore: movesLeftRef.current,
     });
 
-    if (movesLeftRef.current > 0) {
+    if (!TEMP_INFINITE_MOVES && movesLeftRef.current > 0) {
     movesLeftRef.current--;
     setMovesLeft(movesLeftRef.current);
     }
@@ -3061,9 +3573,13 @@ export default function LabyrinthGame() {
         const firstLiving = living.length > 0 ? Math.min(...living) : -1;
         const roundComplete = living.length <= 1 || nextP === firstLiving;
         setCurrentPlayer(nextP);
-        setDiceResult(null);
-        setShowDiceModal(true);
-        setRolling(false);
+        showMovementDiceOrInfinite({
+          movesLeftRef,
+          setMovesLeft,
+          setDiceResult,
+          setShowDiceModal,
+          setRolling,
+        });
         if (roundComplete) setTimeout(() => triggerRoundEndRef.current(), 0);
       }
     }
@@ -3137,13 +3653,15 @@ export default function LabyrinthGame() {
     const firstLiving = living.length > 0 ? Math.min(...living) : -1;
     const roundComplete = living.length <= 1 || nextP === firstLiving;
     setCurrentPlayer(nextP);
-    movesLeftRef.current = 0;
-    setMovesLeft(0);
-    setDiceResult(null);
     setBonusAdded(null);
     setDiceBonusApplied(null);
-    setShowDiceModal(true);
-    setRolling(false);
+    showMovementDiceOrInfinite({
+      movesLeftRef,
+      setMovesLeft,
+      setDiceResult,
+      setShowDiceModal,
+      setRolling,
+    });
     if (roundComplete) {
       triggerRoundEnd();
     }
@@ -3175,7 +3693,7 @@ export default function LabyrinthGame() {
     if (!result.used) return;
     setBombExplosion({ x: cp.x, y: cp.y });
     setLab(next);
-    if (!inCombat) {
+    if (!inCombat && !TEMP_INFINITE_MOVES) {
       movesLeftRef.current--;
       setMovesLeft((m) => Math.max(0, m - 1));
       setTotalMoves((t) => t + 1);
@@ -3311,6 +3829,14 @@ export default function LabyrinthGame() {
     else handleUseArtifact(mobileDockAction);
   }, [mobileDockAction, handleUseBomb, handleUseArtifact, handleCombatDiceArtifactRerollToggle]);
 
+  const applyImmersiveInventoryPick = useCallback(() => {
+    if (immersiveInventoryPick === null) return;
+    if (gamePausedRef.current) return;
+    if (immersiveInventoryPick === "bomb") handleUseBomb();
+    else handleUseArtifact(immersiveInventoryPick);
+    setImmersiveInventoryPick(null);
+  }, [immersiveInventoryPick, handleUseBomb, handleUseArtifact]);
+
   const handleMobileDockTouchStart = useCallback((e: React.TouchEvent) => {
     mobileDockTouchStartY.current = e.touches[0]!.clientY;
   }, []);
@@ -3377,7 +3903,9 @@ export default function LabyrinthGame() {
       const isWebCell = lab.webPositions?.some(([wx, wy]) => wx === destX && wy === destY);
       if (movesLeftRef.current < 1) return;
       const costToPay = Math.min(movesLeftRef.current, tileCost);
-      movesLeftRef.current -= costToPay;
+      if (!TEMP_INFINITE_MOVES) {
+        movesLeftRef.current -= costToPay;
+      }
       setBonusAdded(null);
     setDiceBonusApplied(null);
       setJumpAdded(null);
@@ -3420,7 +3948,9 @@ export default function LabyrinthGame() {
       next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
       const moveSucceeded = next.movePlayer(dx, dy, currentPlayer, jumpOnly);
       if (!moveSucceeded) {
-        movesLeftRef.current += costToPay;
+        if (!TEMP_INFINITE_MOVES) {
+          movesLeftRef.current += costToPay;
+        }
         return;
       }
       if (dx !== 0 || dy !== 0) {
@@ -3450,16 +3980,18 @@ export default function LabyrinthGame() {
           if (cell && next.hiddenCells.has(`${p.x},${p.y}`)) next.revealCellAt(p.x, p.y);
           if (cell && isTrapCell(cell)) {
             if (cell === TRAP_LOSE_TURN) {
-              movesLeftRef.current = 0;
-              setMovesLeft(0);
-              setDiceResult(null);
               let nextP = (currentPlayer + 1) % lab.numPlayers;
               while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
                 nextP = (nextP + 1) % lab.numPlayers;
               }
               setCurrentPlayer(nextP);
-              setShowDiceModal(true);
-              setRolling(false);
+              showMovementDiceOrInfinite({
+                movesLeftRef,
+                setMovesLeft,
+                setDiceResult,
+                setShowDiceModal,
+                setRolling,
+              });
             } else if (cell === TRAP_HARM) {
               const usedShield = next.tryConsumeShield(currentPlayer);
               if (usedShield) setShieldAbsorbed(true);
@@ -3469,16 +4001,18 @@ export default function LabyrinthGame() {
                 if (p.hp <= 0) {
                   next.eliminatedPlayers.add(currentPlayer);
                   if (next.eliminatedPlayers.size >= next.numPlayers) setWinner(-1);
-                  movesLeftRef.current = 0;
-                  setMovesLeft(0);
-                  setDiceResult(null);
                   let nextP = (currentPlayer + 1) % lab.numPlayers;
                   while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
                     nextP = (nextP + 1) % lab.numPlayers;
                   }
                   setCurrentPlayer(nextP);
-                  setShowDiceModal(true);
-                  setRolling(false);
+                  showMovementDiceOrInfinite({
+                    movesLeftRef,
+                    setMovesLeft,
+                    setDiceResult,
+                    setShowDiceModal,
+                    setRolling,
+                  });
                 }
               }
             } else if (cell === TRAP_TELEPORT) {
@@ -3502,8 +4036,13 @@ export default function LabyrinthGame() {
                 const trapRoundComplete = trapLiving.length <= 1 || trapNextP === trapFirstLiving;
                 setTimeout(() => {
                   setCurrentPlayer(trapNextP);
-                  setShowDiceModal(true);
-                  setRolling(false);
+                  showMovementDiceOrInfinite({
+                    movesLeftRef,
+                    setMovesLeft,
+                    setDiceResult,
+                    setShowDiceModal,
+                    setRolling,
+                  });
                   if (trapRoundComplete) triggerRoundEnd();
                 }, SPECIAL_MOVE_SETTLE_MS);
               }
@@ -3688,9 +4227,13 @@ export default function LabyrinthGame() {
                 const rc = liv.length <= 1 || np === firstLiv;
                 currentPlayerRef.current = np;
                 setCurrentPlayer(np);
-          setDiceResult(null);
-              setShowDiceModal(true);
-              setRolling(false);
+                showMovementDiceOrInfinite({
+                  movesLeftRef,
+                  setMovesLeft,
+                  setDiceResult,
+                  setShowDiceModal,
+                  setRolling,
+                });
                 turnChangePauseTimerRef.current = null;
                 if (rc) setTimeout(() => triggerRoundEndRef.current(), 0);
               }, TURN_CHANGE_PAUSE_MS);
@@ -3815,9 +4358,28 @@ export default function LabyrinthGame() {
   /** When turn should end with no moves: advance to next player + open roll. Eliminated-current case; also last-move combat (doMove returns before clearing diceResult). */
   useEffect(() => {
     if (!lab || winner !== null || combatState || rolling || catapultPicker || teleportPicker || teleportPickerRef.current || passThroughMagic || gamePaused) return;
-    if (movesLeft > 0) return;
     if (combatResult || combatFooterSnapshot) return;
     if (manualTeleportPendingRef.current) return;
+
+    if (lab.eliminatedPlayers.has(currentPlayer)) {
+      let nextP = (currentPlayer + 1) % lab.numPlayers;
+      while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
+        nextP = (nextP + 1) % lab.numPlayers;
+      }
+      setCurrentPlayer(nextP);
+      showMovementDiceOrInfinite({
+        movesLeftRef,
+        setMovesLeft,
+        setDiceResult,
+        setShowDiceModal,
+        setRolling,
+      });
+      return;
+    }
+
+    if (TEMP_INFINITE_MOVES) return;
+
+    if (movesLeft > 0) return;
     const cpStale = lab.players[currentPlayer];
     if (cpStale && movesLeft <= 0) {
       const cellAt = lab.getCellAt(cpStale.x, cpStale.y);
@@ -3830,17 +4392,6 @@ export default function LabyrinthGame() {
         const optN = lab.getTeleportOptions(currentPlayer, MAGIC_TELEPORT_PICKER_OPTIONS).length;
         if (optN > 0) return;
       }
-    }
-
-    if (lab.eliminatedPlayers.has(currentPlayer)) {
-      let nextP = (currentPlayer + 1) % lab.numPlayers;
-      while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
-        nextP = (nextP + 1) % lab.numPlayers;
-      }
-      setCurrentPlayer(nextP);
-      setShowDiceModal(true);
-      setRolling(false);
-      return;
     }
 
     if (diceResult === null) return;
@@ -3866,13 +4417,15 @@ export default function LabyrinthGame() {
       const roundComplete = living.length <= 1 || nextP === firstLiving;
       currentPlayerRef.current = nextP;
       setCurrentPlayer(nextP);
-      movesLeftRef.current = 0;
-      setMovesLeft(0);
-      setDiceResult(null);
       setBonusAdded(null);
       setDiceBonusApplied(null);
-      setShowDiceModal(true);
-      setRolling(false);
+      showMovementDiceOrInfinite({
+        movesLeftRef,
+        setMovesLeft,
+        setDiceResult,
+        setShowDiceModal,
+        setRolling,
+      });
       turnChangePauseTimerRef.current = null;
       if (roundComplete) setTimeout(() => triggerRoundEnd(), 0);
     }, TURN_CHANGE_PAUSE_MS);
@@ -3900,6 +4453,7 @@ export default function LabyrinthGame() {
 
   // Auto-roll when dice modal is shown (restores original behavior: next player gets moves without manual click)
   useEffect(() => {
+    if (TEMP_INFINITE_MOVES) return;
     if (
       !showDiceModal ||
       combatState ||
@@ -3946,33 +4500,35 @@ export default function LabyrinthGame() {
           return;
         }
       }
-      const map: Record<string, [number, number]> = {
-        ArrowUp: [0, -1],
-        ArrowDown: [0, 1],
-        ArrowLeft: [-1, 0],
-        ArrowRight: [1, 0],
-        w: [0, -1],
-        W: [0, -1],
-        s: [0, 1],
-        S: [0, 1],
-        a: [-1, 0],
-        A: [-1, 0],
-        d: [1, 0],
-        D: [1, 0],
+      const rel = getRelativeDirectionsFromFacing(currentPlayerRef.current, playerFacingRef.current);
+      const keyToVec: Record<string, [number, number]> = {
+        ArrowUp: [rel.forward.dx, rel.forward.dy],
+        ArrowDown: [rel.backward.dx, rel.backward.dy],
+        ArrowLeft: [rel.left.dx, rel.left.dy],
+        ArrowRight: [rel.right.dx, rel.right.dy],
+        w: [rel.forward.dx, rel.forward.dy],
+        W: [rel.forward.dx, rel.forward.dy],
+        s: [rel.backward.dx, rel.backward.dy],
+        S: [rel.backward.dx, rel.backward.dy],
+        a: [rel.left.dx, rel.left.dy],
+        A: [rel.left.dx, rel.left.dy],
+        d: [rel.right.dx, rel.right.dy],
+        D: [rel.right.dx, rel.right.dy],
       };
-      const d = map[e.key];
+      const d = keyToVec[e.key];
       if (d) {
         expandDesktopControlsRef.current();
-        if (movesLeftRef.current <= 0 || winnerRef.current !== null || !lab || passThroughMagicRef.current) return;
+        const l = labRef.current;
+        if (movesLeftRef.current <= 0 || winnerRef.current !== null || !l || passThroughMagicRef.current) return;
         // Same keys for move and jump: prefer jump when possible in that direction
-        const jumpPreferred = lab.canJumpInDirection(d[0], d[1], currentPlayer);
+        const jumpPreferred = l.canJumpInDirection(d[0], d[1], currentPlayerRef.current);
         doMove(d[0], d[1], jumpPreferred);
         e.preventDefault();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [newGame, doMove, lab, currentPlayer, setMobileDockExpanded]);
+  }, [newGame, doMove, setMobileDockExpanded]);
 
   const playerCells: Record<string, number> = {};
   if (lab) {
@@ -3984,23 +4540,12 @@ export default function LabyrinthGame() {
   }
   const cp = lab?.players[currentPlayer];
   const gameOver = winner !== null;
-  const activeFacing = playerFacing[currentPlayer] ?? { dx: 0, dy: 1 };
-  const facing = (() => {
-    const dx = Math.sign(activeFacing.dx || 0);
-    const dy = Math.sign(activeFacing.dy || 0);
-    if (dx === 0 && dy === 0) return { dx: 0, dy: 1 };
-    return Math.abs(dx) >= Math.abs(dy) ? { dx, dy: 0 } : { dx: 0, dy };
-  })();
-  const relativeForward = { dx: facing.dx, dy: facing.dy };
-  const relativeBackward = { dx: -facing.dx, dy: -facing.dy };
-  const relativeLeft = { dx: facing.dy, dy: -facing.dx };
-  const relativeRight = { dx: -facing.dy, dy: facing.dx };
-  const resolveRelativeMove = (intent: "forward" | "backward" | "left" | "right") => {
-    if (intent === "forward") return relativeForward;
-    if (intent === "backward") return relativeBackward;
-    if (intent === "left") return relativeLeft;
-    return relativeRight;
-  };
+  const {
+    forward: relativeForward,
+    backward: relativeBackward,
+    left: relativeLeft,
+    right: relativeRight,
+  } = getRelativeDirectionsFromFacing(currentPlayer, playerFacing);
   const moveDisabled =
     movesLeft <= 0 ||
     gameOver ||
@@ -4009,6 +4554,7 @@ export default function LabyrinthGame() {
     !!combatState ||
     gamePaused;
   const rollDisabled =
+    TEMP_INFINITE_MOVES ||
     !!combatState ||
     (!combatState && movesLeft > 0) ||
     gameOver ||
@@ -4094,6 +4640,24 @@ export default function LabyrinthGame() {
     },
     [lab, catapultPicker, catapultMode]
   );
+
+  /** 3D slingshot aim preview (same physics as 2D SVG preview). */
+  const isoCatapultPreviewTraj = useMemo(() => {
+    if (!lab || !catapultPicker || !catapultDragOffset) return null;
+    if (catapultDragOffset.dx === 0 && catapultDragOffset.dy === 0) return null;
+    const strength = Math.hypot(catapultDragOffset.dx, catapultDragOffset.dy);
+    if (strength < 1) return null;
+    const p = lab.players[catapultPicker.playerIndex];
+    if (!p) return null;
+    return lab.getCatapultTrajectory(
+      p.x,
+      p.y,
+      -catapultDragOffset.dx,
+      -catapultDragOffset.dy,
+      strength,
+      false
+    );
+  }, [lab, catapultPicker, catapultDragOffset]);
 
   useEffect(() => {
     if (!catapultMode || !catapultPicker) return;
@@ -4189,8 +4753,13 @@ export default function LabyrinthGame() {
             const rc = liv.length <= 1 || np === firstLiv;
             currentPlayerRef.current = np;
             setCurrentPlayer(np);
-          setShowDiceModal(true);
-          setRolling(false);
+            showMovementDiceOrInfinite({
+              movesLeftRef,
+              setMovesLeft,
+              setDiceResult,
+              setShowDiceModal,
+              setRolling,
+            });
             turnChangePauseTimerRef.current = null;
             if (rc) setTimeout(() => triggerRoundEndRef.current(), 0);
           }, TURN_CHANGE_PAUSE_MS);
@@ -4326,6 +4895,134 @@ export default function LabyrinthGame() {
       });
     });
   }, [scrollToCurrentPlayerOnMap]);
+
+  const isoPlayRootRef = useRef<HTMLDivElement>(null);
+  const [isoNativeFsActive, setIsoNativeFsActive] = useState(false);
+  const [isoImmersiveFallback, setIsoImmersiveFallback] = useState(false);
+
+  const leaveIsoImmersiveOnly = useCallback(async () => {
+    setIsoImmersiveFallback(false);
+    if (typeof document === "undefined") return;
+    const fs = getFullscreenElement();
+    if (
+      fs != null &&
+      (fs === isoPlayRootRef.current ||
+        fs === mazeWrapRef.current ||
+        fs === mazeAreaRef.current)
+    ) {
+      await exitDocumentFullscreen();
+    }
+  }, []);
+
+  const enterPlayFullscreen = useCallback(async () => {
+    if (typeof document === "undefined") return;
+    const el =
+      mazeMapView === "iso"
+        ? isoPlayRootRef.current
+        : mazeAreaRef.current ?? mazeWrapRef.current;
+    if (!el) return;
+    try {
+      await requestFullscreenOnElement(el);
+    } catch {
+      setIsoImmersiveFallback(true);
+    }
+  }, [mazeMapView]);
+
+  const handleIsoImmersiveMenuExit = useCallback(async () => {
+    await leaveIsoImmersiveOnly();
+    setHeaderMenuOpen(true);
+  }, [leaveIsoImmersiveOnly]);
+
+  const onIsoViewButtonClick = useCallback(() => {
+    setMazeMapView("iso");
+  }, []);
+
+  useLayoutEffect(() => {
+    if (typeof document === "undefined") return;
+    const fs = getFullscreenElement();
+    if (fs == null) return;
+    const isoEl = isoPlayRootRef.current;
+    const wrapEl = mazeWrapRef.current;
+    const areaEl = mazeAreaRef.current;
+
+    if (mazeMapView === "iso") {
+      if (
+        (areaEl != null && fs === areaEl) ||
+        (wrapEl != null && fs === wrapEl)
+      ) {
+        setIsoImmersiveFallback(false);
+        void exitDocumentFullscreen();
+      }
+      return;
+    }
+
+    if (isoEl != null && fs === isoEl) {
+      setIsoImmersiveFallback(false);
+      void exitDocumentFullscreen();
+    }
+  }, [mazeMapView]);
+
+  useEffect(() => {
+    const sync = () => {
+      const fs = getFullscreenElement();
+      /** `null === null` when refs are unset would wrongly mark FS active. */
+      setIsoNativeFsActive(
+        fs != null &&
+          (fs === isoPlayRootRef.current ||
+            fs === mazeWrapRef.current ||
+            fs === mazeAreaRef.current)
+      );
+    };
+    if (typeof document === "undefined") return undefined;
+    document.addEventListener("fullscreenchange", sync);
+    document.addEventListener("webkitfullscreenchange", sync);
+    sync();
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+      document.removeEventListener("webkitfullscreenchange", sync);
+    };
+  }, [mazeMapView]);
+
+  const isoImmersiveUi = isoNativeFsActive || isoImmersiveFallback;
+
+  useEffect(() => {
+    if (!isoImmersiveUi) return;
+    if (combatState || combatResult) {
+      void leaveIsoImmersiveOnly();
+      return;
+    }
+    if (
+      showDiceModal &&
+      winner === null &&
+      lab &&
+      movesLeft <= 0 &&
+      diceResult === null
+    ) {
+      void leaveIsoImmersiveOnly();
+    }
+  }, [
+    isoImmersiveUi,
+    combatState,
+    combatResult,
+    showDiceModal,
+    winner,
+    lab,
+    movesLeft,
+    diceResult,
+    leaveIsoImmersiveOnly,
+  ]);
+
+  useEffect(() => {
+    if (!isoNativeFsActive && !isoImmersiveFallback) {
+      setImmersiveInventoryPick(null);
+    }
+  }, [isoNativeFsActive, isoImmersiveFallback]);
+
+  useEffect(() => {
+    if (catapultPicker || teleportPicker) {
+      setImmersiveInventoryPick(null);
+    }
+  }, [catapultPicker, teleportPicker]);
 
   if (!gameStarted) {
     if (!startMenuReady) {
@@ -4569,6 +5266,7 @@ export default function LabyrinthGame() {
   combatStateRef.current = combatState;
   combatResultRef.current = combatResult;
   currentPlayerRef.current = currentPlayer;
+  playerFacingRef.current = playerFacing;
   winnerRef.current = winner;
   movesLeftRef.current = movesLeft;
   diceResultRef.current = diceResult;
@@ -4594,6 +5292,12 @@ export default function LabyrinthGame() {
       : mobileDockAction === "bomb"
         ? bombUseDisabled
         : artifactUseDisabledDock(mobileDockAction);
+  const immersiveApplyDisabled =
+    immersiveInventoryPick == null
+      ? true
+      : immersiveInventoryPick === "bomb"
+        ? bombUseDisabled
+        : artifactUseDisabledDock(immersiveInventoryPick);
   const dockActions: { id: MobileDockAction; n: number }[] = [];
   if ((cp?.bombs ?? 0) > 0) dockActions.push({ id: "bomb", n: cp!.bombs ?? 0 });
   for (const k of STORED_ARTIFACT_ORDER) {
@@ -4616,6 +5320,117 @@ export default function LabyrinthGame() {
     lab && combatState && !combatResult
       ? `💡 ${getMonsterHint(combatState.monsterType, lab.monsters[combatState.monsterIndex]?.hasShield)}`
       : null;
+
+  const renderPlayFullscreenTopBar = () => (
+    <div style={PLAY_FULLSCREEN_TOP_BAR_STYLE}>
+      <button
+        type="button"
+        onClick={() => void handleIsoImmersiveMenuExit()}
+        style={{
+          ...buttonStyle,
+          ...headerButtonStyle,
+          background: START_MENU_CTRL_BG,
+          color: "#ecc0b0",
+          border: `1px solid ${START_MENU_BORDER_MUTE}`,
+          fontWeight: 700,
+        }}
+        title="Leave full screen and open the game menu"
+      >
+        ☰ Menu
+      </button>
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 6,
+          fontSize: "0.72rem",
+        }}
+      >
+        <span
+          style={{
+            ...headerStatItemStyle,
+            color:
+              winner !== null
+                ? winner >= 0
+                  ? "#00ff88"
+                  : "#ff4444"
+                : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88"),
+            fontWeight: "bold",
+          }}
+        >
+          {winner !== null
+            ? winner >= 0
+              ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
+              : "Monsters win!"
+            : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
+        </span>
+        <span style={headerStatDivider}>|</span>
+        <span style={headerStatItemStyle}>
+          Moves:{" "}
+          {diceResult !== null
+            ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}`
+            : "—/—"}
+        </span>
+        <span style={headerStatDivider}>|</span>
+        <span style={headerStatItemStyle}>
+          Round: {(lab.round ?? 0) + 1}/{MAX_ROUNDS}
+        </span>
+        <span style={headerStatDivider}>|</span>
+        <span style={headerStatItemStyle}>Total: {totalMoves}</span>
+        <span style={headerStatDivider}>|</span>
+        <span style={headerStatItemStyle}>
+          {lab.players.map((p, i) => (
+            <span
+              key={i}
+              style={{
+                marginRight: 8,
+                color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#888"),
+                textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
+              }}
+            >
+              {playerNames[i] ?? `P${i + 1}`}:{" "}
+              <ArtifactIcon variant="diamond" size={14} style={{ marginLeft: 2, marginRight: 2, verticalAlign: "middle" }} />
+              {p?.diamonds ?? 0}
+            </span>
+          ))}
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={() => void leaveIsoImmersiveOnly()}
+        style={{
+          ...buttonStyle,
+          ...secondaryButtonStyle,
+          fontSize: "0.72rem",
+          padding: "6px 12px",
+          whiteSpace: "nowrap",
+        }}
+        title="Leave full-screen mode"
+      >
+        Exit FS
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          void leaveIsoImmersiveOnly();
+          setMazeMapView(mazeMapView === "iso" ? "grid" : "iso");
+        }}
+        style={{
+          ...buttonStyle,
+          ...secondaryButtonStyle,
+          fontSize: "0.72rem",
+          padding: "6px 12px",
+          whiteSpace: "nowrap",
+        }}
+        title={mazeMapView === "iso" ? "Leave full screen and open 2D grid" : "Leave full screen and open 3D view"}
+      >
+        {mazeMapView === "iso" ? "2D" : "3D"}
+      </button>
+    </div>
+  );
 
   const renderCombatBonusLootPicker = () => {
     if (!combatResult) return null;
@@ -5048,7 +5863,7 @@ export default function LabyrinthGame() {
             }
           />
         </h1>
-        {!isMobile ? (
+        {!isMobile && !isoImmersiveUi ? (
         <div style={headerStatsStyle}>
           <span style={{ ...headerStatItemStyle, color: winner !== null ? (winner >= 0 ? "#00ff88" : "#ff4444") : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88"), fontWeight: "bold" }}>
             {winner !== null
@@ -7527,9 +8342,20 @@ export default function LabyrinthGame() {
       )}
 
       <div
+        ref={mazeAreaRef}
         style={{
           ...mazeAreaStyle,
-          ...(mazeMapView === "iso" ? { overflow: "hidden" } : {}),
+          ...((mazeMapView === "iso" ||
+            (mazeMapView === "grid" && isoImmersiveUi))
+            ? { overflow: "hidden" }
+            : {}),
+          ...(mazeMapView === "grid" && isoImmersiveFallback
+            ? {
+                position: "fixed" as const,
+                inset: 0,
+                zIndex: ISO_IMMERSIVE_Z,
+              }
+            : {}),
           ...(isMobile
             ? {
                 paddingBottom: `calc(${MAZE_MARGIN + mobileDockInsetPx + 10}px + env(safe-area-inset-bottom, 0px))`,
@@ -7543,6 +8369,13 @@ export default function LabyrinthGame() {
             : {}),
         }}
       >
+        {lab &&
+          cp &&
+          !combatState &&
+          !lab.eliminatedPlayers.has(currentPlayer) &&
+          mazeMapView === "grid" &&
+          isoImmersiveUi &&
+          renderPlayFullscreenTopBar()}
         {!isLandscapeCompact && (
         <div
           style={{
@@ -7590,12 +8423,21 @@ export default function LabyrinthGame() {
               </button>
               <button
                 type="button"
-                onClick={() => setMazeMapView("iso")}
+                onClick={onIsoViewButtonClick}
                 style={mazeViewToggleButtonStyle(mazeMapView === "iso")}
-                title="Isometric 2.5D (spaced walls)"
+                title="3D view — full screen on supported devices"
                 aria-pressed={mazeMapView === "iso"}
               >
-                2.5D
+                3D
+              </button>
+              <button
+                type="button"
+                onClick={() => void (isoImmersiveUi ? leaveIsoImmersiveOnly() : enterPlayFullscreen())}
+                style={mazeViewToggleButtonStyle(isoImmersiveUi)}
+                title={isoImmersiveUi ? "Leave full-screen" : "Full-screen play area (2D or 3D)"}
+                aria-pressed={isoImmersiveUi}
+              >
+                {isoImmersiveUi ? "Exit FS" : "Full screen"}
               </button>
             </div>
           )}
@@ -7643,11 +8485,21 @@ export default function LabyrinthGame() {
             </button>
             <button
               type="button"
-              onClick={() => setMazeMapView("iso")}
+              onClick={onIsoViewButtonClick}
               style={mazeViewToggleButtonStyle(mazeMapView === "iso")}
               aria-pressed={mazeMapView === "iso"}
+              title="3D — full screen where supported"
             >
-              2.5D
+              3D
+            </button>
+            <button
+              type="button"
+              onClick={() => void (isoImmersiveUi ? leaveIsoImmersiveOnly() : enterPlayFullscreen())}
+              style={mazeViewToggleButtonStyle(isoImmersiveUi)}
+              aria-pressed={isoImmersiveUi}
+              title={isoImmersiveUi ? "Leave full-screen" : "Full-screen play area (2D or 3D)"}
+            >
+              {isoImmersiveUi ? "Exit FS" : "Full screen"}
             </button>
           </div>
         )}
@@ -7658,41 +8510,600 @@ export default function LabyrinthGame() {
             ...mazeWrapStyle,
             marginTop: isLandscapeCompact ? 0 : MAZE_MARGIN,
             position: "relative",
-            ...(mazeMapView === "iso" ? {
-              display: "flex",
-              flexDirection: "column",
-              flex: 1,
-              minHeight: 0,
-              width: "100%",
-            } : {}),
+            ...((mazeMapView === "iso" ||
+              (mazeMapView === "grid" && isoImmersiveUi))
+              ? {
+                  display: "flex",
+                  flexDirection: "column",
+                  flex: 1,
+                  minHeight: 0,
+                  width: "100%",
+                }
+              : {}),
           }}
         >
         <div className="maze-stack" style={{
           position: "relative",
-          display: mazeMapView === "iso" ? "flex" : "inline-block",
+          display: mazeMapView === "iso" || (mazeMapView === "grid" && isoImmersiveUi) ? "flex" : "inline-block",
           flexDirection: "column",
-          width: mazeMapView === "iso" ? "100%" : undefined,
-          flex: mazeMapView === "iso" ? 1 : undefined,
-          minHeight: mazeMapView === "iso" ? 0 : undefined,
+          width: mazeMapView === "iso" || (mazeMapView === "grid" && isoImmersiveUi) ? "100%" : undefined,
+          flex: mazeMapView === "iso" || (mazeMapView === "grid" && isoImmersiveUi) ? 1 : undefined,
+          minHeight: mazeMapView === "iso" || (mazeMapView === "grid" && isoImmersiveUi) ? 0 : undefined,
         }}>
         {lab && cp && !combatState && !lab.eliminatedPlayers.has(currentPlayer) && mazeMapView === "iso" && (
-          <MazeIsoView
-            grid={lab.grid}
-            mapWidth={lab.width}
-            mapHeight={lab.height}
-            playerX={cp.x}
-            playerY={cp.y}
-            facingDx={playerFacing[currentPlayer]?.dx ?? 0}
-            facingDy={playerFacing[currentPlayer]?.dy ?? 1}
-            zoom={mazeZoom}
-            visible
-            onCellClick={handleCellTap}
-            teleportOptions={teleportPicker?.options ?? []}
-            teleportMode={!!teleportPicker}
-            focusVersion={currentPlayer}
-            miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
-            fogIntensityMap={fogIntensityMap}
-          />
+          <div
+            ref={isoPlayRootRef}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              width: "100%",
+              display: "flex",
+              flexDirection: "column",
+              position: "relative",
+              background: "#06060a",
+              ...(isoImmersiveFallback
+                ? {
+                    position: "fixed" as const,
+                    inset: 0,
+                    zIndex: ISO_IMMERSIVE_Z,
+                  }
+                : {}),
+            }}
+          >
+            {isoImmersiveUi && renderPlayFullscreenTopBar()}
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                position: "relative",
+                display: "flex",
+                flexDirection: "column",
+                minWidth: 0,
+              }}
+            >
+              <MazeIsoView
+                grid={lab.grid}
+                mapWidth={lab.width}
+                mapHeight={lab.height}
+                playerX={cp.x}
+                playerY={cp.y}
+                facingDx={playerFacing[currentPlayer]?.dx ?? 0}
+                facingDy={playerFacing[currentPlayer]?.dy ?? 1}
+                zoom={mazeZoom}
+                visible
+                onCellClick={handleCellTap}
+                teleportOptions={teleportPicker?.options ?? []}
+                teleportMode={!!teleportPicker}
+                catapultMode={!!catapultPicker}
+                catapultArcPoints={isoCatapultPreviewTraj?.arcPoints ?? null}
+                focusVersion={currentPlayer}
+                miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
+                fogIntensityMap={fogIntensityMap}
+              />
+              {catapultPicker && (
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    zIndex: 8,
+                    touchAction: "none",
+                    cursor: "grab",
+                    userSelect: "none",
+                  }}
+                  onPointerDown={(e) => {
+                    if (gamePausedRef.current) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const el = e.currentTarget;
+                    const rect = el.getBoundingClientRect();
+                    catapultDragRef.current = {
+                      startX: rect.left + rect.width / 2,
+                      startY: rect.top + rect.height / 2,
+                      cellX: cp.x,
+                      cellY: cp.y,
+                    };
+                    setCatapultDragOffset({ dx: 0, dy: 0 });
+                    el.setPointerCapture(e.pointerId);
+                  }}
+                  onPointerMove={(e) => {
+                    if (gamePausedRef.current) return;
+                    const d = catapultDragRef.current;
+                    if (!d) return;
+                    setCatapultDragOffset({
+                      dx: e.clientX - d.startX,
+                      dy: e.clientY - d.startY,
+                    });
+                  }}
+                  onPointerCancel={() => {
+                    catapultDragRef.current = null;
+                    setCatapultDragOffset(null);
+                  }}
+                  aria-hidden
+                />
+              )}
+              {isoImmersiveUi && (
+                <>
+                  {(!!catapultPicker ||
+                    !!teleportPicker ||
+                    (magicPortalReady && !teleportPicker) ||
+                    (immersiveInventoryPick !== null && showMoveGrid)) && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: "max(10px, env(safe-area-inset-left, 0px))",
+                        right: "max(10px, env(safe-area-inset-right, 0px))",
+                        bottom: "calc(max(12px, env(safe-area-inset-bottom, 0px)) + 172px)",
+                        zIndex: ISO_IMMERSIVE_HUD_Z + 6,
+                        pointerEvents: "auto",
+                        maxHeight: "min(38vh, 280px)",
+                        overflowY: "auto",
+                        WebkitOverflowScrolling: "touch",
+                        borderRadius: 16,
+                        padding: "12px 14px",
+                        background: "linear-gradient(180deg, rgba(22,24,36,0.97) 0%, rgba(12,13,22,0.99) 100%)",
+                        border: "1px solid rgba(0,255,136,0.25)",
+                        boxShadow: "0 12px 40px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.05)",
+                      }}
+                    >
+                      {catapultPicker ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#9aa0b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                            Slingshot
+                          </div>
+                          <p style={{ margin: 0, fontSize: "0.82rem", color: "#c8cdd8", lineHeight: 1.45 }}>
+                            Drag on the <strong style={{ color: "#ffcc66" }}>3D view</strong> from the center of the screen to pull the sling (aim + power), then release. Switch to <strong style={{ color: "#ffcc66" }}>Grid</strong> if you prefer the top-down slingshot.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCatapultMode(false);
+                              setCatapultPicker(null);
+                              setCatapultDragOffset(null);
+                            }}
+                            style={{
+                              ...buttonStyle,
+                              alignSelf: "flex-start",
+                              background: "#664400",
+                              color: "#ffeecc",
+                              border: "1px solid #ffcc00",
+                              fontSize: "0.8rem",
+                              padding: "8px 14px",
+                            }}
+                          >
+                            Cancel slingshot
+                          </button>
+                        </div>
+                      ) : teleportPicker ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#9aa0b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                            Teleport
+                          </div>
+                          <p style={{ margin: 0, fontSize: "0.82rem", color: "#c8cdd8", lineHeight: 1.45 }}>
+                            Tap a highlighted cell on the map, use <strong style={{ color: "#aa66ff" }}>Random</strong>, or open the header menu to cancel.
+                          </p>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                manualTeleportPendingRef.current = false;
+                                setTeleportPicker(null);
+                              }}
+                              style={{ ...buttonStyle, background: "#664400", fontSize: "0.78rem", padding: "6px 12px" }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const opts = teleportPicker.options;
+                                if (opts.length === 0) return;
+                                const pick = opts[Math.floor(Math.random() * opts.length)]!;
+                                handleTeleportSelect(pick[0], pick[1]);
+                              }}
+                              style={{
+                                ...buttonStyle,
+                                background: "#2a2048",
+                                color: "#e8ddff",
+                                border: "1px solid #8866cc",
+                                fontSize: "0.78rem",
+                                padding: "6px 12px",
+                              }}
+                            >
+                              Random destination
+                            </button>
+                          </div>
+                        </div>
+                      ) : magicPortalReady ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#9aa0b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                            Magic cell
+                          </div>
+                          <p style={{ margin: 0, fontSize: "0.82rem", color: "#c8cdd8", lineHeight: 1.45 }}>
+                            You are standing on a magic portal. Open the picker to choose where to teleport.
+                          </p>
+                          <button type="button" onClick={handleMagicPortalOpen} style={{ ...buttonStyle, ...secondaryButtonStyle, alignSelf: "flex-start" }}>
+                            Open magic portal
+                          </button>
+                        </div>
+                      ) : immersiveInventoryPick !== null && showMoveGrid ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                            <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "#00ff88" }}>
+                              {immersiveInventoryPick === "bomb"
+                                ? "Bomb"
+                                : STORED_ARTIFACT_TITLE[immersiveInventoryPick]}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setImmersiveInventoryPick(null)}
+                              style={{
+                                ...secondaryButtonStyle,
+                                padding: "4px 10px",
+                                fontSize: "0.72rem",
+                                border: "1px solid #555",
+                                background: "#2a2a35",
+                                color: "#aaa",
+                              }}
+                            >
+                              Close
+                            </button>
+                          </div>
+                          <p style={{ margin: 0, fontSize: "0.8rem", color: "#a8aeb8", lineHeight: 1.5 }}>
+                            {immersiveInventoryPick === "bomb"
+                              ? "Explodes a 3×3 area on the map (uses 1 move while not in combat)."
+                              : STORED_ARTIFACT_TOOLTIP[immersiveInventoryPick]}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={applyImmersiveInventoryPick}
+                            disabled={immersiveApplyDisabled}
+                            style={{
+                              ...buttonStyle,
+                              alignSelf: "flex-start",
+                              opacity: immersiveApplyDisabled ? 0.45 : 1,
+                              fontSize: "0.82rem",
+                              padding: "8px 16px",
+                            }}
+                          >
+                            Use{" "}
+                            {immersiveInventoryPick === "bomb"
+                              ? "bomb"
+                              : STORED_ARTIFACT_TITLE[immersiveInventoryPick]}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      paddingLeft: "max(8px, env(safe-area-inset-left, 0px))",
+                      paddingRight: "max(8px, env(safe-area-inset-right, 0px))",
+                      paddingBottom: "max(10px, env(safe-area-inset-bottom, 0px))",
+                      paddingTop: 28,
+                      zIndex: ISO_IMMERSIVE_HUD_Z,
+                      display: "flex",
+                      flexDirection: "row",
+                      alignItems: "flex-end",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      pointerEvents: "none",
+                      background: "linear-gradient(0deg, rgba(5,6,12,0.94) 0%, rgba(5,6,12,0.65) 45%, transparent 100%)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        pointerEvents: "auto",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-start",
+                        gap: 6,
+                        flexShrink: 0,
+                        maxWidth: "min(210px, 40vw)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          ...controlsSectionStyle,
+                          marginTop: 0,
+                          padding: 6,
+                          width: 194,
+                          flexShrink: 0,
+                          boxSizing: "border-box",
+                        }}
+                      >
+                        <div style={controlsSectionLabelStyle}>2D mini map</div>
+                        <IsoDockGridMiniMap
+                          lab={lab}
+                          currentPlayer={currentPlayer}
+                          playerFacing={playerFacing}
+                          fogIntensityMap={fogIntensityMap}
+                          playerCells={playerCells}
+                          isoMiniMapZoom={isoMiniMapZoom}
+                          setIsoMiniMapZoom={setIsoMiniMapZoom}
+                          isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                          onOpenGrid={() => {
+                            void leaveIsoImmersiveOnly();
+                            switchToGridAndFocusCurrentPlayer();
+                          }}
+                        />
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 4,
+                          flexWrap: "wrap",
+                          background: "rgba(16,18,28,0.88)",
+                          border: "1px solid #3a3a4a",
+                          borderRadius: 12,
+                          padding: "4px 6px",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
+                          style={mazeZoomButtonStyle}
+                          title="Zoom out 3D"
+                        >
+                          −
+                        </button>
+                        <span style={{ fontSize: "0.65rem", color: "#888", minWidth: 30, textAlign: "center" }}>
+                          {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
+                          style={mazeZoomButtonStyle}
+                          title="Zoom in 3D"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        pointerEvents: "auto",
+                        flex: 1,
+                        minWidth: 0,
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "flex-end",
+                        paddingBottom: 4,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          gap: 6,
+                          maxWidth: "min(420px, 52vw)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: "0.58rem",
+                            fontWeight: 700,
+                            color: "#6a7080",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.1em",
+                          }}
+                        >
+                          Items
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "row",
+                            flexWrap: "nowrap",
+                            gap: 6,
+                            alignItems: "center",
+                            padding: "8px 14px",
+                            borderRadius: 999,
+                            background: "rgba(14,16,26,0.92)",
+                            border: "1px solid rgba(0,255,136,0.22)",
+                            boxShadow: "0 4px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)",
+                            overflowX: "auto",
+                            maxWidth: "100%",
+                            WebkitOverflowScrolling: "touch",
+                          }}
+                        >
+                          {dockActions.length === 0 ? (
+                            <span style={{ fontSize: "0.72rem", color: "#555", padding: "2px 4px" }}>No items</span>
+                          ) : (
+                            dockActions.map(({ id, n }) => {
+                              const selected = immersiveInventoryPick === id;
+                              const bomb = id === "bomb";
+                              return (
+                                <button
+                                  key={id}
+                                  type="button"
+                                  onClick={() => setImmersiveInventoryPick((p) => (p === id ? null : id))}
+                                  style={{
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    alignItems: "center",
+                                    gap: 2,
+                                    padding: "6px 10px",
+                                    borderRadius: 12,
+                                    border: selected ? "2px solid #00ff88" : "1px solid #3a3d4c",
+                                    background: bomb ? "rgba(255,136,68,0.12)" : "rgba(36,38,52,0.95)",
+                                    color: "#ddd",
+                                    cursor: "pointer",
+                                    flex: "0 0 auto",
+                                    minWidth: 52,
+                                  }}
+                                  title={bomb ? "Bomb" : STORED_ARTIFACT_TOOLTIP[id]}
+                                >
+                                  <BottomDockInventoryIcon variant={bomb ? "bomb" : storedArtifactIconVariant(id)} />
+                                  <span style={{ fontSize: "0.62rem", fontWeight: 700 }}>×{n}</span>
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        pointerEvents: "auto",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: 8,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {showMoveGrid && (
+                        <div
+                          style={{
+                            position: "relative",
+                            width: ISO_HUD_MOVE_RING_PX,
+                            height: ISO_HUD_MOVE_RING_PX,
+                            borderRadius: "50%",
+                            background:
+                              "radial-gradient(circle at 50% 42%, rgba(48,56,68,0.95) 0%, rgba(18,20,30,0.98) 55%, rgba(8,9,14,1) 100%)",
+                            border: "2px solid rgba(0,255,136,0.3)",
+                            boxShadow: "0 6px 26px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => doMove(relativeForward.dx, relativeForward.dy, false)}
+                            disabled={!canMoveUp}
+                            title="Forward"
+                            style={{
+                              position: "absolute",
+                              left: "50%",
+                              top: 6,
+                              transform: "translateX(-50%)",
+                              width: ISO_HUD_DIR_BTN_PX,
+                              height: ISO_HUD_DIR_BTN_PX,
+                              borderRadius: "50%",
+                              padding: 0,
+                              fontSize: "1.05rem",
+                              fontWeight: "bold",
+                              background: "linear-gradient(180deg, #343b4a 0%, #1e222c 100%)",
+                              color: "#00ff88",
+                              border: "2px solid rgba(0,255,136,0.35)",
+                              cursor: "pointer",
+                              opacity: canMoveUp ? 1 : 0.35,
+                            }}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => doMove(relativeBackward.dx, relativeBackward.dy, false)}
+                            disabled={!canMoveDown}
+                            title="Back"
+                            style={{
+                              position: "absolute",
+                              left: "50%",
+                              bottom: 6,
+                              transform: "translateX(-50%)",
+                              width: ISO_HUD_DIR_BTN_PX,
+                              height: ISO_HUD_DIR_BTN_PX,
+                              borderRadius: "50%",
+                              padding: 0,
+                              fontSize: "1.05rem",
+                              fontWeight: "bold",
+                              background: "linear-gradient(180deg, #343b4a 0%, #1e222c 100%)",
+                              color: "#00ff88",
+                              border: "2px solid rgba(0,255,136,0.35)",
+                              cursor: "pointer",
+                              opacity: canMoveDown ? 1 : 0.35,
+                            }}
+                          >
+                            ↓
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => doMove(relativeLeft.dx, relativeLeft.dy, false)}
+                            disabled={!canMoveLeft}
+                            title="Left"
+                            style={{
+                              position: "absolute",
+                              left: 6,
+                              top: "50%",
+                              transform: "translateY(-50%)",
+                              width: ISO_HUD_DIR_BTN_PX,
+                              height: ISO_HUD_DIR_BTN_PX,
+                              borderRadius: "50%",
+                              padding: 0,
+                              fontSize: "1.05rem",
+                              fontWeight: "bold",
+                              background: "linear-gradient(180deg, #343b4a 0%, #1e222c 100%)",
+                              color: "#00ff88",
+                              border: "2px solid rgba(0,255,136,0.35)",
+                              cursor: "pointer",
+                              opacity: canMoveLeft ? 1 : 0.35,
+                            }}
+                          >
+                            ←
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => doMove(relativeRight.dx, relativeRight.dy, false)}
+                            disabled={!canMoveRight}
+                            title="Right"
+                            style={{
+                              position: "absolute",
+                              right: 6,
+                              top: "50%",
+                              transform: "translateY(-50%)",
+                              width: ISO_HUD_DIR_BTN_PX,
+                              height: ISO_HUD_DIR_BTN_PX,
+                              borderRadius: "50%",
+                              padding: 0,
+                              fontSize: "1.05rem",
+                              fontWeight: "bold",
+                              background: "linear-gradient(180deg, #343b4a 0%, #1e222c 100%)",
+                              color: "#00ff88",
+                              border: "2px solid rgba(0,255,136,0.35)",
+                              cursor: "pointer",
+                              opacity: canMoveRight ? 1 : 0.35,
+                            }}
+                          >
+                            →
+                          </button>
+                          <button
+                            type="button"
+                            onClick={scrollToCurrentPlayerOnMap}
+                            disabled={winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)}
+                            title="Focus pawn (grid map)"
+                            style={{
+                              position: "absolute",
+                              left: "50%",
+                              top: "50%",
+                              transform: "translate(-50%, -50%)",
+                              width: 46,
+                              height: 46,
+                              borderRadius: "50%",
+                              padding: 0,
+                              background: "#1a2e22",
+                              border: "2px solid #00ff88",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              cursor: "pointer",
+                              boxShadow: "0 0 12px rgba(0,255,136,0.25)",
+                            }}
+                          >
+                            <MovePadFocusTargetIcon size={22} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         )}
         <div
           className="maze"
@@ -8300,7 +9711,7 @@ export default function LabyrinthGame() {
         </div>
         </div>
 
-      {isMobile && mobileDockExpanded && lab && (
+      {mazeMapView === "grid" && isMobile && mobileDockExpanded && lab && (
         <>
           <div
             ref={mobileDockExpandedHandleRef}
@@ -8475,8 +9886,8 @@ export default function LabyrinthGame() {
                   margin: "0 auto",
                 }}
               >
-                <button type="button" onClick={() => doMove(0, -1, false)} disabled={!canMoveUp} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 2, gridRow: 1, fontSize: "1rem" }} title="Up">↑</button>
-                <button type="button" onClick={() => doMove(-1, 0, false)} disabled={!canMoveLeft} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 1, gridRow: 2, fontSize: "1rem" }} title="Left">←</button>
+                <button type="button" onClick={() => doMove(relativeForward.dx, relativeForward.dy, false)} disabled={!canMoveUp} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 2, gridRow: 1, fontSize: "1rem" }} title="Forward">↑</button>
+                <button type="button" onClick={() => doMove(relativeLeft.dx, relativeLeft.dy, false)} disabled={!canMoveLeft} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 1, gridRow: 2, fontSize: "1rem" }} title="Left">←</button>
                 <button
                   type="button"
                   onClick={scrollToCurrentPlayerOnMap}
@@ -8499,8 +9910,8 @@ export default function LabyrinthGame() {
                 >
                   <MovePadFocusTargetIcon size={Math.max(16, Math.round(MOBILE_MOVE_PAD_CELL_PX * 0.5))} />
                 </button>
-                <button type="button" onClick={() => doMove(1, 0, false)} disabled={!canMoveRight} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 3, gridRow: 2, fontSize: "1rem" }} title="Right">→</button>
-                <button type="button" onClick={() => doMove(0, 1, false)} disabled={!canMoveDown} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 2, gridRow: 3, fontSize: "1rem" }} title="Down">↓</button>
+                <button type="button" onClick={() => doMove(relativeRight.dx, relativeRight.dy, false)} disabled={!canMoveRight} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 3, gridRow: 2, fontSize: "1rem" }} title="Right">→</button>
+                <button type="button" onClick={() => doMove(relativeBackward.dx, relativeBackward.dy, false)} disabled={!canMoveDown} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 2, gridRow: 3, fontSize: "1rem" }} title="Back">↓</button>
               </div>
             </div>
           )}
@@ -8551,6 +9962,18 @@ export default function LabyrinthGame() {
                 boxSizing: "border-box",
                 zIndex: 1,
               }),
+          ...(mazeMapView !== "grid"
+            ? {
+                display: "none",
+                height: 0,
+                minHeight: 0,
+                margin: 0,
+                padding: 0,
+                border: "none",
+                overflow: "hidden",
+                pointerEvents: "none",
+              }
+            : {}),
         }}
       >
         {catapultPicker && !isMobile && (
@@ -8893,295 +10316,17 @@ export default function LabyrinthGame() {
                         }}
                       >
                         <div style={controlsSectionLabelStyle}>2D mini map</div>
-                        {(() => {
-                          const miniCellBase = Math.max(3, Math.min(10, Math.floor(Math.min(180 / lab.width, 120 / lab.height))));
-                          const miniCell = Math.max(3, Math.min(22, Math.round(miniCellBase * isoMiniMapZoom)));
-                          const activeFacing = playerFacing[currentPlayer] ?? { dx: 0, dy: 1 };
-                          const activeFacingLen = Math.hypot(activeFacing.dx, activeFacing.dy) || 1;
-                          const activeFacingAngleDeg =
-                            (Math.atan2(activeFacing.dy / activeFacingLen, activeFacing.dx / activeFacingLen) * 180) / Math.PI + 90;
-                          return (
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              onClick={switchToGridAndFocusCurrentPlayer}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault();
-                                  switchToGridAndFocusCurrentPlayer();
-                                }
-                              }}
-                              title="Switch to full 2D grid map"
-                              onWheel={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                const direction = -Math.sign(e.deltaY);
-                                if (direction === 0) return;
-                                setIsoMiniMapZoom((z) =>
-                                  Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z + direction * ISO_MINIMAP_ZOOM_STEP))
-                                );
-                              }}
-                              onTouchStart={(e) => {
-                                if (e.touches.length !== 2) return;
-                                const [a, b] = [e.touches[0], e.touches[1]];
-                                if (!a || !b) return;
-                                isoMiniMapPinchStartRef.current = {
-                                  distance: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY),
-                                  zoom: isoMiniMapZoom,
-                                };
-                              }}
-                              onTouchMove={(e) => {
-                                if (e.touches.length !== 2 || !isoMiniMapPinchStartRef.current) return;
-                                e.preventDefault();
-                                e.stopPropagation();
-                                const [a, b] = [e.touches[0], e.touches[1]];
-                                if (!a || !b) return;
-                                const distance = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
-                                const start = isoMiniMapPinchStartRef.current;
-                                const scale = distance / Math.max(1, start.distance);
-                                const nextZoom = start.zoom * scale;
-                                setIsoMiniMapZoom(
-                                  Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, nextZoom))
-                                );
-                              }}
-                              onTouchEnd={(e) => {
-                                if (e.touches.length < 2) isoMiniMapPinchStartRef.current = null;
-                              }}
-                              onTouchCancel={() => {
-                                isoMiniMapPinchStartRef.current = null;
-                              }}
-                              style={{
-                                width: "100%",
-                                height: 140,
-                                borderRadius: 6,
-                                border: "1px solid #3a3a46",
-                                background: "#0f0f16",
-                                overflow: "hidden",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                cursor: "pointer",
-                                position: "relative",
-                                touchAction: "none",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  position: "absolute",
-                                  top: 6,
-                                  right: 6,
-                                  zIndex: 3,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 4,
-                                  padding: "2px 4px",
-                                  borderRadius: 4,
-                                  border: "1px solid rgba(98,98,120,0.65)",
-                                  background: "rgba(8,8,12,0.72)",
-                                  fontFamily: "monospace",
-                                }}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    setIsoMiniMapZoom((z) =>
-                                      Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z - ISO_MINIMAP_ZOOM_STEP))
-                                    );
-                                  }}
-                                  title="Zoom out mini map"
-                                  style={{
-                                    width: 18,
-                                    height: 18,
-                                    borderRadius: 4,
-                                    border: "1px solid #4d4d63",
-                                    background: "rgba(18,18,28,0.95)",
-                                    color: "#d2d8e4",
-                                    fontSize: "0.82rem",
-                                    lineHeight: 1,
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  -
-                                </button>
-                                <span
-                                  style={{
-                                    minWidth: 36,
-                                    textAlign: "center",
-                                    color: "#b9c4d6",
-                                    fontSize: "0.64rem",
-                                  }}
-                                >
-                                  {Math.round((isoMiniMapZoom / ISO_MINIMAP_ZOOM_BASELINE) * 100)}%
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    setIsoMiniMapZoom((z) =>
-                                      Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z + ISO_MINIMAP_ZOOM_STEP))
-                                    );
-                                  }}
-                                  title="Zoom in mini map"
-                                  style={{
-                                    width: 18,
-                                    height: 18,
-                                    borderRadius: 4,
-                                    border: "1px solid #4d4d63",
-                                    background: "rgba(18,18,28,0.95)",
-                                    color: "#d2d8e4",
-                                    fontSize: "0.82rem",
-                                    lineHeight: 1,
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  +
-                                </button>
-                              </div>
-                              <div
-                                style={{
-                                  display: "grid",
-                                  gridTemplateColumns: `repeat(${lab.width}, ${miniCell}px)`,
-                                  gridTemplateRows: `repeat(${lab.height}, ${miniCell}px)`,
-                                  position: "relative",
-                                  boxShadow: "0 0 0 1px rgba(255,255,255,0.08)",
-                                }}
-                              >
-                                {Array.from({ length: lab.height }).map((_, y) =>
-                                  Array.from({ length: lab.width }).map((_, x) => {
-                                    const cellType = lab.grid[y]?.[x] ?? "#";
-                                    const isWallCell = cellType === "#";
-                                    const rawCellFog = fogIntensityMap.get(`${x},${y}`) ?? 0;
-                                    const walkableForFloor = isWalkable(cellType);
-                                    const adjacentWallFog = walkableForFloor
-                                      ? adjacentWallFogFromIntensityMap(lab, x, y, fogIntensityMap)
-                                      : undefined;
-                                    const wallLightCount = walkableForFloor
-                                      ? pathFloorWallLightCount(lab, x, y, adjacentWallFog)
-                                      : 0;
-                                    const cellFogVisual = walkableForFloor
-                                      ? pathFogVisualIntensity(rawCellFog, wallLightCount)
-                                      : rawCellFog;
-                                    const corridorLightDeg = mazeCorridorLightAngleDeg(lab, x, y);
-                                    const bg: React.CSSProperties = MAZE_LITE_TEXTURES
-                                      ? classicFlatMazeCellBackground(isWallCell ? "cell wall" : "cell path", { isTeleportOption: false })
-                                      : (
-                                          isWallCell
-                                            ? wallStyleWithOptionalSconce(miniCell, x, y, lab)
-                                            : basePathStyle(miniCell, corridorLightDeg, lab, x, y, rawCellFog, adjacentWallFog)
-                                        );
-                                    const monster = lab.monsters.find((m) => m.x === x && m.y === y);
-                                    const pi = playerCells[`${x},${y}`];
-                                    const showPlayer = pi !== undefined && !lab.eliminatedPlayers.has(pi);
-                                    const isHiddenCell = lab.hiddenCells.has(`${x},${y}`);
-                                    const showArtifactDot =
-                                      !isWallCell &&
-                                      !isHiddenCell &&
-                                      rawCellFog <= 0 &&
-                                      isArtifactCell(cellType) &&
-                                      !monster &&
-                                      !showPlayer;
-                                    return (
-                                      <div
-                                        key={`mini-${x}-${y}`}
-                                        style={{
-                                          width: miniCell,
-                                          height: miniCell,
-                                          position: "relative",
-                                          ...bg,
-                                        }}
-                                      >
-                                        {monster && (
-                                          <span
-                                            style={{
-                                              position: "absolute",
-                                              left: "50%",
-                                              top: "50%",
-                                              transform: "translate(-50%, -50%)",
-                                              width: Math.max(2, miniCell * 0.36),
-                                              height: Math.max(2, miniCell * 0.36),
-                                              borderRadius: "50%",
-                                              background: "#ff4f4f",
-                                              boxShadow: "0 0 4px rgba(255,80,80,0.7)",
-                                              zIndex: 3,
-                                            }}
-                                          />
-                                        )}
-                                        {showPlayer && (
-                                          <span
-                                            style={{
-                                              position: "absolute",
-                                              left: "50%",
-                                              top: "50%",
-                                              transform: "translate(-50%, -50%)",
-                                              width: Math.max(2, miniCell * 0.44),
-                                              height: Math.max(2, miniCell * 0.44),
-                                              borderRadius: "50%",
-                                              background: pi === currentPlayer ? "#00ff88" : "#6fb8ff",
-                                              boxShadow: pi === currentPlayer
-                                                ? "0 0 5px rgba(0,255,136,0.75)"
-                                                : "0 0 4px rgba(100,180,255,0.55)",
-                                              zIndex: 4,
-                                            }}
-                                          />
-                                        )}
-                                        {showPlayer && pi === currentPlayer && (
-                                          <span
-                                            style={{
-                                              position: "absolute",
-                                              left: "50%",
-                                              top: "50%",
-                                              transform: `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
-                                              color: "#062214",
-                                              fontSize: `${Math.max(7, miniCell * 0.85)}px`,
-                                              fontWeight: 900,
-                                              lineHeight: 1,
-                                              textShadow: "0 0 2px rgba(0,255,136,0.95)",
-                                              pointerEvents: "none",
-                                              zIndex: 5,
-                                            }}
-                                            title="Active player facing direction"
-                                          >
-                                            ▲
-                                          </span>
-                                        )}
-                                        {showArtifactDot && (
-                                          <span
-                                            style={{
-                                              position: "absolute",
-                                              left: "50%",
-                                              top: "50%",
-                                              transform: "translate(-50%, -50%)",
-                                              width: Math.max(2, miniCell * 0.3),
-                                              height: Math.max(2, miniCell * 0.3),
-                                              borderRadius: "50%",
-                                              background: "#ffd166",
-                                              boxShadow: "0 0 4px rgba(255,209,102,0.8)",
-                                              zIndex: 2,
-                                            }}
-                                          />
-                                        )}
-                                        {cellFogVisual > 0 && (
-                                          <span
-                                            style={{
-                                              position: "absolute",
-                                              inset: 0,
-                                              background: `rgba(3, 3, 8, ${Math.min(0.95, 0.1 + cellFogVisual * 0.85)})`,
-                                              pointerEvents: "none",
-                                              zIndex: 1,
-                                            }}
-                                          />
-                                        )}
-                                      </div>
-                                    );
-                                  })
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })()}
+                        <IsoDockGridMiniMap
+                          lab={lab}
+                          currentPlayer={currentPlayer}
+                          playerFacing={playerFacing}
+                          fogIntensityMap={fogIntensityMap}
+                          playerCells={playerCells}
+                          isoMiniMapZoom={isoMiniMapZoom}
+                          setIsoMiniMapZoom={setIsoMiniMapZoom}
+                          isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                          onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                        />
                       </div>
                     )}
                     {showMoveGrid && (
@@ -9209,16 +10354,16 @@ export default function LabyrinthGame() {
                         >
                           <button
                             type="button"
-                            onClick={() => doMove(0, -1, false)}
+                            onClick={() => doMove(relativeForward.dx, relativeForward.dy, false)}
                             disabled={!canMoveUp}
                             style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 1 }}
-                            title="Move up"
+                            title="Move forward"
                           >
                             ↑
                           </button>
                           <button
                             type="button"
-                            onClick={() => doMove(-1, 0, false)}
+                            onClick={() => doMove(relativeLeft.dx, relativeLeft.dy, false)}
                             disabled={!canMoveLeft}
                             style={{ ...moveButtonStyle, gridColumn: 1, gridRow: 2 }}
                             title="Move left"
@@ -9245,7 +10390,7 @@ export default function LabyrinthGame() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => doMove(1, 0, false)}
+                            onClick={() => doMove(relativeRight.dx, relativeRight.dy, false)}
                             disabled={!canMoveRight}
                             style={{ ...moveButtonStyle, gridColumn: 3, gridRow: 2 }}
                             title="Move right"
@@ -9254,10 +10399,10 @@ export default function LabyrinthGame() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => doMove(0, 1, false)}
+                            onClick={() => doMove(relativeBackward.dx, relativeBackward.dy, false)}
                             disabled={!canMoveDown}
                             style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 3 }}
-                            title="Move down"
+                            title="Move back"
                           >
                             ↓
                           </button>
@@ -9447,12 +10592,12 @@ export default function LabyrinthGame() {
 }
 
 const HEADER_HEIGHT = 64;
-/** Full-screen combat covers the header; above header chrome (1300), below settings (1360). */
-const COMBAT_MODAL_Z = 1320;
+/** Above ISO immersive fallback (ISO_IMMERSIVE_Z) so combat / roll UI stays visible. */
+const COMBAT_MODAL_Z = 10090;
 /** Above combat overlay so menu / mobile backdrop work when combat is closed; settings use SETTINGS_MODAL_Z */
 const HEADER_Z_INDEX = 1300;
-/** Game setup — must sit above combat when opened from menu mid-game */
-const SETTINGS_MODAL_Z = 1360;
+/** Game setup — above combat / immersive layers */
+const SETTINGS_MODAL_Z = 10120;
 
 const gameOverOverlayStyle: React.CSSProperties = {
   position: "fixed",
