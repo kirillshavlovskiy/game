@@ -295,7 +295,12 @@ const GAME_OVER_OVERLAY_Z = 10200;
 const ISO_HUD_MOVE_RING_PX = 196;
 const ISO_HUD_JOYSTICK_PAD_PX = 112;
 const ISO_HUD_KNOB_MAX_PX = 36;
-const MOVE_KNOB_REPEAT_MS = 220;
+/** Joystick: no move below this radius (px). */
+const MOVE_KNOB_DEAD_PX = 10;
+/** Full deflection → fastest step repeat. */
+const MOVE_KNOB_REPEAT_MS_FAST = 88;
+/** Just past dead zone → slowest repeat. */
+const MOVE_KNOB_REPEAT_MS_SLOW = 400;
 /** Mobile 3D (non-immersive): fixed WebGL layer; header / zoom strip / docks use higher z-index. */
 const MOBILE_ISO_CANVAS_Z = 90;
 
@@ -921,10 +926,8 @@ function IsoDockGridMiniMap({
   );
 }
 
-/** Circular minimap (optional) + draggable center knob: direction from center moves the pawn; edges still open the 2D grid. */
-function CircularIsoMinimapMoveHud({
-  diameter,
-  showMinimap,
+/** Circular 2D minimap (tap → full grid). */
+function IsoHudMinimapCircle({
   lab,
   currentPlayer,
   playerFacing,
@@ -934,6 +937,56 @@ function CircularIsoMinimapMoveHud({
   setIsoMiniMapZoom,
   isoMiniMapPinchStartRef,
   onOpenGrid,
+  diameter,
+}: {
+  lab: Labyrinth;
+  currentPlayer: number;
+  playerFacing: Record<number, { dx: number; dy: number }>;
+  fogIntensityMap: Map<string, number>;
+  playerCells: Record<string, number>;
+  isoMiniMapZoom: number;
+  setIsoMiniMapZoom: Dispatch<SetStateAction<number>>;
+  isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
+  onOpenGrid: () => void;
+  diameter: number;
+}) {
+  const mapDiscPx = Math.min(diameter, Math.round(diameter * 0.98));
+  return (
+    <div
+      title="2D mini map — tap for full grid"
+      style={{
+        width: mapDiscPx,
+        height: mapDiscPx,
+        flexShrink: 0,
+        borderRadius: "50%",
+        overflow: "hidden",
+        boxSizing: "border-box",
+        border: "2px solid rgba(0,255,136,0.28)",
+        boxShadow: "0 6px 22px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)",
+      }}
+    >
+      <IsoDockGridMiniMap
+        lab={lab}
+        currentPlayer={currentPlayer}
+        playerFacing={playerFacing}
+        fogIntensityMap={fogIntensityMap}
+        playerCells={playerCells}
+        isoMiniMapZoom={isoMiniMapZoom}
+        setIsoMiniMapZoom={setIsoMiniMapZoom}
+        isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+        onOpenGrid={onOpenGrid}
+        clipDiameter={mapDiscPx}
+      />
+    </div>
+  );
+}
+
+/** Joystick ring: `standalone` for corner HUD; `overlay` on top of minimap in one disc. */
+function IsoHudJoystickMoveRing({
+  diameter,
+  dimPadOverMinimap,
+  placement,
+  outerRef,
   canMoveUp,
   canMoveDown,
   canMoveLeft,
@@ -945,21 +998,11 @@ function CircularIsoMinimapMoveHud({
   doMove,
   scrollToCurrentPlayerOnMap,
   focusDisabled,
-  outerRef,
-  /** When false (e.g. phone landscape), minimap and move ring are side by side instead of overlaid. */
-  combineWithMinimap = true,
 }: {
   diameter: number;
-  showMinimap: boolean;
-  lab: Labyrinth;
-  currentPlayer: number;
-  playerFacing: Record<number, { dx: number; dy: number }>;
-  fogIntensityMap: Map<string, number>;
-  playerCells: Record<string, number>;
-  isoMiniMapZoom: number;
-  setIsoMiniMapZoom: Dispatch<SetStateAction<number>>;
-  isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
-  onOpenGrid: () => void;
+  dimPadOverMinimap: boolean;
+  placement: "standalone" | "overlay";
+  outerRef?: Ref<HTMLDivElement>;
   canMoveUp: boolean;
   canMoveDown: boolean;
   canMoveLeft: boolean;
@@ -971,8 +1014,6 @@ function CircularIsoMinimapMoveHud({
   doMove: (dx: number, dy: number, jump: boolean) => void;
   scrollToCurrentPlayerOnMap: () => void;
   focusDisabled: boolean;
-  outerRef?: Ref<HTMLDivElement>;
-  combineWithMinimap?: boolean;
 }) {
   const padPx = Math.min(ISO_HUD_JOYSTICK_PAD_PX, Math.round(diameter * 0.58));
   const knobMax = Math.min(ISO_HUD_KNOB_MAX_PX, Math.round(padPx * 0.4));
@@ -993,8 +1034,7 @@ function CircularIsoMinimapMoveHud({
 
   const tryMoveFromKnob = useCallback(
     (ox: number, oy: number) => {
-      const dead = 10;
-      if (Math.hypot(ox, oy) < dead) return;
+      if (Math.hypot(ox, oy) < MOVE_KNOB_DEAD_PX) return;
       let dx: number;
       let dy: number;
       let ok: boolean;
@@ -1020,6 +1060,25 @@ function CircularIsoMinimapMoveHud({
       relativeRight,
       doMove,
     ],
+  );
+
+  const armStepRepeat = useCallback(
+    (ox: number, oy: number) => {
+      clearRepeat();
+      const r = Math.hypot(ox, oy);
+      if (r < MOVE_KNOB_DEAD_PX) return;
+      const span = Math.max(1e-6, knobMax - MOVE_KNOB_DEAD_PX);
+      const t = Math.min(1, (r - MOVE_KNOB_DEAD_PX) / span);
+      const eased = t * t;
+      const ms = Math.round(
+        MOVE_KNOB_REPEAT_MS_FAST +
+          (MOVE_KNOB_REPEAT_MS_SLOW - MOVE_KNOB_REPEAT_MS_FAST) * (1 - eased),
+      );
+      repeatRef.current = setInterval(() => {
+        tryMoveFromKnob(knobRef.current.x, knobRef.current.y);
+      }, ms);
+    },
+    [clearRepeat, knobMax, tryMoveFromKnob],
   );
 
   const onJoystickPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -1048,12 +1107,7 @@ function CircularIsoMinimapMoveHud({
     knobRef.current = { x: ox, y: oy };
     setKnob({ x: ox, y: oy });
     tryMoveFromKnob(ox, oy);
-    if (repeatRef.current == null) {
-      repeatRef.current = setInterval(() => {
-        const k = knobRef.current;
-        tryMoveFromKnob(k.x, k.y);
-      }, MOVE_KNOB_REPEAT_MS);
-    }
+    armStepRepeat(ox, oy);
   };
 
   const endJoystickPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -1110,7 +1164,7 @@ function CircularIsoMinimapMoveHud({
         borderRadius: "50%",
         zIndex: 2,
         touchAction: "none",
-        background: showMinimap && combineWithMinimap
+        background: dimPadOverMinimap
           ? "radial-gradient(circle, rgba(10,12,20,0.88) 0%, rgba(10,12,20,0.35) 72%, transparent 100%)"
           : "rgba(10,12,20,0.2)",
         border: "1px solid rgba(0,255,136,0.22)",
@@ -1140,55 +1194,80 @@ function CircularIsoMinimapMoveHud({
     </div>
   );
 
-  if (!combineWithMinimap) {
-    return (
-      <div
-        ref={outerRef}
-        style={{
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "flex-end",
-          gap: 8,
+  const wrapStyle: React.CSSProperties =
+    placement === "overlay"
+      ? {
+          position: "absolute",
+          inset: 0,
+          pointerEvents: "none",
+          borderRadius: "50%",
+        }
+      : {
+          position: "relative",
+          width: diameter,
+          height: diameter,
           flexShrink: 0,
-        }}
-      >
-        {showMinimap ? (
-          <div
-            style={{
-              width: 194,
-              maxWidth: "min(194px, 38vw)",
-              flexShrink: 0,
-              boxSizing: "border-box",
-            }}
-          >
-            <IsoDockGridMiniMap
-              lab={lab}
-              currentPlayer={currentPlayer}
-              playerFacing={playerFacing}
-              fogIntensityMap={fogIntensityMap}
-              playerCells={playerCells}
-              isoMiniMapZoom={isoMiniMapZoom}
-              setIsoMiniMapZoom={setIsoMiniMapZoom}
-              isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-              onOpenGrid={onOpenGrid}
-            />
-          </div>
-        ) : null}
-        <div
-          style={{
-            position: "relative",
-            width: diameter,
-            height: diameter,
-            flexShrink: 0,
-          }}
-        >
-          {moveRingBackdrop}
-          {joystickPad}
-        </div>
-      </div>
-    );
-  }
+          pointerEvents: "auto",
+        };
 
+  return (
+    <div ref={outerRef} style={wrapStyle}>
+      {moveRingBackdrop}
+      {joystickPad}
+    </div>
+  );
+}
+
+/** Single disc: circular minimap under joystick, or move-only ring when `showMinimap` is false. */
+function CircularIsoMinimapMoveHud({
+  diameter,
+  showMinimap,
+  lab,
+  currentPlayer,
+  playerFacing,
+  fogIntensityMap,
+  playerCells,
+  isoMiniMapZoom,
+  setIsoMiniMapZoom,
+  isoMiniMapPinchStartRef,
+  onOpenGrid,
+  canMoveUp,
+  canMoveDown,
+  canMoveLeft,
+  canMoveRight,
+  relativeForward,
+  relativeBackward,
+  relativeLeft,
+  relativeRight,
+  doMove,
+  scrollToCurrentPlayerOnMap,
+  focusDisabled,
+  outerRef,
+}: {
+  diameter: number;
+  showMinimap: boolean;
+  lab: Labyrinth;
+  currentPlayer: number;
+  playerFacing: Record<number, { dx: number; dy: number }>;
+  fogIntensityMap: Map<string, number>;
+  playerCells: Record<string, number>;
+  isoMiniMapZoom: number;
+  setIsoMiniMapZoom: Dispatch<SetStateAction<number>>;
+  isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
+  onOpenGrid: () => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  canMoveLeft: boolean;
+  canMoveRight: boolean;
+  relativeForward: { dx: number; dy: number };
+  relativeBackward: { dx: number; dy: number };
+  relativeLeft: { dx: number; dy: number };
+  relativeRight: { dx: number; dy: number };
+  doMove: (dx: number, dy: number, jump: boolean) => void;
+  scrollToCurrentPlayerOnMap: () => void;
+  focusDisabled: boolean;
+  outerRef?: Ref<HTMLDivElement>;
+}) {
   return (
     <div
       ref={outerRef}
@@ -1223,10 +1302,23 @@ function CircularIsoMinimapMoveHud({
             clipDiameter={diameter}
           />
         </div>
-      ) : (
-        moveRingBackdrop
-      )}
-      {joystickPad}
+      ) : null}
+      <IsoHudJoystickMoveRing
+        diameter={diameter}
+        dimPadOverMinimap={showMinimap}
+        placement="overlay"
+        canMoveUp={canMoveUp}
+        canMoveDown={canMoveDown}
+        canMoveLeft={canMoveLeft}
+        canMoveRight={canMoveRight}
+        relativeForward={relativeForward}
+        relativeBackward={relativeBackward}
+        relativeLeft={relativeLeft}
+        relativeRight={relativeRight}
+        doMove={doMove}
+        scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+        focusDisabled={focusDisabled}
+      />
     </div>
   );
 }
@@ -5661,6 +5753,9 @@ export default function LabyrinthGame() {
     (isMobile ? mobileDockExpanded : !desktopControlsCollapsed);
   /** Phone landscape: minimap and joystick as separate controls; portrait keeps the overlaid circle. */
   const splitIsoHudMapAndMove = isMobile && isLandscapeCompact;
+  /** Map pinned one side of the bar / screen, joystick the other (landscape phone or desktop iso + moves). */
+  const splitIsoHudOppositeScreen =
+    splitIsoHudMapAndMove || (!isMobile && !!lab && mazeMapView === "iso" && showMoveGrid);
   const inCombatDock = !!combatState;
   const totalDiamondsDock = lab.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
   const bombUseDisabled = !cp || (cp?.bombs ?? 0) <= 0 || (moveDisabled && !combatState);
@@ -9576,187 +9671,245 @@ export default function LabyrinthGame() {
                       paddingBottom: "max(10px, env(safe-area-inset-bottom, 0px))",
                       paddingTop: 28,
                       zIndex: ISO_IMMERSIVE_HUD_Z,
-                      display: "flex",
-                      flexDirection: "row",
-                      alignItems: "flex-end",
-                      justifyContent: "space-between",
-                      gap: 10,
                       pointerEvents: "none",
                       background: "linear-gradient(0deg, rgba(5,6,12,0.94) 0%, rgba(5,6,12,0.65) 45%, transparent 100%)",
                     }}
                   >
                     <div
                       style={{
-                        pointerEvents: "auto",
+                        position: "relative",
                         display: "flex",
-                        flexDirection: "column",
-                        alignItems: "flex-start",
-                        gap: 6,
-                        flexShrink: 0,
-                        maxWidth: "min(210px, 40vw)",
-                      }}
-                    >
-                      {!(lab && isoImmersiveUi && !combatState) && (
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 4,
-                          flexWrap: "wrap",
-                          background: "rgba(16,18,28,0.88)",
-                          border: "1px solid #3a3a4a",
-                          borderRadius: 12,
-                          padding: "4px 6px",
-                        }}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
-                          style={mazeZoomButtonStyle}
-                          title="Zoom out 3D"
-                        >
-                          −
-                        </button>
-                        <span style={{ fontSize: "0.65rem", color: "#888", minWidth: 30, textAlign: "center" }}>
-                          {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
-                          style={mazeZoomButtonStyle}
-                          title="Zoom in 3D"
-                        >
-                          +
-                        </button>
-                      </div>
-                      )}
-                    </div>
-                    <div
-                      style={{
-                        pointerEvents: "auto",
-                        flex: 1,
-                        minWidth: 0,
-                        display: "flex",
-                        justifyContent: "center",
+                        flexDirection: "row",
                         alignItems: "flex-end",
-                        paddingBottom: 4,
+                        justifyContent: "space-between",
+                        gap: 10,
+                        width: "100%",
+                        pointerEvents: "none",
+                        minHeight: splitIsoHudOppositeScreen && showMoveGrid && lab ? ISO_HUD_MOVE_RING_PX + 4 : undefined,
                       }}
                     >
                       <div
                         style={{
+                          pointerEvents: "auto",
                           display: "flex",
                           flexDirection: "column",
-                          alignItems: "center",
+                          alignItems: "flex-start",
                           gap: 6,
-                          maxWidth: "min(420px, 52vw)",
+                          flexShrink: 0,
+                          maxWidth: "min(210px, 40vw)",
                         }}
                       >
-                        <div
-                          style={{
-                            fontSize: "0.58rem",
-                            fontWeight: 700,
-                            color: "#6a7080",
-                            textTransform: "uppercase",
-                            letterSpacing: "0.1em",
-                          }}
-                        >
-                          Items
-                        </div>
+                        {!(lab && isoImmersiveUi && !combatState) && (
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 4,
+                              flexWrap: "wrap",
+                              background: "rgba(16,18,28,0.88)",
+                              border: "1px solid #3a3a4a",
+                              borderRadius: 12,
+                              padding: "4px 6px",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
+                              style={mazeZoomButtonStyle}
+                              title="Zoom out 3D"
+                            >
+                              −
+                            </button>
+                            <span style={{ fontSize: "0.65rem", color: "#888", minWidth: 30, textAlign: "center" }}>
+                              {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
+                              style={mazeZoomButtonStyle}
+                              title="Zoom in 3D"
+                            >
+                              +
+                            </button>
+                          </div>
+                        )}
+                        {splitIsoHudOppositeScreen && showMoveGrid && lab && mazeMapView === "iso" ? (
+                          <IsoHudMinimapCircle
+                            diameter={ISO_HUD_MOVE_RING_PX}
+                            lab={lab}
+                            currentPlayer={currentPlayer}
+                            playerFacing={playerFacing}
+                            fogIntensityMap={fogIntensityMap}
+                            playerCells={playerCells}
+                            isoMiniMapZoom={isoMiniMapZoom}
+                            setIsoMiniMapZoom={setIsoMiniMapZoom}
+                            isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                            onOpenGrid={() => {
+                              if (!isMobile) void leaveIsoImmersiveOnly();
+                              switchToGridAndFocusCurrentPlayer();
+                            }}
+                          />
+                        ) : null}
+                      </div>
+                      <div
+                        style={{
+                          pointerEvents: "auto",
+                          ...(splitIsoHudOppositeScreen && showMoveGrid && lab
+                            ? {
+                                position: "absolute",
+                                left: "50%",
+                                transform: "translateX(-50%)",
+                                bottom: 0,
+                                zIndex: 1,
+                                flex: "none",
+                                minWidth: 0,
+                              }
+                            : {
+                                flex: 1,
+                                minWidth: 0,
+                                display: "flex",
+                                justifyContent: "center",
+                                alignItems: "flex-end",
+                                paddingBottom: 4,
+                              }),
+                        }}
+                      >
                         <div
                           style={{
                             display: "flex",
-                            flexDirection: "row",
-                            flexWrap: "nowrap",
-                            gap: 6,
+                            flexDirection: "column",
                             alignItems: "center",
-                            padding: "8px 14px",
-                            borderRadius: 999,
-                            background: "rgba(14,16,26,0.92)",
-                            border: "1px solid rgba(0,255,136,0.22)",
-                            boxShadow: "0 4px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)",
-                            overflowX: "auto",
-                            maxWidth: "100%",
-                            WebkitOverflowScrolling: "touch",
+                            gap: 6,
+                            maxWidth: "min(420px, 52vw)",
                           }}
                         >
-                          {dockActions.length === 0 ? (
-                            <span style={{ fontSize: "0.72rem", color: "#555", padding: "2px 4px" }}>No items</span>
-                          ) : (
-                            dockActions.map(({ id, n }) => {
-                              const selected = immersiveInventoryPick === id;
-                              const bomb = id === "bomb";
-                              return (
-                                <button
-                                  key={id}
-                                  type="button"
-                                  onClick={() => setImmersiveInventoryPick((p) => (p === id ? null : id))}
-                                  style={{
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    alignItems: "center",
-                                    gap: 2,
-                                    padding: "6px 10px",
-                                    borderRadius: 12,
-                                    border: selected ? "2px solid #00ff88" : "1px solid #3a3d4c",
-                                    background: bomb ? "rgba(255,136,68,0.12)" : "rgba(36,38,52,0.95)",
-                                    color: "#ddd",
-                                    cursor: "pointer",
-                                    flex: "0 0 auto",
-                                    minWidth: 52,
-                                  }}
-                                  title={bomb ? "Bomb" : STORED_ARTIFACT_TOOLTIP[id]}
-                                >
-                                  <BottomDockInventoryIcon variant={bomb ? "bomb" : storedArtifactIconVariant(id)} />
-                                  <span style={{ fontSize: "0.62rem", fontWeight: 700 }}>×{n}</span>
-                                </button>
-                              );
-                            })
-                          )}
+                          <div
+                            style={{
+                              fontSize: "0.58rem",
+                              fontWeight: 700,
+                              color: "#6a7080",
+                              textTransform: "uppercase",
+                              letterSpacing: "0.1em",
+                            }}
+                          >
+                            Items
+                          </div>
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "row",
+                              flexWrap: "nowrap",
+                              gap: 6,
+                              alignItems: "center",
+                              padding: "8px 14px",
+                              borderRadius: 999,
+                              background: "rgba(14,16,26,0.92)",
+                              border: "1px solid rgba(0,255,136,0.22)",
+                              boxShadow: "0 4px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)",
+                              overflowX: "auto",
+                              maxWidth: "100%",
+                              WebkitOverflowScrolling: "touch",
+                            }}
+                          >
+                            {dockActions.length === 0 ? (
+                              <span style={{ fontSize: "0.72rem", color: "#555", padding: "2px 4px" }}>No items</span>
+                            ) : (
+                              dockActions.map(({ id, n }) => {
+                                const selected = immersiveInventoryPick === id;
+                                const bomb = id === "bomb";
+                                return (
+                                  <button
+                                    key={id}
+                                    type="button"
+                                    onClick={() => setImmersiveInventoryPick((p) => (p === id ? null : id))}
+                                    style={{
+                                      display: "flex",
+                                      flexDirection: "column",
+                                      alignItems: "center",
+                                      gap: 2,
+                                      padding: "6px 10px",
+                                      borderRadius: 12,
+                                      border: selected ? "2px solid #00ff88" : "1px solid #3a3d4c",
+                                      background: bomb ? "rgba(255,136,68,0.12)" : "rgba(36,38,52,0.95)",
+                                      color: "#ddd",
+                                      cursor: "pointer",
+                                      flex: "0 0 auto",
+                                      minWidth: 52,
+                                    }}
+                                    title={bomb ? "Bomb" : STORED_ARTIFACT_TOOLTIP[id]}
+                                  >
+                                    <BottomDockInventoryIcon variant={bomb ? "bomb" : storedArtifactIconVariant(id)} />
+                                    <span style={{ fontSize: "0.62rem", fontWeight: 700 }}>×{n}</span>
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <div
-                      style={{
-                        pointerEvents: "auto",
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "center",
-                        gap: 8,
-                        flexShrink: 0,
-                      }}
-                    >
-                      {showMoveGrid && lab && (
-                        <CircularIsoMinimapMoveHud
-                          diameter={ISO_HUD_MOVE_RING_PX}
-                          combineWithMinimap={!splitIsoHudMapAndMove}
-                          showMinimap={mazeMapView === "iso"}
-                          lab={lab}
-                          currentPlayer={currentPlayer}
-                          playerFacing={playerFacing}
-                          fogIntensityMap={fogIntensityMap}
-                          playerCells={playerCells}
-                          isoMiniMapZoom={isoMiniMapZoom}
-                          setIsoMiniMapZoom={setIsoMiniMapZoom}
-                          isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-                          onOpenGrid={() => {
-                            if (!isMobile) void leaveIsoImmersiveOnly();
-                            switchToGridAndFocusCurrentPlayer();
-                          }}
-                          canMoveUp={canMoveUp}
-                          canMoveDown={canMoveDown}
-                          canMoveLeft={canMoveLeft}
-                          canMoveRight={canMoveRight}
-                          relativeForward={relativeForward}
-                          relativeBackward={relativeBackward}
-                          relativeLeft={relativeLeft}
-                          relativeRight={relativeRight}
-                          doMove={doMove}
-                          scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
-                          focusDisabled={
-                            winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)
-                          }
-                        />
-                      )}
+                      <div
+                        style={{
+                          pointerEvents: "auto",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          gap: 8,
+                          flexShrink: 0,
+                        }}
+                      >
+                        {showMoveGrid && lab ? (
+                          splitIsoHudOppositeScreen ? (
+                            <IsoHudJoystickMoveRing
+                              diameter={ISO_HUD_MOVE_RING_PX}
+                              dimPadOverMinimap={false}
+                              placement="standalone"
+                              canMoveUp={canMoveUp}
+                              canMoveDown={canMoveDown}
+                              canMoveLeft={canMoveLeft}
+                              canMoveRight={canMoveRight}
+                              relativeForward={relativeForward}
+                              relativeBackward={relativeBackward}
+                              relativeLeft={relativeLeft}
+                              relativeRight={relativeRight}
+                              doMove={doMove}
+                              scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+                              focusDisabled={
+                                winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)
+                              }
+                            />
+                          ) : (
+                            <CircularIsoMinimapMoveHud
+                              diameter={ISO_HUD_MOVE_RING_PX}
+                              showMinimap={mazeMapView === "iso"}
+                              lab={lab}
+                              currentPlayer={currentPlayer}
+                              playerFacing={playerFacing}
+                              fogIntensityMap={fogIntensityMap}
+                              playerCells={playerCells}
+                              isoMiniMapZoom={isoMiniMapZoom}
+                              setIsoMiniMapZoom={setIsoMiniMapZoom}
+                              isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                              onOpenGrid={() => {
+                                if (!isMobile) void leaveIsoImmersiveOnly();
+                                switchToGridAndFocusCurrentPlayer();
+                              }}
+                              canMoveUp={canMoveUp}
+                              canMoveDown={canMoveDown}
+                              canMoveLeft={canMoveLeft}
+                              canMoveRight={canMoveRight}
+                              relativeForward={relativeForward}
+                              relativeBackward={relativeBackward}
+                              relativeLeft={relativeLeft}
+                              relativeRight={relativeRight}
+                              doMove={doMove}
+                              scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+                              focusDisabled={
+                                winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)
+                              }
+                            />
+                          )
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 </>
@@ -10522,7 +10675,73 @@ export default function LabyrinthGame() {
         </>
       )}
 
-      {isMobile && showMoveGrid && lab && !isoImmersiveUi && (
+      {isMobile && showMoveGrid && lab && !isoImmersiveUi && splitIsoHudMapAndMove ? (
+        <>
+          {mazeMapView === "iso" ? (
+            <div
+              style={{
+                position: "fixed",
+                left: "max(8px, env(safe-area-inset-left, 0px))",
+                bottom: "max(36px, calc(20px + env(safe-area-inset-bottom, 0px)))",
+                zIndex: 114,
+                padding: "8px 10px",
+                borderRadius: 10,
+                background: "rgba(26,26,36,0.92)",
+                border: "1px solid #444",
+                boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+                pointerEvents: "auto",
+              }}
+            >
+              <IsoHudMinimapCircle
+                diameter={Math.min(ISO_HUD_MOVE_RING_PX, 168)}
+                lab={lab}
+                currentPlayer={currentPlayer}
+                playerFacing={playerFacing}
+                fogIntensityMap={fogIntensityMap}
+                playerCells={playerCells}
+                isoMiniMapZoom={isoMiniMapZoom}
+                setIsoMiniMapZoom={setIsoMiniMapZoom}
+                isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                onOpenGrid={switchToGridAndFocusCurrentPlayer}
+              />
+            </div>
+          ) : null}
+          <div
+            style={{
+              position: "fixed",
+              right: "max(8px, env(safe-area-inset-right, 0px))",
+              bottom: "max(36px, calc(20px + env(safe-area-inset-bottom, 0px)))",
+              zIndex: 114,
+              padding: "8px 10px",
+              borderRadius: 10,
+              background: "rgba(26,26,36,0.92)",
+              border: "1px solid #444",
+              boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+              pointerEvents: "auto",
+            }}
+          >
+            <IsoHudJoystickMoveRing
+              outerRef={mobileDockExpandedMovePadRef}
+              diameter={Math.min(ISO_HUD_MOVE_RING_PX, 168)}
+              dimPadOverMinimap={false}
+              placement="standalone"
+              canMoveUp={canMoveUp}
+              canMoveDown={canMoveDown}
+              canMoveLeft={canMoveLeft}
+              canMoveRight={canMoveRight}
+              relativeForward={relativeForward}
+              relativeBackward={relativeBackward}
+              relativeLeft={relativeLeft}
+              relativeRight={relativeRight}
+              doMove={doMove}
+              scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+              focusDisabled={
+                winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+              }
+            />
+          </div>
+        </>
+      ) : isMobile && showMoveGrid && lab && !isoImmersiveUi ? (
         <div
           style={{
             position: "fixed",
@@ -10540,7 +10759,6 @@ export default function LabyrinthGame() {
           <CircularIsoMinimapMoveHud
             outerRef={mobileDockExpandedMovePadRef}
             diameter={Math.min(ISO_HUD_MOVE_RING_PX, 168)}
-            combineWithMinimap={!splitIsoHudMapAndMove}
             showMinimap={mazeMapView === "iso"}
             lab={lab}
             currentPlayer={currentPlayer}
@@ -10566,7 +10784,7 @@ export default function LabyrinthGame() {
             }
           />
         </div>
-      )}
+      ) : null}
 
       <div
         ref={mobileDockRef}
@@ -10952,7 +11170,9 @@ export default function LabyrinthGame() {
                       alignItems: "stretch",
                       gap: 8,
                       flexShrink: 0,
-                      alignSelf: "flex-start",
+                      alignSelf: splitIsoHudOppositeScreen && !isMobile ? "stretch" : "flex-start",
+                      width: splitIsoHudOppositeScreen && !isMobile ? "100%" : undefined,
+                      maxWidth: splitIsoHudOppositeScreen && !isMobile ? "min(560px, 100%)" : undefined,
                     }}
                   >
                     <div
@@ -10961,42 +11181,91 @@ export default function LabyrinthGame() {
                         marginTop: 0,
                         padding: 6,
                         flexShrink: 0,
+                        width: splitIsoHudOppositeScreen && !isMobile ? "100%" : undefined,
+                        boxSizing: "border-box",
                       }}
                     >
                       <div style={controlsSectionLabelStyle}>
                         {mazeMapView === "iso"
-                          ? splitIsoHudMapAndMove
+                          ? splitIsoHudOppositeScreen
                             ? "2D mini map · Move"
                             : "2D mini map & move"
                           : "Move"}
                       </div>
-                      <CircularIsoMinimapMoveHud
-                        diameter={ISO_HUD_MOVE_RING_PX}
-                        combineWithMinimap={!splitIsoHudMapAndMove}
-                        showMinimap={!!lab && mazeMapView === "iso"}
-                        lab={lab!}
-                        currentPlayer={currentPlayer}
-                        playerFacing={playerFacing}
-                        fogIntensityMap={fogIntensityMap}
-                        playerCells={playerCells}
-                        isoMiniMapZoom={isoMiniMapZoom}
-                        setIsoMiniMapZoom={setIsoMiniMapZoom}
-                        isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-                        onOpenGrid={switchToGridAndFocusCurrentPlayer}
-                        canMoveUp={canMoveUp}
-                        canMoveDown={canMoveDown}
-                        canMoveLeft={canMoveLeft}
-                        canMoveRight={canMoveRight}
-                        relativeForward={relativeForward}
-                        relativeBackward={relativeBackward}
-                        relativeLeft={relativeLeft}
-                        relativeRight={relativeRight}
-                        doMove={doMove}
-                        scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
-                        focusDisabled={
-                          winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
-                        }
-                      />
+                      {splitIsoHudOppositeScreen && !isMobile ? (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "row",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            gap: 16,
+                            width: "100%",
+                          }}
+                        >
+                          {mazeMapView === "iso" ? (
+                            <IsoHudMinimapCircle
+                              diameter={ISO_HUD_MOVE_RING_PX}
+                              lab={lab!}
+                              currentPlayer={currentPlayer}
+                              playerFacing={playerFacing}
+                              fogIntensityMap={fogIntensityMap}
+                              playerCells={playerCells}
+                              isoMiniMapZoom={isoMiniMapZoom}
+                              setIsoMiniMapZoom={setIsoMiniMapZoom}
+                              isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                              onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                            />
+                          ) : (
+                            <div style={{ flex: 1, minWidth: 0 }} />
+                          )}
+                          <IsoHudJoystickMoveRing
+                            diameter={ISO_HUD_MOVE_RING_PX}
+                            dimPadOverMinimap={false}
+                            placement="standalone"
+                            canMoveUp={canMoveUp}
+                            canMoveDown={canMoveDown}
+                            canMoveLeft={canMoveLeft}
+                            canMoveRight={canMoveRight}
+                            relativeForward={relativeForward}
+                            relativeBackward={relativeBackward}
+                            relativeLeft={relativeLeft}
+                            relativeRight={relativeRight}
+                            doMove={doMove}
+                            scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+                            focusDisabled={
+                              winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+                            }
+                          />
+                        </div>
+                      ) : (
+                        <CircularIsoMinimapMoveHud
+                          diameter={ISO_HUD_MOVE_RING_PX}
+                          showMinimap={!!lab && mazeMapView === "iso"}
+                          lab={lab!}
+                          currentPlayer={currentPlayer}
+                          playerFacing={playerFacing}
+                          fogIntensityMap={fogIntensityMap}
+                          playerCells={playerCells}
+                          isoMiniMapZoom={isoMiniMapZoom}
+                          setIsoMiniMapZoom={setIsoMiniMapZoom}
+                          isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                          onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                          canMoveUp={canMoveUp}
+                          canMoveDown={canMoveDown}
+                          canMoveLeft={canMoveLeft}
+                          canMoveRight={canMoveRight}
+                          relativeForward={relativeForward}
+                          relativeBackward={relativeBackward}
+                          relativeLeft={relativeLeft}
+                          relativeRight={relativeRight}
+                          doMove={doMove}
+                          scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+                          focusDisabled={
+                            winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+                          }
+                        />
+                      )}
                     </div>
                   </div>
                 ) : null}

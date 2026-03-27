@@ -1182,8 +1182,7 @@ function CameraController({
       const dx = t.clientX - dragRef.current.x;
       const dy = t.clientY - dragRef.current.y;
       dragRef.current = { x: t.clientX, y: t.clientY };
-      /* Drag up → tilt toward the pawn; drag down → pull back (screen coords: y grows downward). */
-      applyManualOrbitFromDelta(camera, controlsRef, dx, -dy, hasManualCameraRef, manualOffsetRef);
+      applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
     const onTouchEnd = () => {
       if (touchUi) dragRef.current = null;
