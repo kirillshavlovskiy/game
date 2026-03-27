@@ -946,6 +946,8 @@ function CircularIsoMinimapMoveHud({
   scrollToCurrentPlayerOnMap,
   focusDisabled,
   outerRef,
+  /** When false (e.g. phone landscape), minimap and move ring are side by side instead of overlaid. */
+  combineWithMinimap = true,
 }: {
   diameter: number;
   showMinimap: boolean;
@@ -970,6 +972,7 @@ function CircularIsoMinimapMoveHud({
   scrollToCurrentPlayerOnMap: () => void;
   focusDisabled: boolean;
   outerRef?: Ref<HTMLDivElement>;
+  combineWithMinimap?: boolean;
 }) {
   const padPx = Math.min(ISO_HUD_JOYSTICK_PAD_PX, Math.round(diameter * 0.58));
   const knobMax = Math.min(ISO_HUD_KNOB_MAX_PX, Math.round(padPx * 0.4));
@@ -1073,6 +1076,119 @@ function CircularIsoMinimapMoveHud({
     }
   };
 
+  const moveRingBackdrop = (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        borderRadius: "50%",
+        zIndex: 0,
+        background:
+          "radial-gradient(circle at 50% 42%, rgba(48,56,68,0.95) 0%, rgba(18,20,30,0.98) 55%, rgba(8,9,14,1) 100%)",
+        border: "2px solid rgba(0,255,136,0.3)",
+        boxShadow: "0 6px 26px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)",
+        pointerEvents: "none",
+      }}
+    />
+  );
+
+  const joystickPad = (
+    <div
+      role="presentation"
+      onPointerDown={onJoystickPointerDown}
+      onPointerMove={onJoystickPointerMove}
+      onPointerUp={endJoystickPointer}
+      onPointerCancel={endJoystickPointer}
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        width: padPx,
+        height: padPx,
+        marginLeft: -padPx / 2,
+        marginTop: -padPx / 2,
+        borderRadius: "50%",
+        zIndex: 2,
+        touchAction: "none",
+        background: showMinimap && combineWithMinimap
+          ? "radial-gradient(circle, rgba(10,12,20,0.88) 0%, rgba(10,12,20,0.35) 72%, transparent 100%)"
+          : "rgba(10,12,20,0.2)",
+        border: "1px solid rgba(0,255,136,0.22)",
+        boxSizing: "border-box",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          left: `calc(50% + ${knob.x}px)`,
+          top: `calc(50% + ${knob.y}px)`,
+          transform: "translate(-50%, -50%)",
+          width: 44,
+          height: 44,
+          borderRadius: "50%",
+          background: "#1a2e22",
+          border: "2px solid #00ff88",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          pointerEvents: "none",
+          boxShadow: "0 0 12px rgba(0,255,136,0.22)",
+        }}
+      >
+        <MovePadFocusTargetIcon size={22} />
+      </div>
+    </div>
+  );
+
+  if (!combineWithMinimap) {
+    return (
+      <div
+        ref={outerRef}
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "flex-end",
+          gap: 8,
+          flexShrink: 0,
+        }}
+      >
+        {showMinimap ? (
+          <div
+            style={{
+              width: 194,
+              maxWidth: "min(194px, 38vw)",
+              flexShrink: 0,
+              boxSizing: "border-box",
+            }}
+          >
+            <IsoDockGridMiniMap
+              lab={lab}
+              currentPlayer={currentPlayer}
+              playerFacing={playerFacing}
+              fogIntensityMap={fogIntensityMap}
+              playerCells={playerCells}
+              isoMiniMapZoom={isoMiniMapZoom}
+              setIsoMiniMapZoom={setIsoMiniMapZoom}
+              isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+              onOpenGrid={onOpenGrid}
+            />
+          </div>
+        ) : null}
+        <div
+          style={{
+            position: "relative",
+            width: diameter,
+            height: diameter,
+            flexShrink: 0,
+          }}
+        >
+          {moveRingBackdrop}
+          {joystickPad}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={outerRef}
@@ -1108,65 +1224,9 @@ function CircularIsoMinimapMoveHud({
           />
         </div>
       ) : (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            borderRadius: "50%",
-            zIndex: 0,
-            background:
-              "radial-gradient(circle at 50% 42%, rgba(48,56,68,0.95) 0%, rgba(18,20,30,0.98) 55%, rgba(8,9,14,1) 100%)",
-            border: "2px solid rgba(0,255,136,0.3)",
-            boxShadow: "0 6px 26px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)",
-            pointerEvents: "none",
-          }}
-        />
+        moveRingBackdrop
       )}
-      <div
-        role="presentation"
-        onPointerDown={onJoystickPointerDown}
-        onPointerMove={onJoystickPointerMove}
-        onPointerUp={endJoystickPointer}
-        onPointerCancel={endJoystickPointer}
-        style={{
-          position: "absolute",
-          left: "50%",
-          top: "50%",
-          width: padPx,
-          height: padPx,
-          marginLeft: -padPx / 2,
-          marginTop: -padPx / 2,
-          borderRadius: "50%",
-          zIndex: 2,
-          touchAction: "none",
-          background: showMinimap
-            ? "radial-gradient(circle, rgba(10,12,20,0.88) 0%, rgba(10,12,20,0.35) 72%, transparent 100%)"
-            : "rgba(10,12,20,0.2)",
-          border: "1px solid rgba(0,255,136,0.22)",
-          boxSizing: "border-box",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            left: `calc(50% + ${knob.x}px)`,
-            top: `calc(50% + ${knob.y}px)`,
-            transform: "translate(-50%, -50%)",
-            width: 44,
-            height: 44,
-            borderRadius: "50%",
-            background: "#1a2e22",
-            border: "2px solid #00ff88",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            pointerEvents: "none",
-            boxShadow: "0 0 12px rgba(0,255,136,0.22)",
-          }}
-        >
-          <MovePadFocusTargetIcon size={22} />
-        </div>
-      </div>
+      {joystickPad}
     </div>
   );
 }
@@ -5599,6 +5659,8 @@ export default function LabyrinthGame() {
     !combatState &&
     winner === null &&
     (isMobile ? mobileDockExpanded : !desktopControlsCollapsed);
+  /** Phone landscape: minimap and joystick as separate controls; portrait keeps the overlaid circle. */
+  const splitIsoHudMapAndMove = isMobile && isLandscapeCompact;
   const inCombatDock = !!combatState;
   const totalDiamondsDock = lab.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
   const bombUseDisabled = !cp || (cp?.bombs ?? 0) <= 0 || (moveDisabled && !combatState);
@@ -9666,6 +9728,7 @@ export default function LabyrinthGame() {
                       {showMoveGrid && lab && (
                         <CircularIsoMinimapMoveHud
                           diameter={ISO_HUD_MOVE_RING_PX}
+                          combineWithMinimap={!splitIsoHudMapAndMove}
                           showMinimap={mazeMapView === "iso"}
                           lab={lab}
                           currentPlayer={currentPlayer}
@@ -10477,6 +10540,7 @@ export default function LabyrinthGame() {
           <CircularIsoMinimapMoveHud
             outerRef={mobileDockExpandedMovePadRef}
             diameter={Math.min(ISO_HUD_MOVE_RING_PX, 168)}
+            combineWithMinimap={!splitIsoHudMapAndMove}
             showMinimap={mazeMapView === "iso"}
             lab={lab}
             currentPlayer={currentPlayer}
@@ -10900,10 +10964,15 @@ export default function LabyrinthGame() {
                       }}
                     >
                       <div style={controlsSectionLabelStyle}>
-                        {mazeMapView === "iso" ? "2D mini map & move" : "Move"}
+                        {mazeMapView === "iso"
+                          ? splitIsoHudMapAndMove
+                            ? "2D mini map · Move"
+                            : "2D mini map & move"
+                          : "Move"}
                       </div>
                       <CircularIsoMinimapMoveHud
                         diameter={ISO_HUD_MOVE_RING_PX}
+                        combineWithMinimap={!splitIsoHudMapAndMove}
                         showMinimap={!!lab && mazeMapView === "iso"}
                         lab={lab!}
                         currentPlayer={currentPlayer}

@@ -1283,6 +1283,15 @@ function CameraController({
       pz - (desiredDir.dy / len) * followDist
     );
     const autoOffset = autoCameraPos.clone().sub(desiredTarget);
+
+    const prevPosForMove = prevPlayerPosRef.current;
+    const movedFar = Math.hypot(playerX - prevPosForMove.x, playerY - prevPosForMove.y) > 1.01;
+    if (movedFar && touchUi && !rotateMode && !dragRef.current && !teleportLikeFraming) {
+      hasManualCameraRef.current = false;
+      manualOffsetRef.current = null;
+      transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.5);
+    }
+
     const desiredOffset =
       hasManualCameraRef.current && manualOffsetRef.current && !teleportLikeFraming
         ? manualOffsetRef.current.clone()
@@ -1303,8 +1312,6 @@ function CameraController({
       return;
     }
 
-    const prevPos = prevPlayerPosRef.current;
-    const movedFar = Math.hypot(playerX - prevPos.x, playerY - prevPos.y) > 1.01;
     const facingNow = { dx: Math.sign(facingDx), dy: Math.sign(facingDy) };
     const facingChanged =
       (Math.abs(facingNow.dx) + Math.abs(facingNow.dy) > 0) &&
@@ -1351,7 +1358,7 @@ function CameraController({
     }
 
     // Keep manual camera adjustment persistent while following the player.
-    // It is reset only by explicit reset, turn-change focus reset, facing-change reset, or teleport mode.
+    // Reset: explicit reset, turn/facing change, teleport/catapult framing, or a touch step to a new tile.
 
     // Auto-follow current player and orient behind movement direction unless user is actively rotating.
     if (!rotateMode && !dragRef.current) {
