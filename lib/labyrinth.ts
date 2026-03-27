@@ -719,30 +719,75 @@ export class Labyrinth {
     return area;
   }
 
-  /** Dracula east of (0,0) — first combat after moving right; prepended so it is monsters[0]. */
-  private _placeStartNeighborDracula(): void {
+  /**
+   * Skeleton east of (0,0) — first combat after moving right (shield on).
+   * Only on Hard (3) and Extreme (4); Easy/Normal omit this encounter.
+   */
+  private _placeStartNeighborSkeleton(): void {
+    if (this.monsterDensity < 3) return;
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "V",
+          type: "K",
           patrolArea,
           visionRadius: 3,
           spawnX: 1,
           spawnY: 0,
-          hp: getMonsterMaxHp("V"),
-          draculaState: "idle",
-          draculaCooldowns: { teleport: 0, attack: 0 },
-          targetPlayerIndex: null,
+          hasShield: true,
+          hp: getMonsterMaxHp("K"),
         });
       }
     }
   }
 
+  /**
+   * Place Dracula a few tiles away from start (0,0), so the player sees a short hunt phase
+   * before first encounter instead of immediate spawn-adjacent contact.
+   */
+  private _placeStartNeighborDracula(): void {
+    const occupied = (x: number, y: number) => this.monsters.some((m) => m.x === x && m.y === y);
+    const minDist = 4;
+    const maxDist = 8;
+    const candidates: [number, number, number][] = [];
+    for (let y = 0; y < this.height; y++) {
+      for (let x = 0; x < this.width; x++) {
+        if (!isWalkable(this.grid[y][x])) continue;
+        if (occupied(x, y)) continue;
+        if (x === 0 && y === 0) continue;
+        const d = Math.abs(x) + Math.abs(y);
+        if (d < minDist || d > maxDist) continue;
+        const patrolArea = this._getPatrolArea(x, y, 28);
+        if (patrolArea.length < 2) continue;
+        candidates.push([x, y, d]);
+      }
+    }
+    if (candidates.length === 0) return;
+    candidates.sort((a, b) => a[2] - b[2]);
+    // Pick one of the closest few valid cells to keep a predictable "early but not instant" hunt.
+    const pickPool = candidates.slice(0, Math.min(6, candidates.length));
+    const [x, y] = pickPool[Math.floor(Math.random() * pickPool.length)]!;
+    const patrolArea = this._getPatrolArea(x, y, 28);
+    this.monsters.unshift({
+      x,
+      y,
+      type: "V",
+      patrolArea,
+      visionRadius: DRACULA_CONFIG.vision,
+      spawnX: x,
+      spawnY: y,
+      hasShield: false,
+      hp: getMonsterMaxHp("V"),
+      draculaState: "idle",
+      draculaCooldowns: { teleport: 0, attack: 0 },
+      targetPlayerIndex: null,
+    });
+  }
+  
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor Dracula is unshifted in generate/loadGrid)
+    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor skeleton is unshifted in generate/loadGrid)
     const intersections: [number, number][] = [];
     const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
@@ -892,8 +937,6 @@ export class Labyrinth {
     const indices = activePlayerIndex !== undefined ? [activePlayerIndex] : Array.from({ length: this.players.length }, (_, i) => i);
     for (let mi = 0; mi < this.monsters.length; mi++) {
       const m = this.monsters[mi];
-      const aliveHp = m.hp ?? getMonsterMaxHp(m.type);
-      if (aliveHp <= 0) continue;
       for (const i of indices) {
         if (this.eliminatedPlayers.has(i)) continue;
         const p = this.players[i];
@@ -1006,6 +1049,7 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
 
+    this._placeStartNeighborSkeleton();
     this._placeStartNeighborDracula();
   }
 
@@ -1055,6 +1099,7 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
+    this._placeStartNeighborSkeleton();
     this._placeStartNeighborDracula();
     // Add hidden cells and spider webs from path cells for AI-loaded mazes
     const pathCells: [number, number][] = [];

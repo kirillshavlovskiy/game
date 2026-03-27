@@ -245,13 +245,16 @@ export function applyDraculaAttack(
     return null;
   }
   const dist = manhattan(dracula.x, dracula.y, target.x, target.y);
-  if (dist !== 1) {
+  if (dist > 1) {
     // Telegraph resolved but target moved away — leave telegraph or moveMonsters will skip forever
     dracula.draculaState = "hunt";
     return null;
   }
+  // Final strike should land on the target tile (visual + logic consistency).
+  dracula.x = target.x;
+  dracula.y = target.y;
   dracula.draculaCooldowns = dracula.draculaCooldowns ?? { teleport: 0, attack: 0 };
   dracula.draculaCooldowns.attack = DRACULA_CONFIG.attackCooldown;
-  dracula.draculaState = "recover";
+  dracula.draculaState = "attack";
   return targetIdx;
 }

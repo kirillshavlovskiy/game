@@ -1,0 +1,1954 @@
+"use client";
+
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Canvas, useThree, useFrame, ThreeEvent } from "@react-three/fiber";
+import { OrbitControls, useAnimations, useGLTF, useTexture } from "@react-three/drei";
+import * as THREE from "three";
+import { MAZE_FLOOR_TEXTURE, MAZE_ISO_WALL_SIDE_TEXTURE } from "@/lib/mazeCellTheme";
+import { WALL, type DraculaState, type MonsterType } from "@/lib/labyrinth";
+import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
+import { getMonsterGltfPathForReference, resolveMonsterAnimationClipName } from "@/lib/monsterModels3d";
+
+type MiniMonster = { x: number; y: number; type?: string; draculaState?: DraculaState };
+
+type Props = {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  playerX: number;
+  playerY: number;
+  facingDx: number;
+  facingDy: number;
+  zoom?: number;
+  visible: boolean;
+  onCellClick?: (x: number, y: number) => void;
+  teleportOptions?: [number, number][];
+  teleportMode?: boolean;
+  focusVersion?: number;
+  miniMonsters?: MiniMonster[];
+  fogIntensityMap?: Map<string, number>;
+};
+
+/** Each grid cell = 3x3 world units. */
+const CS = 3;
+/** Wall blocks fill the full cell ? adjacent walls form solid continuous walls. */
+const WALL_SIZE = CS;
+const WALL_HEIGHT = 3.2;
+const WALL_TOP_COLOR = "#3a3a4c";
+const FLOOR_Y = 0;
+const ROTATE_TIMEOUT_MS = 3000;
+
+/* ------------------------------------------------------------------ */
+/*  Floor                                                              */
+/* ------------------------------------------------------------------ */
+function FloorTiles({
+  grid, mapWidth, mapHeight, onCellClick,
+}: {
+  grid: string[][]; mapWidth: number; mapHeight: number;
+  onCellClick?: (x: number, y: number) => void;
+}) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const floorTex = useTexture(MAZE_FLOOR_TEXTURE);
+  floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
+  floorTex.repeat.set(0.8, 0.8);
+
+  const count = mapWidth * mapHeight;
+  const cellMap = useRef<Array<[number, number]>>([]);
+
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const dummy = new THREE.Object3D();
+    const map: Array<[number, number]> = [];
+    let idx = 0;
+    for (let y = 0; y < mapHeight; y++) {
+      for (let x = 0; x < mapWidth; x++) {
+        dummy.position.set(x * CS, FLOOR_Y - 0.01, y * CS);
+        dummy.rotation.x = -Math.PI / 2;
+        dummy.updateMatrix();
+        mesh.setMatrixAt(idx, dummy.matrix);
+        map.push([x, y]);
+        idx++;
+      }
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    cellMap.current = map;
+  }, [grid, mapWidth, mapHeight]);
+
+  const handleClick = useCallback((e: ThreeEvent<MouseEvent>) => {
+    if (!onCellClick || e.instanceId === undefined) return;
+    e.stopPropagation();
+    const cell = cellMap.current[e.instanceId];
+    if (cell) onCellClick(cell[0], cell[1]);
+  }, [onCellClick]);
+
+  return (
+    <instancedMesh ref={meshRef} args={[undefined, undefined, count]} onClick={handleClick} receiveShadow>
+      <planeGeometry args={[CS, CS]} />
+      <meshStandardMaterial
+        map={floorTex}
+        roughness={0.72}
+        metalness={0.04}
+        color="#6a5d56"
+      />
+    </instancedMesh>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Walls                                                              */
+/* ------------------------------------------------------------------ */
+function WallBlocks({
+  grid, mapWidth, mapHeight,
+}: {
+  grid: string[][]; mapWidth: number; mapHeight: number;
+}) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const wallSideTex = useTexture(MAZE_ISO_WALL_SIDE_TEXTURE);
+  wallSideTex.wrapS = wallSideTex.wrapT = THREE.RepeatWrapping;
+  wallSideTex.repeat.set(0.5, 0.5);
+
+  const wallCells = useMemo(() => {
+    const cells: Array<[number, number]> = [];
+    for (let y = 0; y < mapHeight; y++)
+      for (let x = 0; x < mapWidth; x++)
+        if (grid[y]?.[x] === WALL) cells.push([x, y]);
+    return cells;
+  }, [grid, mapWidth, mapHeight]);
+
+  const wallMaterials = useMemo(() => {
+    const sideMat = new THREE.MeshStandardMaterial({ map: wallSideTex, roughness: 0.9, metalness: 0, color: "#7a6a5a" });
+    const sideMatDark = new THREE.MeshStandardMaterial({ map: wallSideTex, roughness: 0.9, metalness: 0, color: "#5a4a3a" });
+    // Keep top faces permanently darker than side walls in low-light areas.
+    const topMat = new THREE.MeshBasicMaterial({ map: wallSideTex, color: "#2f2722" });
+    return [sideMat, sideMatDark, topMat, topMat, sideMat, sideMatDark];
+  }, [wallSideTex]);
+
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < wallCells.length; i++) {
+      const [x, y] = wallCells[i];
+      dummy.position.set(x * CS, FLOOR_Y + WALL_HEIGHT / 2, y * CS);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  }, [wallCells]);
+
+  return (
+    <instancedMesh
+      ref={meshRef}
+      args={[undefined, undefined, wallCells.length]}
+      material={wallMaterials}
+      castShadow
+      receiveShadow
+    >
+      <boxGeometry args={[WALL_SIZE, WALL_HEIGHT, WALL_SIZE]} />
+    </instancedMesh>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Player avatar on the ground                                        */
+/* ------------------------------------------------------------------ */
+function PlayerMarker({
+  playerX, playerY, facingDx, facingDy,
+}: {
+  playerX: number; playerY: number; facingDx: number; facingDy: number;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  const targetPos = useRef(new THREE.Vector3(playerX * CS, 0.4, playerY * CS));
+  const didInitPosRef = useRef(false);
+
+  useEffect(() => { targetPos.current.set(playerX * CS, 0.4, playerY * CS); }, [playerX, playerY]);
+
+  useFrame(() => {
+    if (!groupRef.current) return;
+    if (!didInitPosRef.current) {
+      groupRef.current.position.copy(targetPos.current);
+      didInitPosRef.current = true;
+    }
+    groupRef.current.position.lerp(targetPos.current, 0.08);
+    groupRef.current.rotation.y = -Math.atan2(facingDy, facingDx);
+  });
+
+  return (
+    <group ref={groupRef}>
+      {/* Follow light bound to player marker so nearby floor/walls stay readable while moving. */}
+      <pointLight
+        position={[0, 1.15, 0]}
+        color="#a8ffd6"
+        intensity={2.35}
+        distance={CS * 4.2}
+        decay={1.85}
+      />
+      <mesh castShadow receiveShadow>
+        <cylinderGeometry args={[0.45, 0.45, 0.8, 16]} />
+        <meshStandardMaterial color="#00ff88" emissive="#00ff44" emissiveIntensity={0.6} />
+      </mesh>
+      <mesh position={[0.55, 0, 0]} rotation={[0, 0, -Math.PI / 2]} castShadow>
+        <coneGeometry args={[0.2, 0.5, 8]} />
+        <meshStandardMaterial color="#0a0a0f" />
+      </mesh>
+    </group>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Wall torches (same sparse placement as 2D view)                    */
+/* ------------------------------------------------------------------ */
+type TorchPlacement = {
+  x: number;
+  y: number;
+  z: number;
+  dirX: number;
+  dirZ: number;
+  cellX: number;
+  cellY: number;
+  seed: number;
+};
+
+function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }) {
+  const flameOuterRef = useRef<THREE.Mesh>(null);
+  const flameInnerRef = useRef<THREE.Mesh>(null);
+  const flameWispRef = useRef<THREE.Mesh>(null);
+  const flameHaloRef = useRef<THREE.Mesh>(null);
+  const emberRef = useRef<THREE.Mesh>(null);
+  const flameLightRef = useRef<THREE.PointLight>(null);
+  const flameFillLightRef = useRef<THREE.PointLight>(null);
+  const yaw = Math.atan2(torch.dirX, torch.dirZ);
+  // Keep all flame parts in cup-local coordinates so fire stays attached.
+  const CUP_Y = 0.23;
+  const CUP_Z = 0.37;
+  const CUP_HEIGHT = 0.16;
+  const CUP_TOP_Y = CUP_Y + CUP_HEIGHT * 0.5;
+  const FLAME_BASE_Y = CUP_TOP_Y + 0.012;
+  const FLAME_Z = CUP_Z + 0.005;
+
+  useFrame(({ clock }) => {
+    if (!active) return;
+    const t = clock.getElapsedTime() * 7.5 + torch.seed * 3.1;
+    const pulse = 0.92 + Math.sin(t) * 0.12 + Math.sin(t * 1.93) * 0.05;
+    const flicker = 0.84 + Math.sin(t * 1.37) * 0.13 + Math.sin(t * 3.9) * 0.08;
+    const swayX = Math.sin(t * 0.45) * 0.02;
+    const swayZ = Math.cos(t * 0.37) * 0.015;
+
+    if (flameOuterRef.current) {
+      flameOuterRef.current.scale.set(1, Math.max(0.75, pulse), 1);
+      flameOuterRef.current.position.x = swayX;
+      flameOuterRef.current.position.y = FLAME_BASE_Y + 0.11 + pulse * 0.01;
+      flameOuterRef.current.position.z = FLAME_Z + swayZ;
+    }
+    if (flameInnerRef.current) {
+      flameInnerRef.current.scale.set(1, Math.max(0.8, pulse * 0.95), 1);
+      flameInnerRef.current.position.x = swayX * 0.7;
+      flameInnerRef.current.position.y = FLAME_BASE_Y + 0.085 + pulse * 0.008;
+      flameInnerRef.current.position.z = FLAME_Z + swayZ * 0.7;
+    }
+    if (flameWispRef.current) {
+      flameWispRef.current.scale.set(1, Math.max(0.72, pulse * 1.05), 1);
+      flameWispRef.current.position.x = -swayX * 0.85;
+      flameWispRef.current.position.y = FLAME_BASE_Y + 0.125 + pulse * 0.012;
+      flameWispRef.current.position.z = FLAME_Z + 0.01 - swayZ * 0.5;
+    }
+    if (flameHaloRef.current) {
+      flameHaloRef.current.scale.setScalar(0.92 + flicker * 0.22);
+      flameHaloRef.current.position.y = FLAME_BASE_Y + 0.012;
+    }
+    if (emberRef.current) {
+      emberRef.current.scale.setScalar(0.95 + Math.sin(t * 1.6) * 0.12);
+      emberRef.current.position.y = FLAME_BASE_Y + 0.015;
+    }
+    if (flameLightRef.current) {
+      flameLightRef.current.intensity = 5.4 + flicker * 2.7;
+      flameLightRef.current.distance = CS * (5.6 + flicker * 0.65);
+      flameLightRef.current.position.x = swayX * 0.8;
+      flameLightRef.current.position.y = FLAME_BASE_Y + 0.12;
+      flameLightRef.current.position.z = FLAME_Z + swayZ * 0.8;
+    }
+    if (flameFillLightRef.current) {
+      flameFillLightRef.current.intensity = 1.6 + flicker * 0.95;
+      flameFillLightRef.current.position.x = swayX * 0.55;
+      flameFillLightRef.current.position.y = FLAME_BASE_Y + 0.05;
+      flameFillLightRef.current.position.z = FLAME_Z - 0.01 + swayZ * 0.55;
+    }
+  });
+
+  return (
+    <group position={[torch.x, torch.y, torch.z]} rotation={[0, yaw, 0]}>
+      {active && (
+        <>
+          <pointLight
+            ref={flameLightRef}
+            position={[0, FLAME_BASE_Y + 0.12, FLAME_Z]}
+            color="#ffb45a"
+            intensity={6.6}
+            distance={CS * 6}
+            decay={1.7}
+          />
+          <pointLight
+            ref={flameFillLightRef}
+            position={[0, FLAME_BASE_Y + 0.05, FLAME_Z - 0.01]}
+            color="#ff6a2f"
+            intensity={1.9}
+            distance={CS * 3.1}
+            decay={2.1}
+          />
+        </>
+      )}
+      {/* Wall plate */}
+      <mesh position={[0, 0.04, -0.04]} castShadow receiveShadow>
+        <boxGeometry args={[0.2, 0.44, 0.06]} />
+        <meshStandardMaterial color="#2b2520" roughness={0.9} metalness={0.08} />
+      </mesh>
+      {/* Arm */}
+      <mesh position={[0, 0.08, 0.14]} castShadow receiveShadow>
+        <boxGeometry args={[0.06, 0.06, 0.32]} />
+        <meshStandardMaterial color="#3b322a" roughness={0.85} metalness={0.16} />
+      </mesh>
+      {/* Torch cup */}
+      <mesh position={[0, CUP_Y, CUP_Z]} castShadow receiveShadow>
+        <cylinderGeometry args={[0.08, 0.1, CUP_HEIGHT, 10]} />
+        <meshStandardMaterial color="#2a231d" roughness={0.82} metalness={0.2} />
+      </mesh>
+      {/* Flame body */}
+      <mesh ref={flameOuterRef} position={[0, FLAME_BASE_Y + 0.11, FLAME_Z]}>
+        <coneGeometry args={[0.085, 0.22, 12]} />
+        <meshStandardMaterial
+          color="#ff7a2f"
+          emissive="#ff5a1f"
+          emissiveIntensity={1.7}
+          roughness={0.35}
+          metalness={0}
+          side={THREE.DoubleSide}
+          transparent
+          opacity={0.9}
+        />
+      </mesh>
+      {/* Flame core */}
+      <mesh ref={flameInnerRef} position={[0, FLAME_BASE_Y + 0.085, FLAME_Z]}>
+        <coneGeometry args={[0.05, 0.16, 12]} />
+        <meshStandardMaterial
+          color="#ffe7ae"
+          emissive="#ffd47d"
+          emissiveIntensity={2.35}
+          roughness={0.25}
+          metalness={0}
+          side={THREE.DoubleSide}
+          transparent
+          opacity={0.95}
+        />
+      </mesh>
+      {/* Secondary wisp for a less static, more natural flame silhouette */}
+      <mesh ref={flameWispRef} position={[0, FLAME_BASE_Y + 0.125, FLAME_Z + 0.01]}>
+        <coneGeometry args={[0.04, 0.14, 10]} />
+        <meshStandardMaterial
+          color="#ffc36a"
+          emissive="#ffb85e"
+          emissiveIntensity={1.95}
+          roughness={0.25}
+          metalness={0}
+          side={THREE.DoubleSide}
+          transparent
+          opacity={0.85}
+        />
+      </mesh>
+      {/* Soft emissive halo near the flame base */}
+      <mesh ref={flameHaloRef} position={[0, FLAME_BASE_Y + 0.012, FLAME_Z - 0.005]}>
+        <sphereGeometry args={[0.055, 10, 10]} />
+        <meshStandardMaterial
+          color="#ffbb68"
+          emissive="#ff9a45"
+          emissiveIntensity={1.35}
+          roughness={0.2}
+          metalness={0}
+          transparent
+          opacity={0.56}
+        />
+      </mesh>
+      {/* Ember */}
+      <mesh ref={emberRef} position={[0, FLAME_BASE_Y + 0.015, FLAME_Z - 0.006]}>
+        <sphereGeometry args={[0.022, 8, 8]} />
+        <meshStandardMaterial color="#ffce74" emissive="#ffbe56" emissiveIntensity={1.75} />
+      </mesh>
+    </group>
+  );
+}
+
+function WallTorches({
+  grid, mapWidth, mapHeight, playerX, playerY, fogIntensityMap,
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  playerX: number;
+  playerY: number;
+  fogIntensityMap?: Map<string, number>;
+}) {
+  const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
+  const walkable = (cx: number, cy: number) =>
+    cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && !isW(cx, cy);
+
+  const torches = useMemo(() => {
+    const result: TorchPlacement[] = [];
+    let seed = 0;
+    for (let y = 0; y < mapHeight; y++) {
+      for (let x = 0; x < mapWidth; x++) {
+        if (!walkable(x, y)) continue;
+        const vn = (walkable(x, y - 1) ? 1 : 0) + (walkable(x, y + 1) ? 1 : 0);
+        const hn = (walkable(x + 1, y) ? 1 : 0) + (walkable(x - 1, y) ? 1 : 0);
+        const vert = vn > hn;
+        if (vert) {
+          if ((y & 1) === 1) continue;
+          const e = isW(x + 1, y), w = isW(x - 1, y);
+          if (e && w) {
+            const s = (y >>> 1) % 2 === 0 ? 1 : -1;
+            result.push({
+              x: x * CS + s * CS * 0.42, y: WALL_HEIGHT * 0.55, z: y * CS,
+              dirX: s > 0 ? -1 : 1, dirZ: 0, cellX: x, cellY: y, seed: seed++,
+            });
+          } else if (e) {
+            result.push({
+              x: x * CS + CS * 0.42, y: WALL_HEIGHT * 0.55, z: y * CS,
+              dirX: -1, dirZ: 0, cellX: x, cellY: y, seed: seed++,
+            });
+          } else if (w) {
+            result.push({
+              x: x * CS - CS * 0.42, y: WALL_HEIGHT * 0.55, z: y * CS,
+              dirX: 1, dirZ: 0, cellX: x, cellY: y, seed: seed++,
+            });
+          }
+        } else {
+          if ((x & 1) === 1) continue;
+          const n = isW(x, y - 1), s = isW(x, y + 1);
+          if (n && s) {
+            const d = (x >>> 1) % 2 === 0 ? -1 : 1;
+            result.push({
+              x: x * CS, y: WALL_HEIGHT * 0.55, z: y * CS + d * CS * 0.42,
+              dirX: 0, dirZ: d > 0 ? -1 : 1, cellX: x, cellY: y, seed: seed++,
+            });
+          } else if (n) {
+            result.push({
+              x: x * CS, y: WALL_HEIGHT * 0.55, z: y * CS - CS * 0.42,
+              dirX: 0, dirZ: 1, cellX: x, cellY: y, seed: seed++,
+            });
+          } else if (s) {
+            result.push({
+              x: x * CS, y: WALL_HEIGHT * 0.55, z: y * CS + CS * 0.42,
+              dirX: 0, dirZ: -1, cellX: x, cellY: y, seed: seed++,
+            });
+          }
+        }
+      }
+    }
+    return result;
+  }, [grid, mapWidth, mapHeight]);
+
+  return (
+    <>
+      {torches.map((t, i) => {
+        const fog = fogIntensityMap?.get(`${t.cellX},${t.cellY}`) ?? 0;
+        if (fog > 0.02) return null;
+        const near = Math.hypot(t.cellX - playerX, t.cellY - playerY) <= 6.5;
+        return <WallTorch key={i} torch={t} active={near} />;
+      })}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Gothic details: ornaments, webs, relics                           */
+/* ------------------------------------------------------------------ */
+function cellNoise(x: number, y: number, salt = 0): number {
+  const n = ((x * 374761393 + y * 668265263 + salt * 1440865359) >>> 0) % 10000;
+  return n / 10000;
+}
+
+function GothicWallOrnaments({
+  grid, mapWidth, mapHeight, fogIntensityMap,
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  fogIntensityMap?: Map<string, number>;
+}) {
+  const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
+  const walkable = (cx: number, cy: number) =>
+    cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && !isW(cx, cy);
+
+  const ornaments = useMemo(() => {
+    const out: Array<{ x: number; y: number; z: number; yaw: number; variant: number; cellX: number; cellY: number }> = [];
+    for (let y = 0; y < mapHeight; y++) {
+      for (let x = 0; x < mapWidth; x++) {
+        if (!isW(x, y)) continue;
+        if (cellNoise(x, y, 31) > 0.16) continue;
+        const exposed: Array<{ dx: number; dy: number }> = [];
+        if (walkable(x + 1, y)) exposed.push({ dx: 1, dy: 0 });
+        if (walkable(x - 1, y)) exposed.push({ dx: -1, dy: 0 });
+        if (walkable(x, y + 1)) exposed.push({ dx: 0, dy: 1 });
+        if (walkable(x, y - 1)) exposed.push({ dx: 0, dy: -1 });
+        if (exposed.length === 0) continue;
+        const picked = exposed[Math.floor(cellNoise(x, y, 37) * exposed.length)]!;
+        out.push({
+          x: x * CS + picked.dx * CS * 0.49,
+          y: WALL_HEIGHT * (0.45 + cellNoise(x, y, 41) * 0.22),
+          z: y * CS + picked.dy * CS * 0.49,
+          yaw: Math.atan2(picked.dx, picked.dy),
+          variant: cellNoise(x, y, 53) > 0.5 ? 1 : 0,
+          cellX: x,
+          cellY: y,
+        });
+      }
+    }
+    return out;
+  }, [grid, mapHeight, mapWidth]);
+
+  return (
+    <>
+      {ornaments.map((o, i) => {
+        const fog = fogIntensityMap?.get(`${o.cellX},${o.cellY}`) ?? 0;
+        if (fog > 0.15) return null;
+        return (
+          <group key={`orn-${i}`} position={[o.x, o.y, o.z]} rotation={[0, o.yaw, 0]}>
+            <mesh castShadow receiveShadow>
+              <boxGeometry args={[0.42, 0.62, 0.08]} />
+              <meshStandardMaterial color="#3a302b" roughness={0.9} metalness={0.06} />
+            </mesh>
+            {o.variant === 0 ? (
+              <>
+                <mesh position={[0, 0.02, 0.04]} castShadow>
+                  <boxGeometry args={[0.07, 0.46, 0.05]} />
+                  <meshStandardMaterial color="#181417" roughness={0.7} metalness={0.22} />
+                </mesh>
+                <mesh position={[0, 0.02, 0.04]} castShadow>
+                  <boxGeometry args={[0.3, 0.07, 0.05]} />
+                  <meshStandardMaterial color="#181417" roughness={0.7} metalness={0.22} />
+                </mesh>
+              </>
+            ) : (
+              <>
+                <mesh position={[0, 0.06, 0.04]} castShadow>
+                  <coneGeometry args={[0.12, 0.22, 6]} />
+                  <meshStandardMaterial color="#20181b" roughness={0.8} metalness={0.14} />
+                </mesh>
+                <mesh position={[0, -0.18, 0.04]} castShadow>
+                  <boxGeometry args={[0.2, 0.12, 0.05]} />
+                  <meshStandardMaterial color="#20181b" roughness={0.8} metalness={0.14} />
+                </mesh>
+              </>
+            )}
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
+function CornerCobwebs({
+  grid, mapWidth, mapHeight, fogIntensityMap,
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  fogIntensityMap?: Map<string, number>;
+}) {
+  void grid;
+  void mapWidth;
+  void mapHeight;
+  void fogIntensityMap;
+  return null;
+}
+
+function HorrorCornerRelics({
+  grid, mapWidth, mapHeight, fogIntensityMap,
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  fogIntensityMap?: Map<string, number>;
+}) {
+  const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
+  const walkable = (cx: number, cy: number) =>
+    cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && !isW(cx, cy);
+
+  const relics = useMemo(() => {
+    const out: Array<{ x: number; z: number; rot: number; cellX: number; cellY: number }> = [];
+    for (let y = 1; y < mapHeight - 1; y++) {
+      for (let x = 1; x < mapWidth - 1; x++) {
+        if (!walkable(x, y)) continue;
+        if (cellNoise(x, y, 101) > 0.1) continue;
+        const nearCorner =
+          (isW(x + 1, y) && isW(x, y + 1)) ||
+          (isW(x - 1, y) && isW(x, y + 1)) ||
+          (isW(x + 1, y) && isW(x, y - 1)) ||
+          (isW(x - 1, y) && isW(x, y - 1));
+        if (!nearCorner) continue;
+        out.push({
+          x: x * CS + (cellNoise(x, y, 103) - 0.5) * CS * 0.35,
+          z: y * CS + (cellNoise(x, y, 107) - 0.5) * CS * 0.35,
+          rot: cellNoise(x, y, 109) * Math.PI * 2,
+          cellX: x,
+          cellY: y,
+        });
+      }
+    }
+    return out;
+  }, [grid, mapHeight, mapWidth]);
+
+  return (
+    <>
+      {relics.map((r, i) => {
+        const fog = fogIntensityMap?.get(`${r.cellX},${r.cellY}`) ?? 0;
+        if (fog > 0.1) return null;
+        return (
+          <group key={`relic-${i}`} position={[r.x, FLOOR_Y + 0.06, r.z]} rotation={[0, r.rot, 0]}>
+            <mesh castShadow receiveShadow>
+              <boxGeometry args={[0.34, 0.08, 0.24]} />
+              <meshStandardMaterial color="#2a2321" roughness={0.92} metalness={0.06} />
+            </mesh>
+            <mesh position={[0, 0.1, 0]} castShadow>
+              <sphereGeometry args={[0.08, 10, 10]} />
+              <meshStandardMaterial color="#d5c5ad" roughness={0.78} metalness={0.03} />
+            </mesh>
+            <mesh position={[-0.07, 0.13, 0.055]}>
+              <sphereGeometry args={[0.015, 6, 6]} />
+              <meshBasicMaterial color="#1e1714" />
+            </mesh>
+            <mesh position={[0.07, 0.13, 0.055]}>
+              <sphereGeometry args={[0.015, 6, 6]} />
+              <meshBasicMaterial color="#1e1714" />
+            </mesh>
+            <mesh position={[0.16, 0.07, -0.03]}>
+              <cylinderGeometry args={[0.018, 0.022, 0.12, 8]} />
+              <meshStandardMaterial color="#d9d2c2" roughness={0.6} metalness={0.03} />
+            </mesh>
+            <mesh position={[0.16, 0.15, -0.03]}>
+              <sphereGeometry args={[0.016, 7, 7]} />
+              <meshStandardMaterial color="#ffbf69" emissive="#ff9448" emissiveIntensity={1.1} />
+            </mesh>
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
+function MazeSetPieces({
+  grid, mapWidth, mapHeight, playerX, playerY, fogIntensityMap,
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  playerX: number;
+  playerY: number;
+  fogIntensityMap?: Map<string, number>;
+}) {
+  const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
+  const walkable = (cx: number, cy: number) =>
+    cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && !isW(cx, cy);
+
+  const wallProps = useMemo(() => {
+    const out: Array<{
+      x: number; y: number; z: number; yaw: number;
+      type: "portal" | "door" | "grille" | "sign";
+      cellX: number; cellY: number; seed: number;
+    }> = [];
+    for (let y = 1; y < mapHeight - 1; y++) {
+      for (let x = 1; x < mapWidth - 1; x++) {
+        if (!isW(x, y)) continue;
+        const r = cellNoise(x, y, 201);
+        if (r > 0.16) continue;
+        const sides: Array<{ dx: number; dy: number }> = [];
+        if (walkable(x + 1, y)) sides.push({ dx: 1, dy: 0 });
+        if (walkable(x - 1, y)) sides.push({ dx: -1, dy: 0 });
+        if (walkable(x, y + 1)) sides.push({ dx: 0, dy: 1 });
+        if (walkable(x, y - 1)) sides.push({ dx: 0, dy: -1 });
+        if (!sides.length) continue;
+        const s = sides[Math.floor(cellNoise(x, y, 211) * sides.length)]!;
+        const t: "portal" | "door" | "grille" | "sign" =
+          r < 0.025 ? "portal" : r < 0.06 ? "door" : r < 0.11 ? "grille" : "sign";
+        out.push({
+          x: x * CS + s.dx * CS * 0.506,
+          y: t === "portal" ? 1.18 : t === "door" ? 1.22 : 1.42,
+          z: y * CS + s.dy * CS * 0.506,
+          yaw: Math.atan2(s.dx, s.dy),
+          type: t,
+          cellX: x,
+          cellY: y,
+          seed: (x * 92821 + y * 68917) & 1023,
+        });
+      }
+    }
+    return out;
+  }, [grid, mapHeight, mapWidth]);
+
+  const sculptures = useMemo(() => {
+    const out: Array<{ x: number; z: number; rot: number; cellX: number; cellY: number }> = [];
+    for (let y = 1; y < mapHeight - 1; y++) {
+      for (let x = 1; x < mapWidth - 1; x++) {
+        if (!walkable(x, y)) continue;
+        if (cellNoise(x, y, 231) > 0.07) continue;
+        const wallNear =
+          isW(x + 1, y) || isW(x - 1, y) || isW(x, y + 1) || isW(x, y - 1);
+        if (!wallNear) continue;
+        out.push({
+          x: x * CS + (cellNoise(x, y, 233) - 0.5) * CS * 0.28,
+          z: y * CS + (cellNoise(x, y, 239) - 0.5) * CS * 0.28,
+          rot: cellNoise(x, y, 241) * Math.PI * 2,
+          cellX: x,
+          cellY: y,
+        });
+      }
+    }
+    return out;
+  }, [grid, mapHeight, mapWidth]);
+
+  return (
+    <>
+      {wallProps.map((p, i) => {
+        const fog = fogIntensityMap?.get(`${p.cellX},${p.cellY}`) ?? 0;
+        if (fog > 0.14) return null;
+        const near = Math.hypot(p.cellX - playerX, p.cellY - playerY) <= 6.2;
+        if (p.type === "portal") {
+          return (
+            <group key={`portal-${i}`} position={[p.x, p.y, p.z]} rotation={[0, p.yaw, 0]}>
+              <mesh castShadow receiveShadow>
+                <torusGeometry args={[0.45, 0.08, 10, 22]} />
+                <meshStandardMaterial color="#1f1a22" metalness={0.35} roughness={0.55} />
+              </mesh>
+              <mesh position={[0, 0, -0.03]} renderOrder={3}>
+                <circleGeometry args={[0.36, 24]} />
+                <meshBasicMaterial color="#8d6cff" transparent opacity={0.45} />
+              </mesh>
+              {near && <pointLight position={[0, 0, 0.05]} color="#8c68ff" intensity={0.85} distance={2.6} decay={2.4} />}
+            </group>
+          );
+        }
+        if (p.type === "door") {
+          return (
+            <group key={`door-${i}`} position={[p.x, p.y, p.z]} rotation={[0, p.yaw, 0]}>
+              <mesh castShadow receiveShadow>
+                <boxGeometry args={[0.96, 1.84, 0.1]} />
+                <meshStandardMaterial color="#4a3527" roughness={0.92} metalness={0.04} />
+              </mesh>
+              <mesh position={[0, 0.82, 0.035]}>
+                <coneGeometry args={[0.17, 0.12, 3]} />
+                <meshStandardMaterial color="#2b1f18" roughness={0.82} metalness={0.12} />
+              </mesh>
+              <mesh position={[0.35, -0.05, 0.06]}>
+                <sphereGeometry args={[0.035, 8, 8]} />
+                <meshStandardMaterial color="#76654e" roughness={0.42} metalness={0.45} />
+              </mesh>
+            </group>
+          );
+        }
+        if (p.type === "grille") {
+          return (
+            <group key={`grille-${i}`} position={[p.x, p.y, p.z]} rotation={[0, p.yaw, 0]}>
+              <mesh castShadow receiveShadow>
+                <boxGeometry args={[1.0, 1.2, 0.06]} />
+                <meshStandardMaterial color="#27272e" roughness={0.8} metalness={0.28} />
+              </mesh>
+              {[-0.33, -0.11, 0.11, 0.33].map((bx, bi) => (
+                <mesh key={`gb-${i}-${bi}`} position={[bx, 0, 0.035]} castShadow>
+                  <boxGeometry args={[0.05, 1.08, 0.04]} />
+                  <meshStandardMaterial color="#17171d" roughness={0.74} metalness={0.45} />
+                </mesh>
+              ))}
+            </group>
+          );
+        }
+        return (
+          <group key={`sign-${i}`} position={[p.x, p.y, p.z]} rotation={[0, p.yaw, 0]}>
+            <mesh renderOrder={3}>
+              <circleGeometry args={[0.28, 16]} />
+              <meshStandardMaterial
+                color="#131016"
+                emissive="#7f2ce8"
+                emissiveIntensity={0.75}
+                roughness={0.7}
+                metalness={0.06}
+                transparent
+                opacity={0.84}
+              />
+            </mesh>
+            <mesh position={[0, 0, 0.02]} rotation={[0, 0, Math.PI * (p.seed % 7) / 7]} renderOrder={4}>
+              <ringGeometry args={[0.08, 0.16, 3]} />
+              <meshBasicMaterial color="#cfa5ff" transparent opacity={0.8} />
+            </mesh>
+            {near && <pointLight position={[0, 0, 0.06]} color="#8f5cff" intensity={0.32} distance={1.9} decay={2.6} />}
+          </group>
+        );
+      })}
+      {sculptures.map((s, i) => {
+        const fog = fogIntensityMap?.get(`${s.cellX},${s.cellY}`) ?? 0;
+        if (fog > 0.14) return null;
+        return (
+          <group key={`sculpt-${i}`} position={[s.x, FLOOR_Y + 0.04, s.z]} rotation={[0, s.rot, 0]}>
+            <mesh castShadow receiveShadow>
+              <cylinderGeometry args={[0.15, 0.19, 0.22, 10]} />
+              <meshStandardMaterial color="#2a2528" roughness={0.93} metalness={0.04} />
+            </mesh>
+            <mesh position={[0, 0.21, 0]} castShadow receiveShadow>
+              <sphereGeometry args={[0.11, 9, 9]} />
+              <meshStandardMaterial color="#6f6660" roughness={0.86} metalness={0.04} />
+            </mesh>
+            <mesh position={[-0.038, 0.23, 0.088]}>
+              <sphereGeometry args={[0.014, 7, 7]} />
+              <meshBasicMaterial color="#130f0f" />
+            </mesh>
+            <mesh position={[0.038, 0.23, 0.088]}>
+              <sphereGeometry args={[0.014, 7, 7]} />
+              <meshBasicMaterial color="#130f0f" />
+            </mesh>
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Blood/mud stain decals on walkable floor tiles                     */
+/* ------------------------------------------------------------------ */
+const STAIN_PATHS = [
+  "/textures/maze/Stains/Horror_Stain_01-256x256.png",
+  "/textures/maze/Stains/Horror_Stain_02-256x256.png",
+  "/textures/maze/Stains/Horror_Stain_03-256x256.png",
+  "/textures/maze/Stains/Horror_Stain_04-256x256.png",
+  "/textures/maze/Stains/Horror_Stain_05-256x256.png",
+  "/textures/maze/Stains/Horror_Stain_06-256x256.png",
+  "/textures/maze/Stains/Horror_Stain_08-256x256.png",
+  "/textures/maze/Stains/Horror_Stain_09-256x256.png",
+  "/textures/maze/Stains/Horror_Stain_10-256x256.png",
+  "/textures/maze/Stains/Horror_Stain_13-256x256.png",
+  "/textures/maze/Stains/Horror_Stain_14-256x256.png",
+];
+function WallWebDecals({
+  grid, mapWidth, mapHeight, fogIntensityMap,
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  fogIntensityMap?: Map<string, number>;
+}) {
+  void grid;
+  void mapWidth;
+  void mapHeight;
+  void fogIntensityMap;
+  return null;
+}
+
+/** Deterministic hash for per-cell stain placement. */
+function cellHash(x: number, y: number, salt: number) {
+  return ((x * 374761393 + y * 668265263 + salt * 1440865359) >>> 0) % 1000;
+}
+
+function FloorStains({
+  grid, mapWidth, mapHeight,
+}: {
+  grid: string[][]; mapWidth: number; mapHeight: number;
+}) {
+  const stainTextures = useTexture(STAIN_PATHS);
+
+  const stains = useMemo(() => {
+    const result: Array<{ x: number; z: number; rot: number; scale: number; texIdx: number }> = [];
+    for (let y = 0; y < mapHeight; y++) {
+      for (let x = 0; x < mapWidth; x++) {
+        if (grid[y]?.[x] === WALL) continue;
+        const h = cellHash(x, y, 0);
+        if (h > 220) continue;
+        const texIdx = cellHash(x, y, 1) % stainTextures.length;
+        const rot = (cellHash(x, y, 2) / 1000) * Math.PI * 2;
+        const scale = 0.6 + (cellHash(x, y, 3) / 1000) * 1.2;
+        const ox = ((cellHash(x, y, 4) / 1000) - 0.5) * CS * 0.4;
+        const oz = ((cellHash(x, y, 5) / 1000) - 0.5) * CS * 0.4;
+        result.push({ x: x * CS + ox, z: y * CS + oz, rot, scale, texIdx });
+      }
+    }
+    return result;
+  }, [grid, mapWidth, mapHeight, stainTextures.length]);
+
+  return (
+    <>
+      {stains.map((s, i) => (
+        <mesh
+          key={i}
+          position={[s.x, FLOOR_Y + 0.02, s.z]}
+          rotation={[-Math.PI / 2, 0, s.rot]}
+        >
+          <planeGeometry args={[CS * s.scale, CS * s.scale]} />
+          <meshStandardMaterial
+            map={stainTextures[s.texIdx]}
+            transparent
+            alphaTest={0.05}
+            depthWrite={false}
+            roughness={0.95}
+            metalness={0}
+            color="#8a3030"
+          />
+        </mesh>
+      ))}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Camera controller: smooth follow, pan default, rotate on demand    */
+/* ------------------------------------------------------------------ */
+/** Camera height above the look-at target (lower, closer to ground). */
+const CAM_HEIGHT = 5.1;
+/** Camera distance behind the player (slightly farther so lower camera still sees corridor depth). */
+const CAM_BEHIND = 5.2;
+/** How fast the camera follows position (0-1 per frame). */
+const CAM_POS_LERP = 0.2;
+/** How fast the camera rotates to face behind the player (0-1 per frame). */
+const CAM_ROT_LERP = 0.18;
+
+function CameraController({
+  grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy, zoom, rotateMode, resetTick, teleportMode, focusVersion,
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  playerX: number;
+  playerY: number;
+  facingDx: number;
+  facingDy: number;
+  zoom: number;
+  rotateMode: boolean;
+  resetTick: number;
+  teleportMode: boolean;
+  focusVersion?: number;
+}) {
+  const { camera, gl } = useThree();
+  const controlsRef = useRef<any>(null);
+  const prevResetTick = useRef(resetTick);
+  const dragRef = useRef<{ x: number; y: number } | null>(null);
+  const hasManualCameraRef = useRef(false);
+  const manualOffsetRef = useRef<THREE.Vector3 | null>(null);
+  const prevPlayerPosRef = useRef<{ x: number; y: number }>({ x: playerX, y: playerY });
+  const prevFacingRef = useRef<{ dx: number; dy: number }>({ dx: Math.sign(facingDx), dy: Math.sign(facingDy) });
+  const prevFocusVersionRef = useRef(focusVersion);
+  const transitionBlendRef = useRef(0);
+  const autoDirRef = useRef<{ dx: number; dy: number }>({
+    dx: Math.abs(facingDx) + Math.abs(facingDy) > 0 ? Math.sign(facingDx) : 0,
+    dy: Math.abs(facingDx) + Math.abs(facingDy) > 0 ? Math.sign(facingDy) : 1,
+  });
+
+  useEffect(() => {
+    if (camera instanceof THREE.PerspectiveCamera) {
+      const baseFov = THREE.MathUtils.clamp(92 - zoom * 16, 58, 95);
+      // Magic portal targeting gets extra zoom-out to expose destination options.
+      camera.fov = teleportMode
+        ? THREE.MathUtils.clamp(baseFov + 18, 72, 108)
+        : baseFov;
+      camera.updateProjectionMatrix();
+    }
+  }, [camera, zoom, teleportMode]);
+
+  /* Manual rotation via Ctrl+drag or when rotateMode is active.
+     OrbitControls stays in pan-only mode always ? we orbit the camera ourselves. */
+  useEffect(() => {
+    const canvas = gl.domElement;
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (!rotateMode && !e.ctrlKey) return;
+      dragRef.current = { x: e.clientX, y: e.clientY };
+      e.preventDefault();
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      if (!dragRef.current) return;
+      const dx = e.clientX - dragRef.current.x;
+      const dy = e.clientY - dragRef.current.y;
+      dragRef.current = { x: e.clientX, y: e.clientY };
+
+      const ctrl = controlsRef.current;
+      if (!ctrl) return;
+      const target = ctrl.target;
+      const offset = camera.position.clone().sub(target);
+      const spherical = new THREE.Spherical().setFromVector3(offset);
+      spherical.theta -= dx * 0.005;
+      spherical.phi = Math.max(0.2, Math.min(Math.PI / 2.2, spherical.phi - dy * 0.005));
+      offset.setFromSpherical(spherical);
+      camera.position.copy(target).add(offset);
+      camera.lookAt(target);
+      hasManualCameraRef.current = true;
+      manualOffsetRef.current = camera.position.clone().sub(target);
+    };
+    const onMouseUp = () => { dragRef.current = null; };
+    const onWheel = () => {
+      const ctrl = controlsRef.current;
+      if (!ctrl) return;
+      const target = ctrl.target;
+      hasManualCameraRef.current = true;
+      manualOffsetRef.current = camera.position.clone().sub(target);
+    };
+
+    canvas.addEventListener("mousedown", onMouseDown);
+    canvas.addEventListener("wheel", onWheel, { passive: true });
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      canvas.removeEventListener("mousedown", onMouseDown);
+      canvas.removeEventListener("wheel", onWheel);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [camera, gl, rotateMode]);
+
+  useFrame(() => {
+    const ctrl = controlsRef.current;
+    if (!ctrl) return;
+
+    const isWalkable = (cx: number, cy: number) =>
+      cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && grid[cy]?.[cx] !== WALL;
+    const neighbors = [
+      { dx: 1, dy: 0 },
+      { dx: -1, dy: 0 },
+      { dx: 0, dy: 1 },
+      { dx: 0, dy: -1 },
+    ].filter((d) => isWalkable(playerX + d.dx, playerY + d.dy));
+    const forward = {
+      dx: Math.abs(facingDx) + Math.abs(facingDy) > 0 ? Math.sign(facingDx) : autoDirRef.current.dx,
+      dy: Math.abs(facingDx) + Math.abs(facingDy) > 0 ? Math.sign(facingDy) : autoDirRef.current.dy,
+    };
+
+    // Camera heading follows marker facing direction to avoid opposite-facing resets.
+    let desiredDir = Math.abs(forward.dx) + Math.abs(forward.dy) > 0 ? forward : autoDirRef.current;
+    if (Math.abs(desiredDir.dx) + Math.abs(desiredDir.dy) === 0 && neighbors.length > 0) {
+      desiredDir = neighbors[0]!;
+    }
+    autoDirRef.current = desiredDir;
+
+    const len = Math.hypot(desiredDir.dx, desiredDir.dy) || 1;
+    const px = playerX * CS;
+    const pz = playerY * CS;
+    const desiredTarget = new THREE.Vector3(px, 0, pz);
+    const followDist = teleportMode ? CAM_BEHIND * 2 : CAM_BEHIND;
+    const followHeight = teleportMode ? CAM_HEIGHT * 1.7 : CAM_HEIGHT;
+    const autoCameraPos = new THREE.Vector3(
+      px - (desiredDir.dx / len) * followDist,
+      followHeight,
+      pz - (desiredDir.dy / len) * followDist
+    );
+    const autoOffset = autoCameraPos.clone().sub(desiredTarget);
+    const desiredOffset =
+      hasManualCameraRef.current && manualOffsetRef.current && !teleportMode
+        ? manualOffsetRef.current.clone()
+        : autoOffset.clone();
+
+    const prevPos = prevPlayerPosRef.current;
+    const movedFar = Math.hypot(playerX - prevPos.x, playerY - prevPos.y) > 1.01;
+    const facingNow = { dx: Math.sign(facingDx), dy: Math.sign(facingDy) };
+    const facingChanged =
+      (Math.abs(facingNow.dx) + Math.abs(facingNow.dy) > 0) &&
+      (facingNow.dx !== prevFacingRef.current.dx || facingNow.dy !== prevFacingRef.current.dy);
+    prevPlayerPosRef.current = { x: playerX, y: playerY };
+    prevFacingRef.current = facingNow;
+    const turnChanged = prevFocusVersionRef.current !== focusVersion;
+    prevFocusVersionRef.current = focusVersion;
+
+    if (prevResetTick.current !== resetTick) {
+      prevResetTick.current = resetTick;
+      hasManualCameraRef.current = false;
+      manualOffsetRef.current = null;
+      transitionBlendRef.current = 0;
+      camera.position.copy(autoCameraPos);
+      ctrl.target.copy(desiredTarget);
+      ctrl.update();
+      return;
+    }
+
+    if (turnChanged) {
+      hasManualCameraRef.current = false;
+      manualOffsetRef.current = null;
+      const facingCandidate = {
+        dx: Math.abs(facingDx) + Math.abs(facingDy) > 0 ? Math.sign(facingDx) : 0,
+        dy: Math.abs(facingDx) + Math.abs(facingDy) > 0 ? Math.sign(facingDy) : 0,
+      };
+      const resetDir =
+        (Math.abs(facingCandidate.dx) + Math.abs(facingCandidate.dy) > 0)
+          ? facingCandidate
+          : (neighbors[0] ?? autoDirRef.current);
+      autoDirRef.current = resetDir;
+      // Smoothly glide to the new behind-marker view instead of snapping instantly.
+      transitionBlendRef.current = 1;
+    }
+
+    // Facing direction changed: bias toward the new behind-marker view, but keep motion smooth.
+    if (facingChanged && !rotateMode) {
+      hasManualCameraRef.current = false;
+      manualOffsetRef.current = null;
+      autoDirRef.current = desiredDir;
+      transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.75);
+    }
+
+    // Keep manual camera adjustment persistent while following the player.
+    // It is reset only by explicit reset, turn-change focus reset, facing-change reset, or teleport mode.
+
+    // Auto-follow current player and orient behind movement direction unless user is actively rotating.
+    if (!rotateMode && !dragRef.current) {
+      const transitionBlend = transitionBlendRef.current;
+      const posLerp = THREE.MathUtils.lerp(CAM_POS_LERP, 0.42, transitionBlend);
+      const rotLerp = THREE.MathUtils.lerp(CAM_ROT_LERP, 0.34, transitionBlend);
+      ctrl.target.lerp(desiredTarget, posLerp);
+      // Keep a stable camera offset from the current target to prevent tilt drift.
+      const desiredCameraPos = ctrl.target.clone().add(desiredOffset);
+      camera.position.lerp(desiredCameraPos, rotLerp);
+      transitionBlendRef.current = Math.max(0, transitionBlend * 0.86 - 0.02);
+      ctrl.update();
+    }
+  });
+
+  return (
+    <OrbitControls
+      ref={controlsRef}
+      target={[playerX * CS, 0, playerY * CS]}
+      enableDamping={false}
+      enableRotate={false}
+      enablePan={true}
+      minDistance={2.2}
+      maxDistance={180}
+      zoomSpeed={1.6}
+      mouseButtons={{ LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }}
+    />
+  );
+}
+
+function TeleportTargetMarkers({
+  options,
+  onSelect,
+}: {
+  options: [number, number][];
+  onSelect?: (x: number, y: number) => void;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+
+  useFrame(({ clock }) => {
+    const group = groupRef.current;
+    if (!group) return;
+    const t = clock.getElapsedTime();
+    group.children.forEach((child, i) => {
+      const g = child as THREE.Group;
+      g.rotation.y = t * 1.8 + i * 0.45;
+      g.position.y = FLOOR_Y + 1.25 + Math.sin(t * 3 + i) * 0.12;
+    });
+  });
+
+  return (
+    <group ref={groupRef}>
+      {options.map(([x, y], i) => (
+        <group
+          key={`teleport-target-${i}-${x}-${y}`}
+          position={[x * CS, FLOOR_Y + 0.35, y * CS]}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect?.(x, y);
+          }}
+        >
+          {/* Always-visible light-blue marker line */}
+          <mesh renderOrder={995}>
+            <cylinderGeometry args={[0.05, 0.05, 1.15, 10]} />
+            <meshBasicMaterial color="#9fddff" depthTest={false} depthWrite={false} transparent opacity={0.95} />
+          </mesh>
+          {/* Inverted arrow tip (points down to the destination cell) */}
+          <mesh position={[0, -0.62, 0]} rotation={[Math.PI, 0, 0]} renderOrder={996}>
+            <coneGeometry args={[0.24, 0.42, 16]} />
+            <meshBasicMaterial color="#b9ebff" depthTest={false} depthWrite={false} transparent opacity={1} />
+          </mesh>
+          {/* Click-friendly halo on tile */}
+          <mesh position={[0, -1.18, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={994}>
+            <ringGeometry args={[0.32, 0.48, 24]} />
+            <meshBasicMaterial color="#8fd8ff" depthTest={false} depthWrite={false} transparent opacity={0.9} />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Scene                                                              */
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/*  3D Monsters ? billboard sprites that always face the camera        */
+/* ------------------------------------------------------------------ */
+const MONSTER_SPRITE_MAP: Record<string, string> = {
+  V: "/monsters/dracula/idle.png",
+  Z: "/monsters/zombie/idle.png",
+  S: "/monsters/spider/idle.png",
+  G: "/monsters/ghost/idle.png",
+  K: "/monsters/skeleton/idle.png",
+  L: "/monsters/lava/neutral.png",
+};
+
+const DRACULA_GLB_PATH = getMonsterGltfPathForReference("V");
+
+function DraculaModel3D({
+  visualState,
+  actionVersion = 0,
+}: {
+  visualState: "idle" | "hunt" | "attack";
+  actionVersion?: number;
+}) {
+  const rootRef = useRef<THREE.Group>(null);
+  const eyesRigRef = useRef<THREE.Group>(null);
+  const headNodeRef = useRef<THREE.Object3D | null>(null);
+  const leftEyeNodeRef = useRef<THREE.Object3D | null>(null);
+  const rightEyeNodeRef = useRef<THREE.Object3D | null>(null);
+  const { scene, animations } = useGLTF(DRACULA_GLB_PATH);
+  const clonedScene = useMemo(() => SkeletonUtils.clone(scene), [scene]);
+  const { actions, names } = useAnimations(animations, rootRef);
+  const tmpWorldPos = useMemo(() => new THREE.Vector3(), []);
+  const tmpHeadQ = useMemo(() => new THREE.Quaternion(), []);
+  const tmpForward = useMemo(() => new THREE.Vector3(), []);
+  const tmpUp = useMemo(() => new THREE.Vector3(), []);
+
+  useEffect(() => {
+    let pickedHead: THREE.Object3D | null = null;
+    let leftEye: THREE.Object3D | null = null;
+    let rightEye: THREE.Object3D | null = null;
+    clonedScene.traverse((obj) => {
+      if (!pickedHead && /head/i.test(obj.name)) {
+        pickedHead = obj;
+      }
+      if (!leftEye && /(eye|eyeball).*(left|\.l|\bl\b)|\blefteye\b|eye_l/i.test(obj.name)) {
+        leftEye = obj;
+      }
+      if (!rightEye && /(eye|eyeball).*(right|\.r|\br\b)|\brighteye\b|eye_r/i.test(obj.name)) {
+        rightEye = obj;
+      }
+      if (obj instanceof THREE.Light) {
+        // Ignore any GLB-embedded lights so Dracula reacts to maze lighting only.
+        obj.visible = false;
+        return;
+      }
+      if (obj instanceof THREE.Mesh) {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          // Some exports are emissive-heavy, which makes the model appear uniformly lit.
+          if (m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshPhysicalMaterial) {
+            m.roughness = Math.max(0.65, m.roughness ?? 0.75);
+            m.metalness = Math.min(0.25, m.metalness ?? 0.12);
+            m.envMapIntensity = 0.45;
+            m.emissiveIntensity = Math.min(0.12, m.emissiveIntensity ?? 0);
+            m.needsUpdate = true;
+          } else if (m instanceof THREE.MeshBasicMaterial) {
+            // Convert unlit/basic materials to lit PBR-ish materials for proper light response.
+            const lit = new THREE.MeshStandardMaterial({
+              map: m.map ?? null,
+              color: m.color,
+              transparent: m.transparent,
+              opacity: m.opacity,
+              alphaTest: m.alphaTest,
+              side: m.side,
+              roughness: 0.82,
+              metalness: 0.08,
+            });
+            obj.material = lit;
+          }
+        }
+      }
+    });
+    headNodeRef.current = pickedHead;
+    leftEyeNodeRef.current = leftEye;
+    rightEyeNodeRef.current = rightEye;
+  }, [clonedScene]);
+
+  useFrame(() => {
+    const rig = eyesRigRef.current;
+    const root = rootRef.current;
+    const head = headNodeRef.current;
+    if (!rig || !root) return;
+    if (!head) {
+      // Fallback if head node name is absent in a re-export.
+      rig.position.set(0, 1.28, 0.2);
+      return;
+    }
+    head.getWorldPosition(tmpWorldPos);
+    head.getWorldQuaternion(tmpHeadQ);
+    tmpForward.set(0, 0, 1).applyQuaternion(tmpHeadQ);
+    tmpUp.set(0, 1, 0).applyQuaternion(tmpHeadQ);
+    // Fallback eye rig when explicit eye joints are unavailable.
+    tmpWorldPos.addScaledVector(tmpForward, 0.058).addScaledVector(tmpUp, 0.046);
+    root.worldToLocal(tmpWorldPos);
+    rig.position.copy(tmpWorldPos);
+  });
+
+  useEffect(() => {
+    // In-maze attack should read as a strike prep/impact without root-motion loop snapping.
+    const resolveState = visualState === "attack" ? "angry" : visualState;
+    const clip = resolveMonsterAnimationClipName(resolveState, names, {
+      monsterType: "V",
+      glbSlug: "dracula",
+    });
+    for (const action of Object.values(actions)) {
+      action?.fadeOut(0.14);
+    }
+    if (!clip) return;
+    const action = actions[clip];
+    if (!action) return;
+    action.reset();
+    if (visualState === "attack") {
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = false;
+      action.fadeIn(0.08).play();
+    } else {
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.clampWhenFinished = false;
+      action.fadeIn(0.16).play();
+    }
+    return () => {
+      action.fadeOut(0.14);
+    };
+  }, [actions, names, visualState, actionVersion]);
+
+  return (
+    <group ref={rootRef} scale={0.82}>
+      <primitive object={clonedScene} />
+      {/* Tiny red eye dots only (no extra spill lights). */}
+      {leftEyeNodeRef.current && (
+        <primitive object={leftEyeNodeRef.current}>
+          <mesh position={[0, 0, 0.016]} renderOrder={20}>
+            <sphereGeometry args={[0.0065, 8, 8]} />
+            <meshBasicMaterial color="#ff2424" transparent opacity={0.98} depthWrite={false} />
+          </mesh>
+        </primitive>
+      )}
+      {rightEyeNodeRef.current && (
+        <primitive object={rightEyeNodeRef.current}>
+          <mesh position={[0, 0, 0.016]} renderOrder={20}>
+            <sphereGeometry args={[0.0065, 8, 8]} />
+            <meshBasicMaterial color="#ff2424" transparent opacity={0.98} depthWrite={false} />
+          </mesh>
+        </primitive>
+      )}
+      {!leftEyeNodeRef.current && !rightEyeNodeRef.current && (
+        <group ref={eyesRigRef}>
+          <mesh position={[-0.017, 0, 0]} renderOrder={20}>
+            <sphereGeometry args={[0.0065, 8, 8]} />
+            <meshBasicMaterial color="#ff2424" transparent opacity={0.98} depthWrite={false} />
+          </mesh>
+          <mesh position={[0.017, 0, 0]} renderOrder={20}>
+            <sphereGeometry args={[0.0065, 8, 8]} />
+            <meshBasicMaterial color="#ff2424" transparent opacity={0.98} depthWrite={false} />
+          </mesh>
+        </group>
+      )}
+    </group>
+  );
+}
+
+function DraculaInMaze({
+  x, y, playerX, playerY, draculaState,
+}: {
+  x: number;
+  y: number;
+  playerX: number;
+  playerY: number;
+  draculaState?: DraculaState;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  const [visualState, setVisualState] = useState<"idle" | "hunt" | "attack">("idle");
+  const visualStateRef = useRef<"idle" | "hunt" | "attack">("idle");
+  const prevStateRef = useRef<DraculaState | undefined>(draculaState);
+  const attackUntilRef = useRef(0);
+  const attackStartRef = useRef(0);
+  const [actionVersion, setActionVersion] = useState(0);
+  const smoothPosRef = useRef(new THREE.Vector3(x * CS, 0.02, y * CS));
+  const targetPosRef = useRef(new THREE.Vector3(x * CS, 0.02, y * CS));
+  const seed = useMemo(() => ((x * 73856093) ^ (y * 19349663)) & 1023, [x, y]);
+
+  useEffect(() => {
+    targetPosRef.current.set(x * CS, 0.02, y * CS);
+  }, [x, y]);
+
+  useFrame(({ clock }) => {
+    const g = groupRef.current;
+    if (!g) return;
+    const t = clock.getElapsedTime();
+    const wx = smoothPosRef.current.x / CS;
+    const wy = smoothPosRef.current.z / CS;
+    const dx = playerX - wx;
+    const dy = playerY - wy;
+    const dist = Math.hypot(dx, dy);
+    const stateChanged = prevStateRef.current !== draculaState;
+    if (stateChanged) prevStateRef.current = draculaState;
+    const enteringAttack =
+      stateChanged &&
+      (draculaState === "telegraphAttack" || draculaState === "attack");
+    if (enteringAttack) {
+      attackStartRef.current = t;
+      attackUntilRef.current = t + 0.72;
+      setActionVersion((v) => v + 1);
+    }
+    const attackWindowActive = t < attackUntilRef.current;
+    const attacking = draculaState === "attack" || attackWindowActive;
+    const activeHunt =
+      draculaState === "hunt" ||
+      draculaState === "telegraphTeleport" ||
+      draculaState === "teleport" ||
+      draculaState === "recover";
+    const transitDist = smoothPosRef.current.distanceTo(targetPosRef.current);
+    const movingAcrossTiles = transitDist > 0.05;
+    const next: "idle" | "hunt" | "attack" =
+      attacking ? "attack" : ((activeHunt && movingAcrossTiles) ? "hunt" : "idle");
+    if (next !== visualStateRef.current) {
+      visualStateRef.current = next;
+      setVisualState(next);
+    }
+    const moveLerp = next === "hunt" || next === "attack" ? 0.11 : 0.06;
+    smoothPosRef.current.lerp(targetPosRef.current, moveLerp);
+    // Short forward lunge on attack: push toward player, then settle back.
+    let lunge = 0;
+    if (attackWindowActive) {
+      const phase = Math.min(1, Math.max(0, (t - attackStartRef.current) / 0.72));
+      lunge = Math.sin(phase * Math.PI) * 0.38;
+    }
+    const dirLen = Math.hypot(dx, dy) || 1;
+    const lungeX = (dx / dirLen) * lunge;
+    const lungeZ = (dy / dirLen) * lunge;
+    g.position.set(
+      smoothPosRef.current.x + lungeX,
+      0.02 + Math.sin(t * 1.8 + seed) * 0.03,
+      smoothPosRef.current.z + lungeZ
+    );
+    const yaw = Math.atan2(dx, dy);
+    g.rotation.y = THREE.MathUtils.lerp(g.rotation.y, yaw, 0.08);
+  });
+
+  return (
+    <group ref={groupRef}>
+      <Suspense fallback={<MonsterBillboard x={x} y={y} type="V" />}>
+        <DraculaModel3D visualState={visualState} actionVersion={actionVersion} />
+      </Suspense>
+    </group>
+  );
+}
+
+function MonsterBillboard({ x, y, type }: { x: number; y: number; type: string }) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const spritePath = MONSTER_SPRITE_MAP[type] || MONSTER_SPRITE_MAP.Z;
+  const tex = useTexture(spritePath);
+
+  useFrame(({ camera }) => {
+    if (meshRef.current) {
+      meshRef.current.quaternion.copy(camera.quaternion);
+    }
+  });
+
+  return (
+    <mesh ref={meshRef} position={[x * CS, 1.2, y * CS]}>
+      <planeGeometry args={[2, 2.4]} />
+      <meshStandardMaterial
+        map={tex}
+        transparent
+        alphaTest={0.1}
+        depthWrite={false}
+        side={THREE.DoubleSide}
+        emissive="#ff4444"
+        emissiveIntensity={0.15}
+      />
+    </mesh>
+  );
+}
+
+function Monsters3D({
+  monsters,
+  playerX,
+  playerY,
+}: {
+  monsters: MiniMonster[];
+  playerX: number;
+  playerY: number;
+}) {
+  return (
+    <>
+      {monsters.map((m, i) => (
+        (m.type as MonsterType | undefined) === "V"
+          ? (
+            <DraculaInMaze
+              key={`m3d-dracula-${i}`}
+              x={m.x}
+              y={m.y}
+              playerX={playerX}
+              playerY={playerY}
+              draculaState={m.draculaState}
+            />
+          )
+          : <MonsterBillboard key={`m3d-${i}`} x={m.x} y={m.y} type={m.type ?? "Z"} />
+      ))}
+    </>
+  );
+}
+
+function MazeScene({
+  grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
+  zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, focusVersion, miniMonsters, fogIntensityMap,
+}: Omit<Props, "visible"> & { rotateMode: boolean; resetTick: number; teleportOptions?: [number, number][]; teleportMode?: boolean }) {
+  const shadowRange = Math.max(mapWidth, mapHeight) * CS;
+  return (
+    <>
+      {/* Very low global light: unlit corridors stay dark; torches do the local lighting. */}
+      <ambientLight intensity={0.015} />
+      <directionalLight
+        position={[18, 26, 10]}
+        intensity={0.2}
+        castShadow
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+        shadow-camera-near={0.5}
+        shadow-camera-far={220}
+        shadow-camera-left={-shadowRange}
+        shadow-camera-right={shadowRange}
+        shadow-camera-top={shadowRange}
+        shadow-camera-bottom={-shadowRange}
+        shadow-bias={-0.00018}
+      />
+      <directionalLight position={[-12, 12, -12]} intensity={0.08} color="#b9c8ff" />
+
+      <FloorTiles grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} onCellClick={onCellClick} />
+      <FloorStains grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
+      <WallTorches
+        grid={grid}
+        mapWidth={mapWidth}
+        mapHeight={mapHeight}
+        playerX={playerX}
+        playerY={playerY}
+        fogIntensityMap={fogIntensityMap}
+      />
+      <GothicWallOrnaments grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
+      <MazeSetPieces
+        grid={grid}
+        mapWidth={mapWidth}
+        mapHeight={mapHeight}
+        playerX={playerX}
+        playerY={playerY}
+        fogIntensityMap={fogIntensityMap}
+      />
+      <HorrorCornerRelics grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
+      <WallBlocks grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
+      {miniMonsters && miniMonsters.length > 0 && (
+        <Monsters3D monsters={miniMonsters} playerX={playerX} playerY={playerY} />
+      )}
+      <PlayerMarker playerX={playerX} playerY={playerY} facingDx={facingDx} facingDy={facingDy} />
+      <CameraController
+        grid={grid}
+        mapWidth={mapWidth}
+        mapHeight={mapHeight}
+        playerX={playerX}
+        playerY={playerY}
+        facingDx={facingDx}
+        facingDy={facingDy}
+        zoom={zoom ?? 1}
+        rotateMode={rotateMode}
+        resetTick={resetTick}
+        teleportMode={!!teleportMode}
+        focusVersion={focusVersion}
+      />
+      {teleportMode && !!teleportOptions?.length && (
+        <TeleportTargetMarkers options={teleportOptions} onSelect={onCellClick} />
+      )}
+    </>
+  );
+}
+
+type MiniMapStripProps = {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  playerX: number;
+  playerY: number;
+  facingDx: number;
+  facingDy: number;
+  onExpandToGrid?: () => void;
+  miniPlayers?: Array<{ x: number; y: number; isCurrent?: boolean; isEliminated?: boolean }>;
+  miniMonsters?: Array<{ x: number; y: number }>;
+  fogIntensityMap?: Map<string, number>;
+  mode?: "overlay" | "dock";
+  showHeader?: boolean;
+  showExpandButton?: boolean;
+};
+
+export function MiniMapStrip({
+  grid,
+  mapWidth,
+  mapHeight,
+  playerX,
+  playerY,
+  facingDx,
+  facingDy,
+  onExpandToGrid,
+  miniPlayers,
+  miniMonsters,
+  fogIntensityMap,
+  mode = "overlay",
+  showHeader = true,
+  showExpandButton = true,
+}: MiniMapStripProps) {
+  const inDock = mode === "dock";
+  const miniCell = Math.max(3, Math.min(10, Math.floor(280 / Math.max(mapWidth, mapHeight))));
+  const miniWidth = mapWidth * miniCell;
+  const miniHeight = mapHeight * miniCell;
+
+  const dirLen = Math.hypot(facingDx, facingDy) || 1;
+  const arrowLen = Math.max(6, miniCell * 2.2);
+  const playerCenterX = (playerX + 0.5) * miniCell;
+  const playerCenterY = (playerY + 0.5) * miniCell;
+  const arrowEndX = playerCenterX + (facingDx / dirLen) * arrowLen;
+  const arrowEndY = playerCenterY + (facingDy / dirLen) * arrowLen;
+
+  return (
+    <div
+      role={inDock && onExpandToGrid ? "button" : undefined}
+      tabIndex={inDock && onExpandToGrid ? 0 : undefined}
+      onClick={inDock ? onExpandToGrid : undefined}
+      onKeyDown={
+        inDock && onExpandToGrid
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onExpandToGrid();
+              }
+            }
+          : undefined
+      }
+      title={inDock && onExpandToGrid ? "Switch to full 2D grid map" : undefined}
+      style={{
+        position: inDock ? "relative" : "absolute",
+        right: inDock ? undefined : 12,
+        bottom: inDock ? undefined : 12,
+        zIndex: 9,
+        width: inDock ? "100%" : "min(320px, 45%)",
+        maxWidth: inDock ? 320 : undefined,
+        height: inDock ? 128 : 160,
+        background: "#1a1a24",
+        borderRadius: 8,
+        border: "1px solid #333",
+        boxShadow: "0 0 20px rgba(0, 255, 136, 0.1)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "8px",
+        cursor: inDock && onExpandToGrid ? "pointer" : "default",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          borderRadius: 8,
+          border: "1px solid #31313d",
+          background: "rgba(10,10,16,0.98)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          overflow: "auto",
+          position: "relative",
+        }}
+      >
+        {showHeader && (
+          <div
+            style={{
+              position: "absolute",
+              top: 6,
+              left: 8,
+              right: 8,
+              zIndex: 2,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              pointerEvents: "none",
+            }}
+          >
+            <span
+              style={{
+                fontSize: "0.66rem",
+                letterSpacing: "0.04em",
+                color: "#9aa0ad",
+                fontFamily: "monospace",
+                textTransform: "uppercase",
+                background: "rgba(8,8,14,0.75)",
+                border: "1px solid rgba(120,120,150,0.35)",
+                borderRadius: 4,
+                padding: "2px 6px",
+              }}
+            >
+              Mini 2D Map
+            </span>
+            {showExpandButton && (
+              <button
+                type="button"
+                onClick={onExpandToGrid}
+                style={{
+                  pointerEvents: "auto",
+                  fontSize: "0.68rem",
+                  fontFamily: "monospace",
+                  color: "#cfe3d8",
+                  background: "rgba(16,30,24,0.92)",
+                  border: "1px solid rgba(0,255,136,0.45)",
+                  borderRadius: 4,
+                  padding: "2px 6px",
+                  cursor: onExpandToGrid ? "pointer" : "default",
+                  opacity: onExpandToGrid ? 1 : 0.55,
+                }}
+                disabled={!onExpandToGrid}
+                title="Switch to full 2D map view"
+              >
+                Expand 2D
+              </button>
+            )}
+          </div>
+        )}
+        <div
+          style={{
+            width: miniWidth,
+            height: miniHeight,
+            display: "grid",
+            gridTemplateColumns: `repeat(${mapWidth}, ${miniCell}px)`,
+            gridTemplateRows: `repeat(${mapHeight}, ${miniCell}px)`,
+            boxShadow: "0 0 0 1px rgba(255,255,255,0.06)",
+            position: "relative",
+          }}
+        >
+          {Array.from({ length: mapHeight }).map((_, y) =>
+            Array.from({ length: mapWidth }).map((_, x) => {
+              const isWall = grid[y]?.[x] === WALL;
+              const fog = fogIntensityMap?.get(`${x},${y}`) ?? 0;
+              return (
+                <div
+                  key={`${x}-${y}`}
+                  style={{
+                    width: miniCell,
+                    height: miniCell,
+                    position: "relative",
+                    background: isWall
+                      ? "linear-gradient(180deg, #2a2a34 0%, #1d1d26 100%)"
+                      : "linear-gradient(180deg, #5b4f49 0%, #473c37 100%)",
+                    border: "1px solid rgba(0,0,0,0.28)",
+                    boxSizing: "border-box",
+                  }}
+                >
+                  {fog > 0 && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        background: `rgba(4, 4, 10, ${Math.min(0.92, 0.16 + fog * 0.76)})`,
+                        boxShadow: "inset 0 0 5px rgba(0,0,0,0.45)",
+                        pointerEvents: "none",
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })
+          )}
+
+          {(miniMonsters ?? []).map((m, i) => {
+            const fog = fogIntensityMap?.get(`${m.x},${m.y}`) ?? 0;
+            if (fog > 0) return null;
+            return (
+              <div
+                key={`monster-${i}-${m.x}-${m.y}`}
+                style={{
+                  position: "absolute",
+                  left: m.x * miniCell + miniCell * 0.2,
+                  top: m.y * miniCell + miniCell * 0.2,
+                  width: miniCell * 0.6,
+                  height: miniCell * 0.6,
+                  borderRadius: "50%",
+                  background: "#ff6464",
+                  border: "1px solid #3a0f0f",
+                  boxShadow: "0 0 6px rgba(255,80,80,0.65)",
+                  pointerEvents: "none",
+                }}
+                title="Monster"
+              />
+            );
+          })}
+
+          {(miniPlayers ?? []).map((p, i) => {
+            if (p.isEliminated) return null;
+            return (
+              <div
+                key={`player-${i}-${p.x}-${p.y}`}
+                style={{
+                  position: "absolute",
+                  left: p.x * miniCell + miniCell * 0.16,
+                  top: p.y * miniCell + miniCell * 0.16,
+                  width: miniCell * 0.68,
+                  height: miniCell * 0.68,
+                  borderRadius: "50%",
+                  background: p.isCurrent ? "#00ff88" : "#55b8ff",
+                  border: p.isCurrent ? "1px solid #05331f" : "1px solid #0c2234",
+                  boxShadow: p.isCurrent
+                    ? "0 0 6px rgba(0,255,136,0.75)"
+                    : "0 0 4px rgba(85,184,255,0.55)",
+                  pointerEvents: "none",
+                }}
+                title={p.isCurrent ? "Current player" : "Player"}
+              />
+            );
+          })}
+
+          <svg
+            width={miniWidth}
+            height={miniHeight}
+            viewBox={`0 0 ${miniWidth} ${miniHeight}`}
+            style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+            aria-hidden
+          >
+            <line
+              x1={playerCenterX}
+              y1={playerCenterY}
+              x2={arrowEndX}
+              y2={arrowEndY}
+              stroke="#00ff88"
+              strokeWidth={Math.max(1.5, miniCell * 0.35)}
+              strokeLinecap="round"
+            />
+            <circle
+              cx={playerCenterX}
+              cy={playerCenterY}
+              r={Math.max(2.5, miniCell * 0.6)}
+              fill="#00ff88"
+              stroke="#062214"
+              strokeWidth={1}
+            />
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Exported component                                                 */
+/* ------------------------------------------------------------------ */
+export default function MazeIsoView({
+  grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
+  zoom = 1,
+  visible,
+  onCellClick,
+  teleportOptions,
+  teleportMode,
+  focusVersion,
+  miniMonsters,
+  fogIntensityMap,
+}: Props) {
+  const [btnRotate, setBtnRotate] = useState(false);
+  const [ctrlHeld, setCtrlHeld] = useState(false);
+  const [resetTick, setResetTick] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rotateMode = btnRotate || ctrlHeld;
+
+  const activateRotate = useCallback(() => {
+    setBtnRotate(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setBtnRotate(false), ROTATE_TIMEOUT_MS);
+  }, []);
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => { if (e.key === "Control") setCtrlHeld(true); };
+    const up = (e: KeyboardEvent) => { if (e.key === "Control") setCtrlHeld(false); };
+    const blur = () => setCtrlHeld(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
+
+  if (!visible) return null;
+
+  const camDist = 10;
+
+  return (
+    <div
+      style={{
+        width: "100%", maxWidth: "100%", flex: 1, minHeight: 0,
+        margin: "0 auto", borderRadius: 8, overflow: "hidden",
+        border: "1px solid #333", boxShadow: "inset 0 0 24px rgba(0,0,0,0.5)",
+        background: "#06060a", position: "relative",
+        display: "flex",
+        flexDirection: "column",
+      }}
+      aria-label="Isometric 3D map view"
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: 8,
+          right: 8,
+          zIndex: 10,
+          display: "flex",
+          gap: 8,
+        }}
+      >
+        <button
+          onMouseDown={activateRotate}
+          onTouchStart={activateRotate}
+          style={{
+            padding: "6px 12px", borderRadius: 6,
+            border: rotateMode ? "1px solid #00ff88" : "1px solid #555",
+            background: rotateMode ? "rgba(0,255,136,0.15)" : "rgba(20,20,30,0.85)",
+            color: rotateMode ? "#00ff88" : "#aaa",
+            fontSize: "0.75rem", fontFamily: "monospace",
+            cursor: "pointer", transition: "all 0.2s", userSelect: "none",
+          }}
+          title="Click to temporarily enable camera rotation. You can also hold Ctrl and drag."
+        >
+          {rotateMode ? "Rotating..." : "Rotate View"}
+        </button>
+        <button
+          onClick={() => { setBtnRotate(false); setResetTick((t) => t + 1); }}
+          style={{
+            padding: "6px 12px", borderRadius: 6,
+            border: "1px solid #555",
+            background: "rgba(20,20,30,0.85)",
+            color: "#aaa",
+            fontSize: "0.75rem", fontFamily: "monospace",
+            cursor: "pointer", transition: "all 0.2s", userSelect: "none",
+          }}
+          title="Reset camera to default 3rd-person view behind the player"
+        >
+          Reset View
+        </button>
+      </div>
+
+      <Canvas
+        shadows
+        camera={{ position: [camDist, CAM_HEIGHT, camDist], fov: THREE.MathUtils.clamp(92 - zoom * 16, 58, 95), near: 0.1, far: 800 }}
+        style={{ width: "100%", flex: 1, minHeight: 0 }}
+        gl={{ antialias: true, alpha: false }}
+        dpr={[1, 1.4]}
+        onCreated={({ gl }) => { gl.setClearColor("#06060a"); }}
+      >
+        <MazeScene
+          grid={grid} mapWidth={mapWidth} mapHeight={mapHeight}
+          playerX={playerX} playerY={playerY}
+          facingDx={facingDx} facingDy={facingDy}
+          zoom={zoom}
+          rotateMode={rotateMode}
+          onCellClick={onCellClick}
+          resetTick={resetTick}
+          teleportOptions={teleportOptions}
+          teleportMode={teleportMode}
+          focusVersion={focusVersion}
+          miniMonsters={miniMonsters}
+          fogIntensityMap={fogIntensityMap}
+        />
+      </Canvas>
+    </div>
+  );
+}

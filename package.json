@@ -14,24 +14,24 @@
     "clean": "rm -rf .next node_modules package-lock.json && npm install",
     "start": "next start",
     "lint": "next lint",
-    "textures:maze": "python3 scripts/generate-maze-textures.py",
-    "reorder-dracula-attack": "node scripts/reorder-dracula-attack-clips.mjs"
+    "textures:maze": "python3 scripts/generate-maze-textures.py"
   },
   "dependencies": {
     "@3d-dice/dice-box-threejs": "^0.0.12",
     "@fontsource/creepster": "^5.2.7",
-    "@react-three/drei": "^9.92.7",
-    "@react-three/fiber": "^8.15.19",
+    "@react-three/drei": "^9.117.3",
+    "@react-three/fiber": "^8.17.10",
     "next": "^14.2.35",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "simplex-noise": "^4.0.3",
-    "three": "^0.160.0"
+    "three": "^0.170.0"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "@types/three": "^0.170.0",
     "eslint": "^8",
     "eslint-config-next": "^14.2.35",
     "typescript": "^5"
