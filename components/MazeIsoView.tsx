@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useThree, useFrame, ThreeEvent } from "@react-three/fiber";
-import { OrbitControls, useAnimations, useGLTF, useTexture } from "@react-three/drei";
+import { Billboard, OrbitControls, Text, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { MAZE_FLOOR_TEXTURE, MAZE_ISO_WALL_SIDE_TEXTURE } from "@/lib/mazeCellTheme";
 import { WALL, type DraculaState, type MonsterType } from "@/lib/labyrinth";
@@ -28,6 +28,14 @@ type Props = {
   catapultMode?: boolean;
   /** Grid-space arc samples from `Labyrinth.getCatapultTrajectory` (preview). */
   catapultArcPoints?: [number, number][] | null;
+  /** Screen drag length (px) for arc height / parabola scale. */
+  catapultTrajectoryStrength?: number;
+  /** Slingshot source tile — yellow actionable hint. */
+  catapultFrom?: [number, number] | null;
+  /** While on magic (portal not open yet): possible teleport destinations (purple). */
+  magicPortalPreviewOptions?: [number, number][] | null;
+  /** Tint teleport beacons: magic = purple (2D hole style), portal = cyan. */
+  teleportSourceType?: "magic" | "gem" | "artifact" | null;
   focusVersion?: number;
   miniMonsters?: MiniMonster[];
   fogIntensityMap?: Map<string, number>;
@@ -920,32 +928,68 @@ void main() {
 }
 `;
 
-function CatapultTrajectory3D({ arcPoints }: { arcPoints: [number, number][] }) {
+function densifyArcPoints2D(arcPoints: [number, number][], outCount: number): [number, number][] {
+  if (arcPoints.length < 2 || outCount < 2) return arcPoints;
+  const out: [number, number][] = [];
+  const nSeg = arcPoints.length - 1;
+  for (let s = 0; s < outCount; s++) {
+    const t = s / (outCount - 1);
+    const f = t * nSeg;
+    const i = Math.min(nSeg - 1, Math.floor(f));
+    const lt = f - i;
+    const [x0, y0] = arcPoints[i]!;
+    const [x1, y1] = arcPoints[i + 1]!;
+    out.push([x0 + (x1 - x0) * lt, y0 + (y1 - y0) * lt]);
+  }
+  return out;
+}
+
+function CatapultTrajectory3D({
+  arcPoints,
+  strength,
+}: {
+  arcPoints: [number, number][];
+  strength: number;
+}) {
   const linePayload = useMemo(() => {
-    const n = arcPoints.length;
+    const dense = densifyArcPoints2D(arcPoints, 48);
+    const n = dense.length;
     if (n < 2) return null;
+    const cum: number[] = [0];
+    for (let i = 1; i < n; i++) {
+      const [xa, ya] = dense[i - 1]!;
+      const [xb, yb] = dense[i]!;
+      const dx = (xb - xa) * CS;
+      const dz = (yb - ya) * CS;
+      cum.push(cum[i - 1]! + Math.hypot(dx, dz));
+    }
+    const pathLen = Math.max(0.001, cum[n - 1] ?? 1);
+    const H = Math.min(
+      8.8,
+      0.75 + strength * 0.034 + pathLen * 0.24
+    );
     const positions = new Float32Array(n * 3);
     const alphas = new Float32Array(n);
-    const aerial = 2.25;
     for (let i = 0; i < n; i++) {
-      const t = n <= 1 ? 0 : i / (n - 1);
-      const [gx, gy] = arcPoints[i]!;
+      const u = (cum[i] ?? 0) / pathLen;
+      const [gx, gy] = dense[i]!;
       const wx = gx * CS;
       const wz = gy * CS;
-      let wy = FLOOR_Y + 0.68 + aerial * Math.sin(Math.PI * t) * (1 - 0.3 * t);
-      if (t > 0.55) {
-        const u = (t - 0.55) / 0.45;
-        wy += u * u * 4.8;
+      const arch = H * 4 * u * (1 - u);
+      let wy = FLOOR_Y + 0.42 + arch;
+      if (u > 0.52) {
+        const v = (u - 0.52) / 0.48;
+        wy += v * v * (1.6 + strength * 0.018);
       }
       positions[i * 3] = wx;
       positions[i * 3 + 1] = wy;
       positions[i * 3 + 2] = wz;
       let a = 1;
-      if (t > 0.38) {
-        a *= 1 - THREE.MathUtils.smoothstep(t, 0.38, 0.86);
+      if (u > 0.34) {
+        a *= 1 - THREE.MathUtils.smoothstep(u, 0.34, 0.84);
       }
-      if (t > 0.78) {
-        a *= 1 - THREE.MathUtils.smoothstep(t, 0.78, 0.96);
+      if (u > 0.72) {
+        a *= 1 - THREE.MathUtils.smoothstep(u, 0.72, 0.95);
       }
       alphas[i] = Math.max(0, Math.min(1, a));
     }
@@ -963,7 +1007,7 @@ function CatapultTrajectory3D({ arcPoints }: { arcPoints: [number, number][] }) 
     line.frustumCulled = false;
     line.renderOrder = 920;
     return { line, geometry, material };
-  }, [arcPoints]);
+  }, [arcPoints, strength]);
 
   useEffect(() => {
     if (!linePayload) return undefined;
@@ -1021,18 +1065,18 @@ function CameraController({
     dy: Math.abs(facingDx) + Math.abs(facingDy) > 0 ? Math.sign(facingDy) : 1,
   });
 
+  const teleportLikeFraming = teleportMode || catapultMode;
+
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera) {
       const baseFov = THREE.MathUtils.clamp(92 - zoom * 16, 58, 95);
-      // Magic portal targeting gets extra zoom-out to expose destination options.
-      camera.fov = teleportMode
+      // Magic portal + slingshot: same raised wide view as teleport targeting.
+      camera.fov = teleportLikeFraming
         ? THREE.MathUtils.clamp(baseFov + 18, 72, 108)
-        : catapultMode
-          ? THREE.MathUtils.clamp(baseFov + 11, 64, 100)
-          : baseFov;
+        : baseFov;
       camera.updateProjectionMatrix();
     }
-  }, [camera, zoom, teleportMode, catapultMode]);
+  }, [camera, zoom, teleportLikeFraming]);
 
   const prevCatapultRef = useRef(false);
   useEffect(() => {
@@ -1121,8 +1165,8 @@ function CameraController({
     const px = playerX * CS;
     const pz = playerY * CS;
     const desiredTarget = new THREE.Vector3(px, 0, pz);
-    const followDist = teleportMode ? CAM_BEHIND * 2 : catapultMode ? CAM_BEHIND * 1.52 : CAM_BEHIND;
-    const followHeight = teleportMode ? CAM_HEIGHT * 1.7 : catapultMode ? CAM_HEIGHT * 1.38 : CAM_HEIGHT;
+    const followDist = teleportLikeFraming ? CAM_BEHIND * 2 : CAM_BEHIND;
+    const followHeight = teleportLikeFraming ? CAM_HEIGHT * 1.7 : CAM_HEIGHT;
     const autoCameraPos = new THREE.Vector3(
       px - (desiredDir.dx / len) * followDist,
       followHeight,
@@ -1130,7 +1174,7 @@ function CameraController({
     );
     const autoOffset = autoCameraPos.clone().sub(desiredTarget);
     const desiredOffset =
-      hasManualCameraRef.current && manualOffsetRef.current && !teleportMode && !catapultMode
+      hasManualCameraRef.current && manualOffsetRef.current && !teleportLikeFraming
         ? manualOffsetRef.current.clone()
         : autoOffset.clone();
 
@@ -1212,23 +1256,45 @@ function CameraController({
   );
 }
 
+const TELEPORT_MARKER_PALETTE = {
+  portal: {
+    beam: "#9fddff",
+    cone: "#b9ebff",
+    ring: "#8fd8ff",
+  },
+  /** 2D magic / hole-cell purple family */
+  magic: {
+    beam: "#c49cff",
+    cone: "#e8d4ff",
+    ring: "#aa66ff",
+  },
+} as const;
+
 function TeleportTargetMarkers({
   options,
   onSelect,
+  accent = "portal",
+  previewOnly = false,
 }: {
   options: [number, number][];
   onSelect?: (x: number, y: number) => void;
+  accent?: "portal" | "magic";
+  previewOnly?: boolean;
 }) {
   const groupRef = useRef<THREE.Group>(null);
+  const colors = TELEPORT_MARKER_PALETTE[accent];
+  const dim = previewOnly ? 0.72 : 1;
 
   useFrame(({ clock }) => {
     const group = groupRef.current;
     if (!group) return;
     const t = clock.getElapsedTime();
+    const bob = previewOnly ? 0.07 : 0.12;
+    const spin = previewOnly ? 1.1 : 1.8;
     group.children.forEach((child, i) => {
       const g = child as THREE.Group;
-      g.rotation.y = t * 1.8 + i * 0.45;
-      g.position.y = FLOOR_Y + 1.25 + Math.sin(t * 3 + i) * 0.12;
+      g.rotation.y = t * spin + i * 0.45;
+      g.position.y = FLOOR_Y + 1.25 + Math.sin(t * 3 + i) * bob;
     });
   });
 
@@ -1238,29 +1304,113 @@ function TeleportTargetMarkers({
         <group
           key={`teleport-target-${i}-${x}-${y}`}
           position={[x * CS, FLOOR_Y + 0.35, y * CS]}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect?.(x, y);
-          }}
+          onClick={
+            previewOnly || !onSelect
+              ? undefined
+              : (e) => {
+                  e.stopPropagation();
+                  onSelect(x, y);
+                }
+          }
         >
-          {/* Always-visible light-blue marker line */}
           <mesh renderOrder={995}>
             <cylinderGeometry args={[0.05, 0.05, 1.15, 10]} />
-            <meshBasicMaterial color="#9fddff" depthTest={false} depthWrite={false} transparent opacity={0.95} />
+            <meshBasicMaterial
+              color={colors.beam}
+              depthTest={false}
+              depthWrite={false}
+              transparent
+              opacity={0.95 * dim}
+            />
           </mesh>
-          {/* Inverted arrow tip (points down to the destination cell) */}
           <mesh position={[0, -0.62, 0]} rotation={[Math.PI, 0, 0]} renderOrder={996}>
             <coneGeometry args={[0.24, 0.42, 16]} />
-            <meshBasicMaterial color="#b9ebff" depthTest={false} depthWrite={false} transparent opacity={1} />
+            <meshBasicMaterial
+              color={colors.cone}
+              depthTest={false}
+              depthWrite={false}
+              transparent
+              opacity={dim}
+            />
           </mesh>
-          {/* Click-friendly halo on tile */}
           <mesh position={[0, -1.18, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={994}>
             <ringGeometry args={[0.32, 0.48, 24]} />
-            <meshBasicMaterial color="#8fd8ff" depthTest={false} depthWrite={false} transparent opacity={0.9} />
+            <meshBasicMaterial
+              color={colors.ring}
+              depthTest={false}
+              depthWrite={false}
+              transparent
+              opacity={0.9 * dim}
+            />
           </mesh>
         </group>
       ))}
     </group>
+  );
+}
+
+/** Yellow slingshot cue on the launch tile (2D catapult accent). */
+function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number }) {
+  const ringRef = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    const m = ringRef.current;
+    if (!m) return;
+    const t = clock.getElapsedTime();
+    const s = 1 + Math.sin(t * 2.6) * 0.06;
+    m.scale.setScalar(s);
+  });
+  return (
+    <group position={[cellX * CS, FLOOR_Y + 0.08, cellY * CS]}>
+      <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]} renderOrder={910}>
+        <ringGeometry args={[0.42, 0.62, 32]} />
+        <meshBasicMaterial
+          color="#ffcc00"
+          depthTest={false}
+          depthWrite={false}
+          transparent
+          opacity={0.92}
+        />
+      </mesh>
+      <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={909}>
+        <ringGeometry args={[0.55, 0.78, 32]} />
+        <meshBasicMaterial
+          color="#ffaa22"
+          depthTest={false}
+          depthWrite={false}
+          transparent
+          opacity={0.35}
+        />
+      </mesh>
+      <Billboard position={[0, 2.15, 0]}>
+        <Text
+          fontSize={0.32}
+          color="#ffcc66"
+          outlineWidth={0.03}
+          outlineColor="#1a1206"
+          anchorX="center"
+          anchorY="bottom"
+        >
+          Slingshot — pull to aim
+        </Text>
+      </Billboard>
+    </group>
+  );
+}
+
+function MagicPortalActionHint({ playerX, playerY }: { playerX: number; playerY: number }) {
+  return (
+    <Billboard position={[playerX * CS, 2.35, playerY * CS]}>
+      <Text
+        fontSize={0.3}
+        color="#d4a8ff"
+        outlineWidth={0.028}
+        outlineColor="#1a0a24"
+        anchorX="center"
+        anchorY="bottom"
+      >
+        Magic — tap a purple beacon or open portal
+      </Text>
+    </Billboard>
   );
 }
 
@@ -1583,7 +1733,9 @@ function Monsters3D({
 
 function MazeScene({
   grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
-  zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, catapultMode, catapultArcPoints, focusVersion, miniMonsters, fogIntensityMap,
+  zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, catapultMode, catapultArcPoints,
+  catapultTrajectoryStrength, catapultFrom, magicPortalPreviewOptions, teleportSourceType,
+  focusVersion, miniMonsters, fogIntensityMap,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
   resetTick: number;
@@ -1591,6 +1743,10 @@ function MazeScene({
   teleportMode?: boolean;
   catapultMode?: boolean;
   catapultArcPoints?: [number, number][] | null;
+  catapultTrajectoryStrength?: number;
+  catapultFrom?: [number, number] | null;
+  magicPortalPreviewOptions?: [number, number][] | null;
+  teleportSourceType?: "magic" | "gem" | "artifact" | null;
 }) {
   const shadowRange = Math.max(mapWidth, mapHeight) * CS;
   return (
@@ -1638,8 +1794,20 @@ function MazeScene({
         <Monsters3D monsters={miniMonsters} playerX={playerX} playerY={playerY} />
       )}
       <PlayerMarker playerX={playerX} playerY={playerY} facingDx={facingDx} facingDy={facingDy} />
+      {magicPortalPreviewOptions &&
+        magicPortalPreviewOptions.length > 0 &&
+        !teleportMode && (
+          <>
+            <MagicPortalActionHint playerX={playerX} playerY={playerY} />
+            <TeleportTargetMarkers options={magicPortalPreviewOptions} accent="magic" previewOnly />
+          </>
+        )}
+      {catapultFrom && <SlingshotSourceHint cellX={catapultFrom[0]} cellY={catapultFrom[1]} />}
       {catapultArcPoints && catapultArcPoints.length >= 2 && (
-        <CatapultTrajectory3D arcPoints={catapultArcPoints} />
+        <CatapultTrajectory3D
+          arcPoints={catapultArcPoints}
+          strength={Math.max(12, catapultTrajectoryStrength ?? 0)}
+        />
       )}
       <CameraController
         grid={grid}
@@ -1657,7 +1825,11 @@ function MazeScene({
         focusVersion={focusVersion}
       />
       {teleportMode && !!teleportOptions?.length && (
-        <TeleportTargetMarkers options={teleportOptions} onSelect={onCellClick} />
+        <TeleportTargetMarkers
+          options={teleportOptions}
+          onSelect={onCellClick}
+          accent={teleportSourceType === "magic" ? "magic" : "portal"}
+        />
       )}
     </>
   );
@@ -1945,6 +2117,10 @@ export default function MazeIsoView({
   teleportMode,
   catapultMode = false,
   catapultArcPoints = null,
+  catapultTrajectoryStrength = 0,
+  catapultFrom = null,
+  magicPortalPreviewOptions = null,
+  teleportSourceType = null,
   focusVersion,
   miniMonsters,
   fogIntensityMap,
@@ -2053,6 +2229,10 @@ export default function MazeIsoView({
           teleportMode={teleportMode}
           catapultMode={catapultMode}
           catapultArcPoints={catapultArcPoints}
+          catapultTrajectoryStrength={catapultTrajectoryStrength}
+          catapultFrom={catapultFrom}
+          magicPortalPreviewOptions={magicPortalPreviewOptions}
+          teleportSourceType={teleportSourceType}
           focusVersion={focusVersion}
           miniMonsters={miniMonsters}
           fogIntensityMap={fogIntensityMap}

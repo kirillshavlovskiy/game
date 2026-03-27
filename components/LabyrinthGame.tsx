@@ -287,6 +287,8 @@ function matchesMobileLayout(): boolean {
 /** 3D iso immersive layer — above header chrome; below movement dice / modals that use higher z-index. */
 const ISO_IMMERSIVE_Z = 10000;
 const ISO_IMMERSIVE_HUD_Z = 10050;
+/** Victory / game-over — above immersive 3D, movement dice, combat, and settings so it is never hidden. */
+const GAME_OVER_OVERLAY_Z = 10200;
 /** Full-screen 3D HUD: circular move ring + bottom sheet offset */
 const ISO_HUD_MOVE_RING_PX = 132;
 const ISO_HUD_DIR_BTN_PX = 40;
@@ -4659,6 +4661,17 @@ export default function LabyrinthGame() {
     );
   }, [lab, catapultPicker, catapultDragOffset]);
 
+  const isoCatapultTrajectoryStrength = useMemo(
+    () => (catapultDragOffset ? Math.hypot(catapultDragOffset.dx, catapultDragOffset.dy) : 0),
+    [catapultDragOffset]
+  );
+
+  /** Purple destination beacons in 3D while magic portal is available (matches 2D hole styling). */
+  const isoMagicPortalPreviewOptions = useMemo(() => {
+    if (!lab || mazeMapView !== "iso" || !magicPortalReady) return null;
+    return lab.getTeleportOptions(currentPlayer, MAGIC_TELEPORT_PICKER_OPTIONS);
+  }, [lab, mazeMapView, magicPortalReady, currentPlayer]);
+
   useEffect(() => {
     if (!catapultMode || !catapultPicker) return;
     const onPointerUp = (e: PointerEvent) => {
@@ -4914,19 +4927,17 @@ export default function LabyrinthGame() {
     }
   }, []);
 
+  /** Always use the shared play shell so 2D ↔ 3D toggles do not drop native fullscreen. */
   const enterPlayFullscreen = useCallback(async () => {
     if (typeof document === "undefined") return;
-    const el =
-      mazeMapView === "iso"
-        ? isoPlayRootRef.current
-        : mazeAreaRef.current ?? mazeWrapRef.current;
+    const el = mazeAreaRef.current ?? mazeWrapRef.current;
     if (!el) return;
     try {
       await requestFullscreenOnElement(el);
     } catch {
       setIsoImmersiveFallback(true);
     }
-  }, [mazeMapView]);
+  }, []);
 
   const handleIsoImmersiveMenuExit = useCallback(async () => {
     await leaveIsoImmersiveOnly();
@@ -4946,16 +4957,15 @@ export default function LabyrinthGame() {
     const areaEl = mazeAreaRef.current;
 
     if (mazeMapView === "iso") {
-      if (
-        (areaEl != null && fs === areaEl) ||
-        (wrapEl != null && fs === wrapEl)
-      ) {
+      /** Legacy: maze was fullscreened on wrap only — reset so iso can use unified area FS. */
+      if (wrapEl != null && fs === wrapEl && areaEl != null && fs !== areaEl) {
         setIsoImmersiveFallback(false);
         void exitDocumentFullscreen();
       }
       return;
     }
 
+    /** Switched to grid while FS was on the 3D subtree (old builds) — exit stale element. */
     if (isoEl != null && fs === isoEl) {
       setIsoImmersiveFallback(false);
       void exitDocumentFullscreen();
@@ -5414,10 +5424,7 @@ export default function LabyrinthGame() {
       </button>
       <button
         type="button"
-        onClick={() => {
-          void leaveIsoImmersiveOnly();
-          setMazeMapView(mazeMapView === "iso" ? "grid" : "iso");
-        }}
+        onClick={() => setMazeMapView(mazeMapView === "iso" ? "grid" : "iso")}
         style={{
           ...buttonStyle,
           ...secondaryButtonStyle,
@@ -5425,7 +5432,11 @@ export default function LabyrinthGame() {
           padding: "6px 12px",
           whiteSpace: "nowrap",
         }}
-        title={mazeMapView === "iso" ? "Leave full screen and open 2D grid" : "Leave full screen and open 3D view"}
+        title={
+          mazeMapView === "iso"
+            ? "Switch to 2D grid (stay full-screen)"
+            : "Switch to 3D view (stay full-screen)"
+        }
       >
         {mazeMapView === "iso" ? "2D" : "3D"}
       </button>
@@ -8349,16 +8360,30 @@ export default function LabyrinthGame() {
             (mazeMapView === "grid" && isoImmersiveUi))
             ? { overflow: "hidden" }
             : {}),
-          ...(mazeMapView === "grid" && isoImmersiveFallback
+          ...(isoImmersiveFallback
             ? {
                 position: "fixed" as const,
                 inset: 0,
                 zIndex: ISO_IMMERSIVE_Z,
               }
             : {}),
+          ...(isoImmersiveUi
+            ? {
+                paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
+                paddingRight: "max(12px, env(safe-area-inset-right, 0px))",
+                paddingLeft: "max(12px, env(safe-area-inset-left, 0px))",
+                paddingBottom: "max(10px, env(safe-area-inset-bottom, 0px))",
+                alignItems: "stretch" as const,
+                alignSelf: "stretch",
+                width: "100%",
+                boxSizing: "border-box",
+              }
+            : {}),
           ...(isMobile
             ? {
-                paddingBottom: `calc(${MAZE_MARGIN + mobileDockInsetPx + 10}px + env(safe-area-inset-bottom, 0px))`,
+                paddingBottom: isoImmersiveUi
+                  ? `calc(max(10px, env(safe-area-inset-bottom, 0px)) + ${MAZE_MARGIN + mobileDockInsetPx + 10}px)`
+                  : `calc(${MAZE_MARGIN + mobileDockInsetPx + 10}px + env(safe-area-inset-bottom, 0px))`,
               }
             : {}),
           ...(isMobile && showMoveGrid
@@ -8373,7 +8398,6 @@ export default function LabyrinthGame() {
           cp &&
           !combatState &&
           !lab.eliminatedPlayers.has(currentPlayer) &&
-          mazeMapView === "grid" &&
           isoImmersiveUi &&
           renderPlayFullscreenTopBar()}
         {!isLandscapeCompact && (
@@ -8508,7 +8532,7 @@ export default function LabyrinthGame() {
           className={MAZE_LITE_TEXTURES ? "maze-wrap" : "maze-wrap maze-horror-render"}
           style={{
             ...mazeWrapStyle,
-            marginTop: isLandscapeCompact ? 0 : MAZE_MARGIN,
+            marginTop: isLandscapeCompact || isoImmersiveUi ? 0 : MAZE_MARGIN,
             position: "relative",
             ...((mazeMapView === "iso" ||
               (mazeMapView === "grid" && isoImmersiveUi))
@@ -8541,16 +8565,8 @@ export default function LabyrinthGame() {
               flexDirection: "column",
               position: "relative",
               background: "#06060a",
-              ...(isoImmersiveFallback
-                ? {
-                    position: "fixed" as const,
-                    inset: 0,
-                    zIndex: ISO_IMMERSIVE_Z,
-                  }
-                : {}),
             }}
           >
-            {isoImmersiveUi && renderPlayFullscreenTopBar()}
             <div
               style={{
                 flex: 1,
@@ -8576,6 +8592,10 @@ export default function LabyrinthGame() {
                 teleportMode={!!teleportPicker}
                 catapultMode={!!catapultPicker}
                 catapultArcPoints={isoCatapultPreviewTraj?.arcPoints ?? null}
+                catapultTrajectoryStrength={isoCatapultTrajectoryStrength}
+                catapultFrom={catapultPicker?.from ?? null}
+                magicPortalPreviewOptions={isoMagicPortalPreviewOptions}
+                teleportSourceType={teleportPicker?.sourceType ?? null}
                 focusVersion={currentPlayer}
                 miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
                 fogIntensityMap={fogIntensityMap}
@@ -8719,7 +8739,7 @@ export default function LabyrinthGame() {
                             Magic cell
                           </div>
                           <p style={{ margin: 0, fontSize: "0.82rem", color: "#c8cdd8", lineHeight: 1.45 }}>
-                            You are standing on a magic portal. Open the picker to choose where to teleport.
+                            You are standing on a magic portal. In <strong style={{ color: "#c49cff" }}>3D</strong>, <strong style={{ color: "#aa66ff" }}>purple beacons</strong> mark valid destinations (same idea as the violet magic tiles on the grid). Open the picker to teleport.
                           </p>
                           <button type="button" onClick={handleMagicPortalOpen} style={{ ...buttonStyle, ...secondaryButtonStyle, alignSelf: "flex-start" }}>
                             Open magic portal
@@ -10560,11 +10580,51 @@ export default function LabyrinthGame() {
         )}
 
       {winner !== null && (
-        <div style={gameOverOverlayStyle} onClick={(e) => e.stopPropagation()}>
-          <div style={gameOverModalStyle} onClick={(e) => e.stopPropagation()}>
+        <div
+          style={{
+            ...gameOverOverlayStyle,
+            ...(mazeMapView === "iso"
+              ? {
+                  background: "rgba(5,6,14,0.78)",
+                  backdropFilter: "blur(14px)",
+                  WebkitBackdropFilter: "blur(14px)",
+                }
+              : {}),
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            style={{
+              ...gameOverModalStyle,
+              ...(mazeMapView === "iso"
+                ? {
+                    maxWidth: 440,
+                    border: "1px solid rgba(0,255,136,0.38)",
+                    boxShadow:
+                      "0 0 52px rgba(0,255,136,0.18), 0 28px 72px rgba(0,0,0,0.72), inset 0 1px 0 rgba(255,255,255,0.06)",
+                    background: "linear-gradient(165deg, rgba(24,26,38,0.98) 0%, rgba(12,13,22,0.99) 100%)",
+                  }
+                : {}),
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <h2 style={gameOverTitleStyle}>
               {winner >= 0 ? "🏆 Victory!" : "💀 Game Over"}
             </h2>
+            {mazeMapView === "iso" && (
+              <p
+                style={{
+                  margin: "-0.35rem 0 0.85rem 0",
+                  fontSize: "0.72rem",
+                  textAlign: "center",
+                  color: "#7a8a9a",
+                  letterSpacing: "0.04em",
+                  textTransform: "uppercase" as const,
+                }}
+              >
+                3D view
+              </p>
+            )}
             <p style={{ ...gameOverResultStyle, color: winner >= 0 ? "#00ff88" : "#ff6666" }}>
               {winner >= 0
                 ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
@@ -10606,7 +10666,12 @@ const gameOverOverlayStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  zIndex: 1100,
+  zIndex: GAME_OVER_OVERLAY_Z,
+  boxSizing: "border-box",
+  paddingLeft: "max(12px, env(safe-area-inset-left, 0px))",
+  paddingRight: "max(12px, env(safe-area-inset-right, 0px))",
+  paddingTop: "max(12px, env(safe-area-inset-top, 0px))",
+  paddingBottom: "max(12px, env(safe-area-inset-bottom, 0px))",
 };
 
 const gameOverModalStyle: React.CSSProperties = {
