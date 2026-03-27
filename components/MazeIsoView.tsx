@@ -1,6 +1,16 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { Ref } from "react";
 import { Canvas, useThree, useFrame, ThreeEvent } from "@react-three/fiber";
 import { Billboard, OrbitControls, Text, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
@@ -41,6 +51,20 @@ type Props = {
   fogIntensityMap?: Map<string, number>;
   /** Mobile: WebGL fills the parent (e.g. fixed viewport); chrome stacks above in the shell. */
   fillViewport?: boolean;
+  /**
+   * Touch / coarse-pointer play: no orbit pan on the canvas; after tapping "Rotate View", aim the camera by
+   * tilting the device (where supported) or dragging on the canvas. Parent should not wire floor taps for walking.
+   */
+  touchUi?: boolean;
+  /** Phone landscape: parent renders Rotate / Reset in the top control strip — hide the in-canvas overlay. */
+  hideOverlayViewButtons?: boolean;
+  /** Notifies parent when temporary camera-rotate mode is active (for chrome button highlight). */
+  onRotateModeChange?: (active: boolean) => void;
+};
+
+export type MazeIsoViewImperativeHandle = {
+  activateRotate: () => void;
+  resetCameraView: () => void;
 };
 
 /** Each grid cell = 3x3 world units. */
@@ -1035,8 +1059,31 @@ const CAM_POS_LERP = 0.2;
 /** How fast the camera rotates to face behind the player (0-1 per frame). */
 const CAM_ROT_LERP = 0.18;
 
+function applyManualOrbitFromDelta(
+  camera: THREE.Camera,
+  controlsRef: { current: any },
+  dxPx: number,
+  dyPx: number,
+  hasManualCameraRef: { current: boolean },
+  manualOffsetRef: { current: THREE.Vector3 | null },
+) {
+  const ctrl = controlsRef.current;
+  if (!ctrl) return;
+  const target = ctrl.target;
+  const offset = camera.position.clone().sub(target);
+  const spherical = new THREE.Spherical().setFromVector3(offset);
+  spherical.theta -= dxPx * 0.005;
+  spherical.phi = Math.max(0.2, Math.min(Math.PI / 2.2, spherical.phi - dyPx * 0.005));
+  offset.setFromSpherical(spherical);
+  camera.position.copy(target).add(offset);
+  camera.lookAt(target);
+  hasManualCameraRef.current = true;
+  manualOffsetRef.current = camera.position.clone().sub(target);
+}
+
 function CameraController({
   grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy, zoom, rotateMode, resetTick, teleportMode, catapultMode, focusVersion,
+  touchUi,
 }: {
   grid: string[][];
   mapWidth: number;
@@ -1051,6 +1098,7 @@ function CameraController({
   teleportMode: boolean;
   catapultMode: boolean;
   focusVersion?: number;
+  touchUi: boolean;
 }) {
   const { camera, gl } = useThree();
   const controlsRef = useRef<any>(null);
@@ -1066,6 +1114,7 @@ function CameraController({
     dx: Math.abs(facingDx) + Math.abs(facingDy) > 0 ? Math.sign(facingDx) : 0,
     dy: Math.abs(facingDx) + Math.abs(facingDy) > 0 ? Math.sign(facingDy) : 1,
   });
+  const lastOrientRef = useRef<{ g: number; b: number } | null>(null);
 
   const teleportLikeFraming = teleportMode || catapultMode;
 
@@ -1089,8 +1138,8 @@ function CameraController({
     prevCatapultRef.current = catapultMode;
   }, [catapultMode]);
 
-  /* Manual rotation via Ctrl+drag or when rotateMode is active.
-     OrbitControls stays in pan-only mode always ? we orbit the camera ourselves. */
+  /* Manual rotation: mouse Ctrl+drag or rotateMode drag; touch: rotateMode + one-finger drag on canvas.
+     Orbit pan is disabled on touchUi so walking isn’t confused with camera pan. */
   useEffect(() => {
     const canvas = gl.domElement;
 
@@ -1104,19 +1153,7 @@ function CameraController({
       const dx = e.clientX - dragRef.current.x;
       const dy = e.clientY - dragRef.current.y;
       dragRef.current = { x: e.clientX, y: e.clientY };
-
-      const ctrl = controlsRef.current;
-      if (!ctrl) return;
-      const target = ctrl.target;
-      const offset = camera.position.clone().sub(target);
-      const spherical = new THREE.Spherical().setFromVector3(offset);
-      spherical.theta -= dx * 0.005;
-      spherical.phi = Math.max(0.2, Math.min(Math.PI / 2.2, spherical.phi - dy * 0.005));
-      offset.setFromSpherical(spherical);
-      camera.position.copy(target).add(offset);
-      camera.lookAt(target);
-      hasManualCameraRef.current = true;
-      manualOffsetRef.current = camera.position.clone().sub(target);
+      applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
     const onMouseUp = () => { dragRef.current = null; };
     const onWheel = () => {
@@ -1127,17 +1164,65 @@ function CameraController({
       manualOffsetRef.current = camera.position.clone().sub(target);
     };
 
+    const onTouchStart = (e: TouchEvent) => {
+      if (!rotateMode || touchUi === false) return;
+      if (e.touches.length !== 1) return;
+      e.preventDefault();
+      dragRef.current = { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY };
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!rotateMode || !dragRef.current || e.touches.length !== 1) return;
+      e.preventDefault();
+      const t = e.touches[0]!;
+      const dx = t.clientX - dragRef.current.x;
+      const dy = t.clientY - dragRef.current.y;
+      dragRef.current = { x: t.clientX, y: t.clientY };
+      applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
+    };
+    const onTouchEnd = () => {
+      if (touchUi) dragRef.current = null;
+    };
+
     canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("wheel", onWheel, { passive: true });
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
+    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd);
+    canvas.addEventListener("touchcancel", onTouchEnd);
     return () => {
       canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("wheel", onWheel);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("touchcancel", onTouchEnd);
     };
-  }, [camera, gl, rotateMode]);
+  }, [camera, gl, rotateMode, touchUi]);
+
+  useEffect(() => {
+    if (!touchUi || !rotateMode) {
+      lastOrientRef.current = null;
+      return;
+    }
+    const onOrient = (e: DeviceOrientationEvent) => {
+      if (e.gamma == null || e.beta == null) return;
+      const prev = lastOrientRef.current;
+      lastOrientRef.current = { g: e.gamma, b: e.beta };
+      if (!prev) return;
+      let dg = e.gamma - prev.g;
+      let db = e.beta - prev.b;
+      if (dg > 180) dg -= 360;
+      if (dg < -180) dg += 360;
+      if (Math.abs(dg) > 55 || Math.abs(db) > 55) return;
+      applyManualOrbitFromDelta(camera, controlsRef, dg * 4, db * 4, hasManualCameraRef, manualOffsetRef);
+    };
+    window.addEventListener("deviceorientation", onOrient, true);
+    return () => window.removeEventListener("deviceorientation", onOrient, true);
+  }, [touchUi, rotateMode, camera]);
 
   useFrame(() => {
     const ctrl = controlsRef.current;
@@ -1249,7 +1334,7 @@ function CameraController({
       target={[playerX * CS, 0, playerY * CS]}
       enableDamping={false}
       enableRotate={false}
-      enablePan={true}
+      enablePan={!touchUi}
       minDistance={2.2}
       maxDistance={180}
       zoomSpeed={1.6}
@@ -1738,6 +1823,7 @@ function MazeScene({
   zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, catapultMode, catapultArcPoints,
   catapultTrajectoryStrength, catapultFrom, magicPortalPreviewOptions, teleportSourceType,
   focusVersion, miniMonsters, fogIntensityMap,
+  touchUi = false,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
   resetTick: number;
@@ -1825,6 +1911,7 @@ function MazeScene({
         teleportMode={!!teleportMode}
         catapultMode={!!catapultMode}
         focusVersion={focusVersion}
+        touchUi={touchUi}
       />
       {teleportMode && !!teleportOptions?.length && (
         <TeleportTargetMarkers
@@ -2110,35 +2197,64 @@ export function MiniMapStrip({
 /* ------------------------------------------------------------------ */
 /*  Exported component                                                 */
 /* ------------------------------------------------------------------ */
-export default function MazeIsoView({
-  grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
-  zoom = 1,
-  visible,
-  onCellClick,
-  teleportOptions,
-  teleportMode,
-  catapultMode = false,
-  catapultArcPoints = null,
-  catapultTrajectoryStrength = 0,
-  catapultFrom = null,
-  magicPortalPreviewOptions = null,
-  teleportSourceType = null,
-  focusVersion,
-  miniMonsters,
-  fogIntensityMap,
-  fillViewport = false,
-}: Props) {
+const MazeIsoView = forwardRef(function MazeIsoView(
+  {
+    grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
+    zoom = 1,
+    visible,
+    onCellClick,
+    teleportOptions,
+    teleportMode,
+    catapultMode = false,
+    catapultArcPoints = null,
+    catapultTrajectoryStrength = 0,
+    catapultFrom = null,
+    magicPortalPreviewOptions = null,
+    teleportSourceType = null,
+    focusVersion,
+    miniMonsters,
+    fogIntensityMap,
+    fillViewport = false,
+    touchUi = false,
+    hideOverlayViewButtons = false,
+    onRotateModeChange,
+  }: Props,
+  ref: Ref<MazeIsoViewImperativeHandle>,
+) {
   const [btnRotate, setBtnRotate] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   const [resetTick, setResetTick] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rotateMode = btnRotate || ctrlHeld;
 
-  const activateRotate = useCallback(() => {
-    setBtnRotate(true);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setBtnRotate(false), ROTATE_TIMEOUT_MS);
+  const resetCameraView = useCallback(() => {
+    setBtnRotate(false);
+    setResetTick((t) => t + 1);
   }, []);
+
+  const activateRotate = useCallback(() => {
+    const enable = () => {
+      setBtnRotate(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setBtnRotate(false), ROTATE_TIMEOUT_MS);
+    };
+    if (touchUi && typeof window !== "undefined") {
+      const DO = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
+        requestPermission?: () => Promise<"granted" | "denied">;
+      };
+      if (typeof DO.requestPermission === "function") {
+        void DO.requestPermission().then(enable).catch(enable);
+        return;
+      }
+    }
+    enable();
+  }, [touchUi]);
+
+  useImperativeHandle(ref, () => ({ activateRotate, resetCameraView }), [activateRotate, resetCameraView]);
+
+  useEffect(() => {
+    onRotateModeChange?.(rotateMode);
+  }, [rotateMode, onRotateModeChange]);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => { if (e.key === "Control") setCtrlHeld(true); };
@@ -2179,46 +2295,53 @@ export default function MazeIsoView({
       }}
       aria-label="Isometric 3D map view"
     >
-      <div
-        style={{
-          position: "absolute",
-          top: fillViewport ? "max(8px, env(safe-area-inset-top, 0px))" : 8,
-          right: fillViewport ? "max(8px, env(safe-area-inset-right, 0px))" : 8,
-          zIndex: 10,
-          display: "flex",
-          gap: 8,
-        }}
-      >
-        <button
-          onMouseDown={activateRotate}
-          onTouchStart={activateRotate}
+      {!hideOverlayViewButtons ? (
+        <div
           style={{
-            padding: "6px 12px", borderRadius: 6,
-            border: rotateMode ? "1px solid #00ff88" : "1px solid #555",
-            background: rotateMode ? "rgba(0,255,136,0.15)" : "rgba(20,20,30,0.85)",
-            color: rotateMode ? "#00ff88" : "#aaa",
-            fontSize: "0.75rem", fontFamily: "monospace",
-            cursor: "pointer", transition: "all 0.2s", userSelect: "none",
+            position: "absolute",
+            top: fillViewport ? "max(8px, env(safe-area-inset-top, 0px))" : 8,
+            right: fillViewport ? "max(8px, env(safe-area-inset-right, 0px))" : 8,
+            zIndex: 10,
+            display: "flex",
+            gap: 8,
           }}
-          title="Click to temporarily enable camera rotation. You can also hold Ctrl and drag."
         >
-          {rotateMode ? "Rotating..." : "Rotate View"}
-        </button>
-        <button
-          onClick={() => { setBtnRotate(false); setResetTick((t) => t + 1); }}
-          style={{
-            padding: "6px 12px", borderRadius: 6,
-            border: "1px solid #555",
-            background: "rgba(20,20,30,0.85)",
-            color: "#aaa",
-            fontSize: "0.75rem", fontFamily: "monospace",
-            cursor: "pointer", transition: "all 0.2s", userSelect: "none",
-          }}
-          title="Reset camera to default 3rd-person view behind the player"
-        >
-          Reset View
-        </button>
-      </div>
+          <button
+            onMouseDown={activateRotate}
+            onTouchStart={activateRotate}
+            style={{
+              padding: "6px 12px", borderRadius: 6,
+              border: rotateMode ? "1px solid #00ff88" : "1px solid #555",
+              background: rotateMode ? "rgba(0,255,136,0.15)" : "rgba(20,20,30,0.85)",
+              color: rotateMode ? "#00ff88" : "#aaa",
+              fontSize: "0.75rem", fontFamily: "monospace",
+              cursor: "pointer", transition: "all 0.2s", userSelect: "none",
+            }}
+            title={
+              touchUi
+                ? "Tap: then tilt the device or drag on the 3D view to aim the camera. Walking uses the dock controls only."
+                : "Click to temporarily enable camera rotation. You can also hold Ctrl and drag."
+            }
+          >
+            {rotateMode ? "Rotating..." : "Rotate View"}
+          </button>
+          <button
+            type="button"
+            onClick={resetCameraView}
+            style={{
+              padding: "6px 12px", borderRadius: 6,
+              border: "1px solid #555",
+              background: "rgba(20,20,30,0.85)",
+              color: "#aaa",
+              fontSize: "0.75rem", fontFamily: "monospace",
+              cursor: "pointer", transition: "all 0.2s", userSelect: "none",
+            }}
+            title="Reset camera to default 3rd-person view behind the player"
+          >
+            Reset View
+          </button>
+        </div>
+      ) : null}
 
       <Canvas
         shadows
@@ -2232,9 +2355,9 @@ export default function MazeIsoView({
                 width: "100%",
                 height: "100%",
                 display: "block",
-                touchAction: "auto",
+                touchAction: touchUi ? "none" : "auto",
               }
-            : { width: "100%", flex: 1, minHeight: 0 }
+            : { width: "100%", flex: 1, minHeight: 0, ...(touchUi ? { touchAction: "none" as const } : {}) }
         }
         gl={{ antialias: true, alpha: false }}
         dpr={[1, 1.4]}
@@ -2259,8 +2382,13 @@ export default function MazeIsoView({
           focusVersion={focusVersion}
           miniMonsters={miniMonsters}
           fogIntensityMap={fogIntensityMap}
+          touchUi={touchUi}
         />
       </Canvas>
     </div>
   );
-}
+});
+
+MazeIsoView.displayName = "MazeIsoView";
+
+export default MazeIsoView;

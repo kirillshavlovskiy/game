@@ -75,7 +75,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
-import MazeIsoView from "@/components/MazeIsoView";
+import MazeIsoView, { type MazeIsoViewImperativeHandle } from "@/components/MazeIsoView";
 import { ArtifactIcon, type ArtifactIconVariant } from "@/components/ArtifactIcon";
 import {
   Labyrinth,
@@ -1493,6 +1493,24 @@ function MovePadFocusTargetIcon({ size }: { size: number }) {
       <line x1="12" y1="18" x2="12" y2="22" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" />
       <line x1="2" y1="12" x2="6" y2="12" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" />
       <line x1="18" y1="12" x2="22" y2="12" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Desktop: open fullscreen (Material-style expand corners). */
+function FullscreenEnterIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden style={{ display: "block" }}>
+      <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
+    </svg>
+  );
+}
+
+/** Desktop: close fullscreen (Material-style contract corners). */
+function FullscreenExitIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden style={{ display: "block" }}>
+      <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11v-3h3v-2h-5v5h2zm3-6V5h-2v5h5V8h-3z" />
     </svg>
   );
 }
@@ -4911,6 +4929,11 @@ export default function LabyrinthGame() {
   }, [scrollToCurrentPlayerOnMap]);
 
   const isoPlayRootRef = useRef<HTMLDivElement>(null);
+  const mazeIsoViewRef = useRef<MazeIsoViewImperativeHandle>(null);
+  const [isoCamRotateActive, setIsoCamRotateActive] = useState(false);
+  useEffect(() => {
+    if (mazeMapView !== "iso") setIsoCamRotateActive(false);
+  }, [mazeMapView]);
   const [isoNativeFsActive, setIsoNativeFsActive] = useState(false);
   const [isoImmersiveFallback, setIsoImmersiveFallback] = useState(false);
 
@@ -5002,8 +5025,21 @@ export default function LabyrinthGame() {
 
   const isoImmersiveUi = isoNativeFsActive || isoImmersiveFallback;
 
+  /** Mobile: always use the immersive play shell while a game is active (transparent top island, no exit). */
   useEffect(() => {
-    if (!isoImmersiveUi) return;
+    if (!isMobile || typeof document === "undefined") return;
+    if (lab) {
+      const id = requestAnimationFrame(() => {
+        void enterPlayFullscreen();
+      });
+      return () => cancelAnimationFrame(id);
+    }
+    void leaveIsoImmersiveOnly();
+    return undefined;
+  }, [isMobile, lab, enterPlayFullscreen, leaveIsoImmersiveOnly]);
+
+  useEffect(() => {
+    if (!isoImmersiveUi || isMobile) return;
     if (combatState || combatResult) {
       void leaveIsoImmersiveOnly();
       return;
@@ -5019,6 +5055,7 @@ export default function LabyrinthGame() {
     }
   }, [
     isoImmersiveUi,
+    isMobile,
     combatState,
     combatResult,
     showDiceModal,
@@ -5930,28 +5967,68 @@ export default function LabyrinthGame() {
     const landscapeFsBar = isLandscapeCompact && isMobile;
     const desktopFsBar = !isMobile;
     const useFsTopBarRow = desktopFsBar || landscapeFsBar;
+    const showLandscapeIsoCamChrome = landscapeFsBar && mazeMapView === "iso" && isoImmersiveUi;
     const zoomViewCluster = (
       <>
-        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-          <button
-            type="button"
-            onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
-            style={mazeZoomButtonStyle}
-            title="Zoom out"
-          >
-            −
-          </button>
-          <span style={{ fontSize: "0.72rem", color: "#888", minWidth: 34, textAlign: "center" }}>
-            {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
-          </span>
-          <button
-            type="button"
-            onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
-            style={mazeZoomButtonStyle}
-            title="Zoom in"
-          >
-            +
-          </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button
+              type="button"
+              onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
+              style={mazeZoomButtonStyle}
+              title="Zoom out"
+            >
+              −
+            </button>
+            <span style={{ fontSize: "0.72rem", color: "#888", minWidth: 34, textAlign: "center" }}>
+              {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
+            </span>
+            <button
+              type="button"
+              onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
+              style={mazeZoomButtonStyle}
+              title="Zoom in"
+            >
+              +
+            </button>
+          </div>
+          {showLandscapeIsoCamChrome ? (
+            <>
+              <button
+                type="button"
+                onClick={() => mazeIsoViewRef.current?.resetCameraView()}
+                style={{
+                  ...mazeViewToggleButtonStyle(false),
+                  minWidth: 52,
+                  padding: "0 8px",
+                  fontSize: "0.68rem",
+                }}
+                title="Reset camera to default view behind the player"
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  mazeIsoViewRef.current?.activateRotate();
+                }}
+                onTouchStart={(e) => {
+                  e.preventDefault();
+                  mazeIsoViewRef.current?.activateRotate();
+                }}
+                style={{
+                  ...mazeViewToggleButtonStyle(isoCamRotateActive),
+                  minWidth: 56,
+                  padding: "0 8px",
+                  fontSize: "0.68rem",
+                }}
+                title="Tilt device or drag on 3D to aim camera"
+              >
+                {isoCamRotateActive ? "Rotating" : "Rotate"}
+              </button>
+            </>
+          ) : null}
         </div>
         <span style={{ fontSize: "0.65rem", color: "#888" }}>View</span>
         <button
@@ -5972,21 +6049,29 @@ export default function LabyrinthGame() {
         >
           3D
         </button>
-        <button
-          type="button"
-          onClick={() => void leaveIsoImmersiveOnly()}
-          style={{
-            ...buttonStyle,
-            ...headerButtonStyle,
-            background: "#2a2a38",
-            color: "#c8c8d8",
-            border: "1px solid #555",
-            fontWeight: 700,
-          }}
-          title="Exit full-screen"
-        >
-          Exit
-        </button>
+        {!isMobile ? (
+          <button
+            type="button"
+            onClick={() => void leaveIsoImmersiveOnly()}
+            style={{
+              ...buttonStyle,
+              ...headerButtonStyle,
+              background: "#2a2a38",
+              color: "#c8c8d8",
+              border: "1px solid #555",
+              fontWeight: 700,
+              minWidth: 40,
+              padding: "4px 10px",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            title="Exit full-screen"
+            aria-label="Exit full-screen"
+          >
+            <FullscreenExitIcon />
+          </button>
+        ) : null}
       </>
     );
 
@@ -6080,7 +6165,13 @@ export default function LabyrinthGame() {
             width: "100%",
             boxSizing: "border-box",
             padding: useFsTopBarRow ? "8px 12px" : "8px 10px",
-            background: useFsTopBarRow ? "rgba(26, 26, 36, 0.92)" : "rgba(14,16,24,0.94)",
+            background: useFsTopBarRow
+              ? isMobile
+                ? "rgba(22, 22, 32, 0.72)"
+                : "rgba(26, 26, 36, 0.92)"
+              : isMobile
+                ? "rgba(14,16,24,0.78)"
+                : "rgba(14,16,24,0.94)",
             border: "1px solid rgba(80, 80, 96, 0.65)",
             borderRadius: useFsTopBarRow ? 8 : 10,
             boxShadow: "0 8px 28px rgba(0,0,0,0.45)",
@@ -6263,7 +6354,8 @@ export default function LabyrinthGame() {
       </header>
       )}
 
-      {landscapeCompactPlayHud && (!isoImmersiveUi || teleportPicker) && (
+      {landscapeCompactPlayHud &&
+        ((!isoImmersiveUi && !(mobileIsoEdgeToEdge && isLandscapeCompact)) || teleportPicker) && (
         <div
           style={{
             position: "fixed",
@@ -6322,7 +6414,7 @@ export default function LabyrinthGame() {
               </button>
             </div>
           )}
-          {!isoImmersiveUi && (
+          {!isoImmersiveUi && !(mobileIsoEdgeToEdge && isLandscapeCompact) ? (
             <div
               style={{
                 display: "flex",
@@ -6332,14 +6424,24 @@ export default function LabyrinthGame() {
                 pointerEvents: "auto",
               }}
             >
-              <button
-                type="button"
-                onClick={() => void enterPlayFullscreen()}
-                style={mazeViewToggleButtonStyle(false)}
-                title="Full-screen play area (2D or 3D)"
-              >
-                Full screen
-              </button>
+              {!isMobile ? (
+                <button
+                  type="button"
+                  onClick={() => void enterPlayFullscreen()}
+                  style={{
+                    ...mazeViewToggleButtonStyle(false),
+                    minWidth: 40,
+                    padding: "0 8px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                  title="Enter full-screen play"
+                  aria-label="Enter full-screen play"
+                >
+                  <FullscreenEnterIcon />
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setMazeMapView("grid")}
@@ -6360,7 +6462,7 @@ export default function LabyrinthGame() {
               </button>
               {renderHeaderMenuBlock()}
             </div>
-          )}
+          ) : null}
         </div>
       )}
 
@@ -8695,7 +8797,9 @@ export default function LabyrinthGame() {
                   right: "max(8px, env(safe-area-inset-right, 0px))",
                   top:
                     isLandscapeCompact && lab
-                      ? "calc(max(8px, env(safe-area-inset-top, 0px)) + 48px)"
+                      ? teleportPicker
+                        ? "calc(max(8px, env(safe-area-inset-top, 0px)) + 48px)"
+                        : "max(8px, env(safe-area-inset-top, 0px))"
                       : `${HEADER_HEIGHT + 6}px`,
                   zIndex: MOBILE_ISO_CANVAS_Z + 150,
                   margin: 0,
@@ -8709,24 +8813,63 @@ export default function LabyrinthGame() {
               : {}),
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button
-            onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
-            style={mazeZoomButtonStyle}
-            title="Zoom out"
-          >
-            −
-          </button>
-          <span style={{ fontSize: "0.8rem", color: "#888", minWidth: 36, textAlign: "center" }}>
-            {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
-          </span>
-          <button
-            onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
-            style={mazeZoomButtonStyle}
-            title="Zoom in"
-          >
-            +
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <button
+                onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
+                style={mazeZoomButtonStyle}
+                title="Zoom out"
+              >
+                −
+              </button>
+              <span style={{ fontSize: "0.8rem", color: "#888", minWidth: 36, textAlign: "center" }}>
+                {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
+              </span>
+              <button
+                onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
+                style={mazeZoomButtonStyle}
+                title="Zoom in"
+              >
+                +
+              </button>
+            </div>
+            {isLandscapeCompact && mazeMapView === "iso" && lab && !isoImmersiveUi ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => mazeIsoViewRef.current?.resetCameraView()}
+                  style={{
+                    ...mazeViewToggleButtonStyle(false),
+                    minWidth: 52,
+                    padding: "0 8px",
+                    fontSize: "0.68rem",
+                  }}
+                  title="Reset camera to default view behind the player"
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    mazeIsoViewRef.current?.activateRotate();
+                  }}
+                  onTouchStart={(e) => {
+                    e.preventDefault();
+                    mazeIsoViewRef.current?.activateRotate();
+                  }}
+                  style={{
+                    ...mazeViewToggleButtonStyle(isoCamRotateActive),
+                    minWidth: 56,
+                    padding: "0 8px",
+                    fontSize: "0.68rem",
+                  }}
+                  title="Tilt device or drag on 3D to aim camera"
+                >
+                  {isoCamRotateActive ? "Rotating" : "Rotate"}
+                </button>
+              </>
+            ) : null}
           </div>
           {lab && !combatState && !isoImmersiveUi && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -8749,15 +8892,24 @@ export default function LabyrinthGame() {
               >
                 3D
               </button>
-              <button
-                type="button"
-                onClick={() => void enterPlayFullscreen()}
-                style={mazeViewToggleButtonStyle(false)}
-                title="Full-screen play area (2D or 3D)"
-                aria-pressed={false}
-              >
-                Full screen
-              </button>
+              {!isMobile ? (
+                <button
+                  type="button"
+                  onClick={() => void enterPlayFullscreen()}
+                  style={{
+                    ...mazeViewToggleButtonStyle(false),
+                    minWidth: 40,
+                    padding: "0 8px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                  title="Enter full-screen play"
+                  aria-label="Enter full-screen play"
+                >
+                  <FullscreenEnterIcon />
+                </button>
+              ) : null}
             </div>
           )}
           {isMobile && cp && (
@@ -8776,6 +8928,11 @@ export default function LabyrinthGame() {
               <span title="Jump charges">Jumps {cp?.jumps ?? 0}</span>
             </div>
           )}
+          {mobileIsoEdgeToEdge && isLandscapeCompact ? (
+            <div style={{ display: "flex", alignItems: "center", flexShrink: 0, pointerEvents: "auto" }}>
+              {renderHeaderMenuBlock()}
+            </div>
+          ) : null}
         </div>
         )}
         <div
@@ -8856,6 +9013,7 @@ export default function LabyrinthGame() {
               }}
             >
               <MazeIsoView
+                ref={mazeIsoViewRef}
                 grid={lab.grid}
                 mapWidth={lab.width}
                 mapHeight={lab.height}
@@ -8865,7 +9023,10 @@ export default function LabyrinthGame() {
                 facingDy={playerFacing[currentPlayer]?.dy ?? 1}
                 zoom={mazeZoom}
                 visible
-                onCellClick={handleCellTap}
+                onCellClick={isMobile && !teleportPicker ? undefined : handleCellTap}
+                touchUi={isMobile}
+                hideOverlayViewButtons={isLandscapeCompact && isMobile && mazeMapView === "iso"}
+                onRotateModeChange={setIsoCamRotateActive}
                 teleportOptions={teleportPicker?.options ?? []}
                 teleportMode={!!teleportPicker}
                 catapultMode={!!catapultPicker}
@@ -9125,7 +9286,7 @@ export default function LabyrinthGame() {
                           setIsoMiniMapZoom={setIsoMiniMapZoom}
                           isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
                           onOpenGrid={() => {
-                            void leaveIsoImmersiveOnly();
+                            if (!isMobile) void leaveIsoImmersiveOnly();
                             switchToGridAndFocusCurrentPlayer();
                           }}
                         />
