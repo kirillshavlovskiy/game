@@ -297,6 +297,11 @@ const ISO_HUD_JOYSTICK_PAD_PX = 112;
 const ISO_HUD_KNOB_MAX_PX = 36;
 /** Joystick: no move below this radius (px). */
 const MOVE_KNOB_DEAD_PX = 10;
+/**
+ * Outside dead zone, inside this radius (clamped vs knob travel): orbit ring — adjust facing only, no tile steps.
+ * Pushing past this ring steps tiles; repeat interval scales from slow → fast across the outer annulus.
+ */
+const MOVE_KNOB_LOOK_RING_OUTER_PX = 26;
 /** Full deflection → fastest step repeat. */
 const MOVE_KNOB_REPEAT_MS_FAST = 88;
 /** Just past dead zone → slowest repeat. */
@@ -981,6 +986,25 @@ function IsoHudMinimapCircle({
   );
 }
 
+/** Map joystick offset (+y down) to a cardinal grid step using current screen-relative axes. */
+function knobOffsetToRelativeCardinal(
+  ox: number,
+  oy: number,
+  relativeForward: { dx: number; dy: number },
+  relativeBackward: { dx: number; dy: number },
+  relativeLeft: { dx: number; dy: number },
+  relativeRight: { dx: number; dy: number },
+): { dx: number; dy: number } {
+  if (Math.abs(ox) >= Math.abs(oy)) {
+    return ox > 0
+      ? { dx: relativeRight.dx, dy: relativeRight.dy }
+      : { dx: relativeLeft.dx, dy: relativeLeft.dy };
+  }
+  return oy < 0
+    ? { dx: relativeForward.dx, dy: relativeForward.dy }
+    : { dx: relativeBackward.dx, dy: relativeBackward.dy };
+}
+
 /** Joystick ring: `standalone` for corner HUD; `overlay` on top of minimap in one disc. */
 function IsoHudJoystickMoveRing({
   diameter,
@@ -998,6 +1022,7 @@ function IsoHudJoystickMoveRing({
   doMove,
   scrollToCurrentPlayerOnMap,
   focusDisabled,
+  onJoystickLookGrid,
 }: {
   diameter: number;
   dimPadOverMinimap: boolean;
@@ -1014,14 +1039,27 @@ function IsoHudJoystickMoveRing({
   doMove: (dx: number, dy: number, jump: boolean) => void;
   scrollToCurrentPlayerOnMap: () => void;
   focusDisabled: boolean;
+  /** Mobile: inner ring orbits facing without stepping; outer ring moves (faster repeat when further out). */
+  onJoystickLookGrid?: (dx: number, dy: number) => void;
 }) {
   const padPx = Math.min(ISO_HUD_JOYSTICK_PAD_PX, Math.round(diameter * 0.58));
   const knobMax = Math.min(ISO_HUD_KNOB_MAX_PX, Math.round(padPx * 0.4));
+  const lookRingOuterPx = useMemo(() => {
+    if (knobMax < MOVE_KNOB_DEAD_PX + 5) return MOVE_KNOB_DEAD_PX;
+    return Math.min(
+      MOVE_KNOB_LOOK_RING_OUTER_PX,
+      Math.max(MOVE_KNOB_DEAD_PX + 2, Math.round(knobMax * 0.68)),
+      knobMax - 3,
+    );
+  }, [knobMax]);
+  const joystickLookRingActive =
+    !!onJoystickLookGrid && lookRingOuterPx > MOVE_KNOB_DEAD_PX + 0.5;
   const [knob, setKnob] = useState({ x: 0, y: 0 });
   const knobRef = useRef({ x: 0, y: 0 });
   const dragActive = useRef(false);
   const ptrStartRef = useRef<{ x: number; y: number } | null>(null);
   const repeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastLookEmittedRef = useRef<{ dx: number; dy: number } | null>(null);
 
   const clearRepeat = useCallback(() => {
     if (repeatRef.current != null) {
@@ -1062,13 +1100,39 @@ function IsoHudJoystickMoveRing({
     ],
   );
 
+  const emitLookFromKnob = useCallback(
+    (ox: number, oy: number) => {
+      if (!onJoystickLookGrid) return;
+      const { dx, dy } = knobOffsetToRelativeCardinal(
+        ox,
+        oy,
+        relativeForward,
+        relativeBackward,
+        relativeLeft,
+        relativeRight,
+      );
+      const prev = lastLookEmittedRef.current;
+      if (prev != null && prev.dx === dx && prev.dy === dy) return;
+      lastLookEmittedRef.current = { dx, dy };
+      onJoystickLookGrid(dx, dy);
+    },
+    [
+      onJoystickLookGrid,
+      relativeForward,
+      relativeBackward,
+      relativeLeft,
+      relativeRight,
+    ],
+  );
+
   const armStepRepeat = useCallback(
     (ox: number, oy: number) => {
       clearRepeat();
       const r = Math.hypot(ox, oy);
-      if (r < MOVE_KNOB_DEAD_PX) return;
-      const span = Math.max(1e-6, knobMax - MOVE_KNOB_DEAD_PX);
-      const t = Math.min(1, (r - MOVE_KNOB_DEAD_PX) / span);
+      const moveSpanStart = joystickLookRingActive ? lookRingOuterPx : MOVE_KNOB_DEAD_PX;
+      if (r <= moveSpanStart) return;
+      const span = Math.max(1e-6, knobMax - moveSpanStart);
+      const t = Math.min(1, (r - moveSpanStart) / span);
       const eased = t * t;
       const ms = Math.round(
         MOVE_KNOB_REPEAT_MS_FAST +
@@ -1078,20 +1142,22 @@ function IsoHudJoystickMoveRing({
         tryMoveFromKnob(knobRef.current.x, knobRef.current.y);
       }, ms);
     },
-    [clearRepeat, knobMax, tryMoveFromKnob],
+    [clearRepeat, joystickLookRingActive, knobMax, lookRingOuterPx, tryMoveFromKnob],
   );
 
   const onJoystickPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (focusDisabled) return;
     e.preventDefault();
     e.stopPropagation();
     dragActive.current = true;
     ptrStartRef.current = { x: e.clientX, y: e.clientY };
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     clearRepeat();
+    lastLookEmittedRef.current = null;
   };
 
   const onJoystickPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!dragActive.current) return;
+    if (!dragActive.current || focusDisabled) return;
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
     const r = el.getBoundingClientRect();
@@ -1104,8 +1170,24 @@ function IsoHudJoystickMoveRing({
       ox = (ox / m) * knobMax;
       oy = (oy / m) * knobMax;
     }
+    const mClamped = Math.hypot(ox, oy);
     knobRef.current = { x: ox, y: oy };
     setKnob({ x: ox, y: oy });
+
+    if (!joystickLookRingActive) {
+      tryMoveFromKnob(ox, oy);
+      armStepRepeat(ox, oy);
+      return;
+    }
+    if (mClamped < MOVE_KNOB_DEAD_PX) {
+      clearRepeat();
+      return;
+    }
+    if (mClamped <= lookRingOuterPx) {
+      clearRepeat();
+      emitLookFromKnob(ox, oy);
+      return;
+    }
     tryMoveFromKnob(ox, oy);
     armStepRepeat(ox, oy);
   };
@@ -1121,6 +1203,7 @@ function IsoHudJoystickMoveRing({
     dragActive.current = false;
     ptrStartRef.current = null;
     clearRepeat();
+    lastLookEmittedRef.current = null;
     knobRef.current = { x: 0, y: 0 };
     setKnob({ x: 0, y: 0 });
     try {
@@ -1171,6 +1254,24 @@ function IsoHudJoystickMoveRing({
         boxSizing: "border-box",
       }}
     >
+      {joystickLookRingActive ? (
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
+            width: lookRingOuterPx * 2,
+            height: lookRingOuterPx * 2,
+            borderRadius: "50%",
+            border: "1px solid rgba(0,255,136,0.3)",
+            boxShadow: "inset 0 0 0 1px rgba(0,255,136,0.07)",
+            pointerEvents: "none",
+            zIndex: 1,
+          }}
+        />
+      ) : null}
       <div
         style={{
           position: "absolute",
@@ -1187,6 +1288,7 @@ function IsoHudJoystickMoveRing({
           justifyContent: "center",
           pointerEvents: "none",
           boxShadow: "0 0 12px rgba(0,255,136,0.22)",
+          zIndex: 2,
         }}
       >
         <MovePadFocusTargetIcon size={22} />
@@ -1243,6 +1345,7 @@ function CircularIsoMinimapMoveHud({
   scrollToCurrentPlayerOnMap,
   focusDisabled,
   outerRef,
+  onJoystickLookGrid,
 }: {
   diameter: number;
   showMinimap: boolean;
@@ -1267,6 +1370,7 @@ function CircularIsoMinimapMoveHud({
   scrollToCurrentPlayerOnMap: () => void;
   focusDisabled: boolean;
   outerRef?: Ref<HTMLDivElement>;
+  onJoystickLookGrid?: (dx: number, dy: number) => void;
 }) {
   return (
     <div
@@ -1318,6 +1422,7 @@ function CircularIsoMinimapMoveHud({
         doMove={doMove}
         scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
         focusDisabled={focusDisabled}
+        onJoystickLookGrid={onJoystickLookGrid}
       />
     </div>
   );
@@ -1675,6 +1780,39 @@ function CombatSkillItemIcon({
  * CATAPULT: Landing costs 1 move. Launch refunds 1 (net: catapult use is free).
  */
 
+/** Shown before combat UI — player accepts fight or declines (step back / monster slips to adjacent cell). */
+type PendingCombatOffer = {
+  source: "player" | "monster";
+  playerIndex: number;
+  monsterIndex: number;
+  monsterType: MonsterType;
+  prevX?: number;
+  prevY?: number;
+  /** Paid entering the monster’s tile; refunded if the player steps back. */
+  moveCostPaid?: number;
+};
+
+function monsterHasAdjacentEscapeCell(lab: Labyrinth, monsterIndex: number): boolean {
+  const m = lab.monsters[monsterIndex];
+  if (!m) return false;
+  const dirs: [number, number][] = [
+    [0, -1],
+    [1, 0],
+    [0, 1],
+    [-1, 0],
+  ];
+  for (const [dx, dy] of dirs) {
+    const nx = m.x + dx;
+    const ny = m.y + dy;
+    if (nx < 0 || ny < 0 || nx >= lab.width || ny >= lab.height) continue;
+    if (lab.grid[ny]?.[nx] !== PATH) continue;
+    if (lab.players.some((pl) => pl.x === nx && pl.y === ny)) continue;
+    if (lab.monsters.some((om, i) => i !== monsterIndex && om.x === nx && om.y === ny)) continue;
+    return true;
+  }
+  return false;
+}
+
 function getMonsterIcon(type: MonsterType): string {
   return type === "V" ? "🧛" : type === "Z" ? "🧟" : type === "G" ? "👻" : type === "K" ? "💀" : type === "L" ? "🔥" : "🕷";
 }
@@ -1996,6 +2134,8 @@ export default function LabyrinthGame() {
     prevX?: number;
     prevY?: number;
   } | null>(null);
+  const [pendingCombatOffer, setPendingCombatOffer] = useState<PendingCombatOffer | null>(null);
+  const pendingCombatOfferRef = useRef<PendingCombatOffer | null>(null);
   const [combatResult, setCombatResult] = useState<
     | (CombatResult & {
         monsterType?: MonsterType;
@@ -2439,6 +2579,7 @@ export default function LabyrinthGame() {
       const shouldSkipResolve =
         gamePausedRef.current ||
         combatStateRef.current ||
+        pendingCombatOfferRef.current ||
         combatContinuesAfterRollRef.current;
 
       if (shouldSkipResolve) {
@@ -2886,6 +3027,8 @@ export default function LabyrinthGame() {
     setCatapultAnimation(null);
     setBombExplosion(null);
     setCombatState(null);
+    pendingCombatOfferRef.current = null;
+    setPendingCombatOffer(null);
     setCombatResult(null);
     setBonusLootRevealed(false);
     setDefeatedMonsterOnCell(null);
@@ -2992,6 +3135,8 @@ export default function LabyrinthGame() {
         setCatapultAnimation(null);
         setBombExplosion(null);
         setCombatState(null);
+        pendingCombatOfferRef.current = null;
+        setPendingCombatOffer(null);
         setCombatResult(null);
         setBonusLootRevealed(false);
         setDefeatedMonsterOnCell(null);
@@ -4047,6 +4192,7 @@ export default function LabyrinthGame() {
         next.round = newRound;
         const skipMonsterMove =
           combatStateRef.current != null ||
+          pendingCombatOfferRef.current != null ||
           combatResultRef.current != null ||
           combatContinuesAfterRollRef.current;
         applyEvent(next, ev, 0, { skipMonsterMove });
@@ -4079,6 +4225,7 @@ export default function LabyrinthGame() {
   const endTurn = useCallback(() => {
     if (winner !== null || !lab) return;
     if (combatStateRef.current) return;
+    if (pendingCombatOfferRef.current) return;
     let nextP = (currentPlayer + 1) % lab.numPlayers;
     while (lab.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
       nextP = (nextP + 1) % lab.numPlayers;
@@ -4103,6 +4250,7 @@ export default function LabyrinthGame() {
 
   const handleUseBomb = useCallback(() => {
     if (gamePausedRef.current) return;
+    if (pendingCombatOfferRef.current) return;
     if (!lab || winner !== null || lab.eliminatedPlayers.has(currentPlayer)) return;
     const cp = lab.players[currentPlayer];
     const inCombat = !!combatStateRef.current;
@@ -4143,6 +4291,7 @@ export default function LabyrinthGame() {
   const handleUseArtifact = useCallback(
     (type: StoredArtifactKind) => {
       if (gamePausedRef.current) return;
+      if (pendingCombatOfferRef.current) return;
       if (!lab || winner !== null || lab.eliminatedPlayers.has(currentPlayer)) return;
       const cp = lab.players[currentPlayer];
       const inCombat = !!combatStateRef.current;
@@ -4307,6 +4456,10 @@ export default function LabyrinthGame() {
       if (winner !== null || !lab) return;
       if (combatStateRef.current) {
         combatLog("doMove BLOCKED: combatStateRef.current is set");
+        return;
+      }
+      if (pendingCombatOfferRef.current) {
+        combatLog("doMove BLOCKED: pending combat offer");
         return;
       }
       if (gamePausedRef.current) return;
@@ -4587,20 +4740,27 @@ export default function LabyrinthGame() {
         // Combat: when player lands on monster, enter combat mode (roll dice to resolve)
         const collision = next.checkMonsterCollision(currentPlayer);
         if (collision) {
-          combatLog("COMBAT START: player moved onto monster", { monsterType: collision.monsterType, monsterIndex: collision.monsterIndex, playerIndex: collision.playerIndex });
+          combatLog("COMBAT OFFER: player moved onto monster (await accept)", {
+            monsterType: collision.monsterType,
+            monsterIndex: collision.monsterIndex,
+            playerIndex: collision.playerIndex,
+          });
           const p = next.players[collision.playerIndex];
           setCollisionEffect(p ? { x: p.x, y: p.y } : null);
           combatHasRolledRef.current = false;
           combatSurpriseRef.current = "hunt";
           setRolling(false);
-          releaseSinglePlayerEncounterShell(next.numPlayers);
-          setCombatState({
+          const offer: PendingCombatOffer = {
+            source: "player",
             playerIndex: collision.playerIndex,
             monsterType: collision.monsterType,
             monsterIndex: collision.monsterIndex,
             prevX,
             prevY,
-          });
+            moveCostPaid: TEMP_INFINITE_MOVES ? 0 : costToPay,
+          };
+          pendingCombatOfferRef.current = offer;
+          setPendingCombatOffer(offer);
           setLab(next);
           scheduleScrollCurrentPlayerCellAfterMove();
           return;
@@ -4697,6 +4857,7 @@ export default function LabyrinthGame() {
     const id = setInterval(() => {
       // Freeze all monster AI while any combat UI/encounter is active (including result modal or multi-roll fight)
       if (combatStateRef.current) return;
+      if (pendingCombatOfferRef.current) return;
       if (combatResultRef.current) return;
       if (combatContinuesAfterRollRef.current) return;
       if (teleportPickerRef.current || catapultPickerRef.current || passThroughMagicRef.current) return;
@@ -4704,6 +4865,7 @@ export default function LabyrinthGame() {
       if (movesLeftRef.current <= 0) return; // No monster activity until player has rolled and has moves
       setLab((prev) => {
         if (!prev || winnerRef.current !== null || combatStateRef.current) return prev;
+        if (pendingCombatOfferRef.current) return prev;
         if (combatResultRef.current) return prev;
         if (combatContinuesAfterRollRef.current) return prev;
         if (teleportPickerRef.current || catapultPickerRef.current || passThroughMagicRef.current) return prev;
@@ -4743,7 +4905,7 @@ export default function LabyrinthGame() {
         const collision = next.checkMonsterCollision(currentPlayerRef.current);
         if (collision && movesLeftRef.current > 0) {
           const p = next.players[collision.playerIndex];
-          combatLog("COMBAT START: monster moved onto player (tick)", {
+          combatLog("COMBAT OFFER: monster moved onto player (tick, await accept)", {
             monsterType: collision.monsterType,
             monsterIndex: collision.monsterIndex,
             playerIndex: collision.playerIndex,
@@ -4754,8 +4916,14 @@ export default function LabyrinthGame() {
           combatHasRolledRef.current = false;
           combatSurpriseRef.current = "hunt";
           setRolling(false);
-          releaseSinglePlayerEncounterShell(next.numPlayers);
-          setCombatState({ playerIndex: collision.playerIndex, monsterType: collision.monsterType, monsterIndex: collision.monsterIndex });
+          const offer: PendingCombatOffer = {
+            source: "monster",
+            playerIndex: collision.playerIndex,
+            monsterType: collision.monsterType,
+            monsterIndex: collision.monsterIndex,
+          };
+          pendingCombatOfferRef.current = offer;
+          setPendingCombatOffer(offer);
         }
         return next;
       });
@@ -4770,7 +4938,8 @@ export default function LabyrinthGame() {
   }, [lab]);
 
   const magicPortalReady = useMemo(() => {
-    if (!lab || combatState || winner !== null || teleportPicker || catapultPicker || gamePaused) return false;
+    if (!lab || combatState || pendingCombatOffer || winner !== null || teleportPicker || catapultPicker || gamePaused)
+      return false;
     if (suppressMagicPortalUntilMove) return false;
     const cp = lab.players[currentPlayer];
     if (!cp) return false;
@@ -4778,7 +4947,17 @@ export default function LabyrinthGame() {
     if (!cell || !isMagicCell(cell) || lab.hasUsedTeleportFrom(currentPlayer, cp.x, cp.y)) return false;
     if (lab.hasTeleportedTo(currentPlayer, cp.x, cp.y)) return false;
     return lab.getTeleportOptions(currentPlayer, MAGIC_TELEPORT_PICKER_OPTIONS).length > 0;
-  }, [lab, currentPlayer, combatState, winner, teleportPicker, catapultPicker, gamePaused, suppressMagicPortalUntilMove]);
+  }, [
+    lab,
+    currentPlayer,
+    combatState,
+    pendingCombatOffer,
+    winner,
+    teleportPicker,
+    catapultPicker,
+    gamePaused,
+    suppressMagicPortalUntilMove,
+  ]);
 
   const landscapeCombatInfoRows = useMemo(() => {
     if (!lab || !combatState || combatResult) return null;
@@ -4791,7 +4970,19 @@ export default function LabyrinthGame() {
 
   /** When turn should end with no moves: advance to next player + open roll. Eliminated-current case; also last-move combat (doMove returns before clearing diceResult). */
   useEffect(() => {
-    if (!lab || winner !== null || combatState || rolling || catapultPicker || teleportPicker || teleportPickerRef.current || passThroughMagic || gamePaused) return;
+    if (
+      !lab ||
+      winner !== null ||
+      combatState ||
+      pendingCombatOffer ||
+      rolling ||
+      catapultPicker ||
+      teleportPicker ||
+      teleportPickerRef.current ||
+      passThroughMagic ||
+      gamePaused
+    )
+      return;
     if (combatResult || combatFooterSnapshot) return;
     if (manualTeleportPendingRef.current) return;
 
@@ -4872,6 +5063,7 @@ export default function LabyrinthGame() {
     eliminatedPlayersKey,
     winner,
     combatState,
+    pendingCombatOffer,
     combatResult,
     combatFooterSnapshot,
     movesLeft,
@@ -4891,6 +5083,7 @@ export default function LabyrinthGame() {
     if (
       !showDiceModal ||
       combatState ||
+      pendingCombatOffer ||
       combatResult ||
       winner !== null ||
       !lab ||
@@ -4906,7 +5099,18 @@ export default function LabyrinthGame() {
       diceRef.current?.roll();
     }, 500);
     return () => clearTimeout(t);
-  }, [showDiceModal, combatState, combatResult, winner, lab, rolling, movesLeft, diceResult, gamePaused]);
+  }, [
+    showDiceModal,
+    combatState,
+    pendingCombatOffer,
+    combatResult,
+    winner,
+    lab,
+    rolling,
+    movesLeft,
+    diceResult,
+    gamePaused,
+  ]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -4921,6 +5125,7 @@ export default function LabyrinthGame() {
         combatLog("keydown BLOCKED: combatStateRef.current is set");
         return;
       }
+      if (pendingCombatOfferRef.current) return;
       /** Mobile: ArrowUp = expand move & inventory dock; ArrowDown = collapse (when expanded). */
       if (typeof window !== "undefined" && matchesMobileLayout()) {
         if (e.key === "ArrowUp" && !mobileDockExpandedRef.current) {
@@ -4986,10 +5191,12 @@ export default function LabyrinthGame() {
     (lab?.eliminatedPlayers.has(currentPlayer) ?? false) ||
     passThroughMagic ||
     !!combatState ||
+    !!pendingCombatOffer ||
     gamePaused;
   const rollDisabled =
     TEMP_INFINITE_MOVES ||
     !!combatState ||
+    !!pendingCombatOffer ||
     (!combatState && movesLeft > 0) ||
     gameOver ||
     rolling ||
@@ -5319,7 +5526,7 @@ export default function LabyrinthGame() {
   const handleMagicPortalOpen = useCallback(() => {
     if (gamePausedRef.current) return;
     if (!lab || !cp) return;
-    if (combatState || winner !== null) return;
+    if (combatState || pendingCombatOffer || winner !== null) return;
     if (teleportPicker || catapultPicker) return;
     const cell = lab.getCellAt(cp.x, cp.y);
     if (!cell || !isMagicCell(cell) || lab.hasUsedTeleportFrom(currentPlayer, cp.x, cp.y)) return;
@@ -5328,7 +5535,125 @@ export default function LabyrinthGame() {
     if (options.length === 0) return;
     manualTeleportPendingRef.current = true;
     setTeleportPicker({ playerIndex: currentPlayer, from: [cp.x, cp.y], options, sourceType: "magic" });
-  }, [lab, cp, currentPlayer, combatState, winner, teleportPicker, catapultPicker]);
+  }, [lab, cp, currentPlayer, combatState, pendingCombatOffer, winner, teleportPicker, catapultPicker]);
+
+  const acceptPendingCombat = useCallback(() => {
+    const o = pendingCombatOfferRef.current;
+    const l = labRef.current;
+    if (!o || !l) return;
+    combatLog("COMBAT START (accepted)", o);
+    const pi = o.playerIndex;
+    const p = l.players[pi];
+    setCollisionEffect(p ? { x: p.x, y: p.y } : null);
+    combatHasRolledRef.current = false;
+    combatSurpriseRef.current = "hunt";
+    setRolling(false);
+    releaseSinglePlayerEncounterShell(l.numPlayers);
+    pendingCombatOfferRef.current = null;
+    setPendingCombatOffer(null);
+    setCombatState({
+      playerIndex: o.playerIndex,
+      monsterType: o.monsterType,
+      monsterIndex: o.monsterIndex,
+      ...(o.source === "player" && o.prevX !== undefined && o.prevY !== undefined
+        ? { prevX: o.prevX, prevY: o.prevY }
+        : {}),
+    });
+  }, [releaseSinglePlayerEncounterShell]);
+
+  const declinePendingCombat = useCallback(() => {
+    const o = pendingCombatOfferRef.current;
+    if (!o) return;
+    const l = labRef.current;
+    if (!l) return;
+    if (o.source === "monster" && !monsterHasAdjacentEscapeCell(l, o.monsterIndex)) {
+      combatToastSeqRef.current += 1;
+      const seq = combatToastSeqRef.current;
+      setCombatToast({
+        seq,
+        message: "No free cell — you must fight or move away.",
+        style: "hint",
+      });
+      setTimeout(() => {
+        setCombatToast((t) => (t?.seq === seq ? null : t));
+      }, 3200);
+      return;
+    }
+    pendingCombatOfferRef.current = null;
+    setPendingCombatOffer(null);
+    setCollisionEffect(null);
+    if (o.source === "player" && o.prevX !== undefined && o.prevY !== undefined) {
+      const refund = !TEMP_INFINITE_MOVES && (o.moveCostPaid ?? 0) > 0 ? o.moveCostPaid! : 0;
+      if (refund > 0) {
+        movesLeftRef.current += refund;
+        setMovesLeft(movesLeftRef.current);
+      }
+    }
+    setLab((prev) => {
+      if (!prev || winnerRef.current !== null) return prev;
+      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
+      next.grid = prev.grid.map((r) => [...r]);
+      next.players = prev.players.map((p) => ({ ...p }));
+      next.goalX = prev.goalX;
+      next.goalY = prev.goalY;
+      next.round = prev.round;
+      next.currentRound = prev.currentRound;
+      next.monsters = prev.monsters.map((m) => ({
+        ...m,
+        patrolArea: [...m.patrolArea],
+        hp: m.hp,
+        draculaState: m.draculaState,
+        draculaCooldowns: m.draculaCooldowns ? { ...m.draculaCooldowns } : undefined,
+        targetPlayerIndex: m.targetPlayerIndex,
+      }));
+      next.eliminatedPlayers = new Set(prev.eliminatedPlayers);
+      next.hiddenCells = new Map(prev.hiddenCells);
+      next.webPositions = [...(prev.webPositions || [])];
+      next.fogZones = new Map(prev.fogZones || new Map());
+      next.bombCollectedBy = new Map(
+        [...(prev.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)])
+      );
+      next.teleportUsedFrom = new Map(
+        [...(prev.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)])
+      );
+      next.teleportUsedTo = new Map(
+        [...(prev.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)])
+      );
+      next.catapultUsedFrom = new Map(
+        [...(prev.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)])
+      );
+      next.visitedCells = new Set(prev.visitedCells || []);
+      if (o.source === "player") {
+        const pl = next.players[o.playerIndex];
+        if (pl && o.prevX !== undefined && o.prevY !== undefined) {
+          pl.x = o.prevX;
+          pl.y = o.prevY;
+        }
+      } else {
+        const m = next.monsters[o.monsterIndex];
+        if (m) {
+          const dirs: [number, number][] = [
+            [0, -1],
+            [1, 0],
+            [0, 1],
+            [-1, 0],
+          ];
+          for (const [dx, dy] of dirs) {
+            const nx = m.x + dx;
+            const ny = m.y + dy;
+            if (nx < 0 || ny < 0 || nx >= next.width || ny >= next.height) continue;
+            if (next.grid[ny]?.[nx] !== PATH) continue;
+            if (next.players.some((pl) => pl.x === nx && pl.y === ny)) continue;
+            if (next.monsters.some((om, i) => i !== o.monsterIndex && om.x === nx && om.y === ny)) continue;
+            m.x = nx;
+            m.y = ny;
+            break;
+          }
+        }
+      }
+      return next;
+    });
+  }, []);
 
   const scrollToCurrentPlayerOnMap = useCallback(() => {
     const el = currentPlayerCellRef.current;
@@ -5360,6 +5685,8 @@ export default function LabyrinthGame() {
       return next;
     });
   }, []);
+  /** Same facing update as 3D camera snap — mobile joystick inner ring orbits look without stepping. */
+  const mobileJoystickLookGrid = isMobile ? onTouchCameraForwardGrid : undefined;
   const [isoCamRotateActive, setIsoCamRotateActive] = useState(false);
   useEffect(() => {
     if (mazeMapView !== "iso") setIsoCamRotateActive(false);
@@ -5503,10 +5830,10 @@ export default function LabyrinthGame() {
   }, [isoNativeFsActive, isoImmersiveFallback]);
 
   useEffect(() => {
-    if (catapultPicker || teleportPicker) {
+    if (catapultPicker || teleportPicker || pendingCombatOffer) {
       setImmersiveInventoryPick(null);
     }
-  }, [catapultPicker, teleportPicker]);
+  }, [catapultPicker, teleportPicker, pendingCombatOffer]);
 
   if (!gameStarted) {
     if (!startMenuReady) {
@@ -5748,6 +6075,7 @@ export default function LabyrinthGame() {
   /** Same-tick as this render — before useEffect / setInterval callbacks that read these refs (monster AI must see combat open). */
   labRef.current = lab;
   combatStateRef.current = combatState;
+  pendingCombatOfferRef.current = pendingCombatOffer;
   combatResultRef.current = combatResult;
   currentPlayerRef.current = currentPlayer;
   playerFacingRef.current = playerFacing;
@@ -5758,6 +6086,7 @@ export default function LabyrinthGame() {
   const showMoveGrid =
     movesLeft > 0 &&
     !combatState &&
+    !pendingCombatOffer &&
     winner === null &&
     (isMobile ? mobileDockExpanded : !desktopControlsCollapsed);
   /** Phone landscape: minimap and joystick as separate controls; portrait keeps the overlaid circle. */
@@ -6677,10 +7006,17 @@ export default function LabyrinthGame() {
   };
 
   return (
-    <div className="labyrinth-game-pane" style={gamePaneStyle}>
+    <div
+      className="labyrinth-game-pane"
+      style={{
+        ...gamePaneStyle,
+        /* Fixed combat UI must not be clipped by overflow:hidden — otherwise taps miss (esp. landscape + fixed maze shell). */
+        ...(combatOverlayVisible ? { overflow: "visible" as const } : {}),
+      }}
+    >
       {!landscapeCompactPlayHud &&
         !(isoImmersiveUi && isMobile) &&
-        !(isoImmersiveUi && !isMobile && lab && !combatState && !teleportPicker) && (
+        !(isoImmersiveUi && !isMobile && lab && !combatState && !teleportPicker && !pendingCombatOffer) && (
       <header
         style={{
           ...headerStyle,
@@ -6785,12 +7121,55 @@ export default function LabyrinthGame() {
           </button>
           </div>
         )}
+        {pendingCombatOffer && lab && !teleportPicker && mazeMapView !== "grid" && (
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              alignItems: "center",
+              padding: "6px 10px",
+              borderRadius: 8,
+              background: "linear-gradient(180deg, rgba(48,22,18,0.95) 0%, rgba(24,12,14,0.98) 100%)",
+              border: "1px solid rgba(255,102,68,0.45)",
+              boxShadow: "0 4px 18px rgba(0,0,0,0.35)",
+            }}
+          >
+            <span style={{ fontSize: "0.78rem", color: "#e8d8d4", maxWidth: 280, lineHeight: 1.35 }}>
+              {pendingCombatOffer.source === "player" ? (
+                <>
+                  You entered <strong style={{ color: "#ffaa88" }}>{getMonsterName(pendingCombatOffer.monsterType)}</strong>’s tile.
+                </>
+              ) : (
+                <>
+                  <strong style={{ color: "#ffaa88" }}>{getMonsterName(pendingCombatOffer.monsterType)}</strong> caught you.
+                </>
+              )}{" "}
+              Start combat?
+            </span>
+            <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, ...headerButtonStyle, background: "#6b1010", borderColor: "#ff4444" }}>
+              Fight
+            </button>
+            {(pendingCombatOffer.source === "player" ||
+              monsterHasAdjacentEscapeCell(lab, pendingCombatOffer.monsterIndex)) && (
+              <button
+                type="button"
+                onClick={declinePendingCombat}
+                style={{ ...buttonStyle, ...headerButtonStyle, background: "#2a2830", borderColor: "#666", color: "#ccc" }}
+              >
+                {pendingCombatOffer.source === "player" ? "Step back" : "It slips away"}
+              </button>
+            )}
+          </div>
+        )}
         {renderHeaderMenuBlock()}
       </header>
       )}
 
       {landscapeCompactPlayHud &&
-        ((!isoImmersiveUi && !(mobileIsoEdgeToEdge && isLandscapeCompact)) || teleportPicker) && (
+        ((!isoImmersiveUi && !(mobileIsoEdgeToEdge && isLandscapeCompact)) ||
+          teleportPicker ||
+          (pendingCombatOffer && lab)) && (
         <div
           style={{
             position: "fixed",
@@ -6847,6 +7226,42 @@ export default function LabyrinthGame() {
               >
                 Random destination
               </button>
+            </div>
+          )}
+          {pendingCombatOffer && lab && !teleportPicker && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                alignItems: "center",
+                pointerEvents: "auto",
+                marginRight: "auto",
+                padding: "6px 10px",
+                borderRadius: 8,
+                background: "linear-gradient(180deg, rgba(48,22,18,0.95) 0%, rgba(24,12,14,0.98) 100%)",
+                border: "1px solid rgba(255,102,68,0.45)",
+                maxWidth: "min(100%, 360px)",
+              }}
+            >
+              <span style={{ fontSize: "0.72rem", color: "#e8d8d4", lineHeight: 1.35 }}>
+                {pendingCombatOffer.source === "player" ? "Monster tile — " : "Ambush — "}
+                <strong style={{ color: "#ffaa88" }}>{getMonsterName(pendingCombatOffer.monsterType)}</strong>
+                . Fight?
+              </span>
+              <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, fontSize: "0.72rem", padding: "6px 10px", background: "#6b1010", borderColor: "#ff4444" }}>
+                Fight
+              </button>
+              {(pendingCombatOffer.source === "player" ||
+                monsterHasAdjacentEscapeCell(lab, pendingCombatOffer.monsterIndex)) && (
+                <button
+                  type="button"
+                  onClick={declinePendingCombat}
+                  style={{ ...buttonStyle, fontSize: "0.72rem", padding: "6px 10px", background: "#2a2830", borderColor: "#666", color: "#ccc" }}
+                >
+                  {pendingCombatOffer.source === "player" ? "Back" : "Flee"}
+                </button>
+              )}
             </div>
           )}
           {!isoImmersiveUi && !(mobileIsoEdgeToEdge && isLandscapeCompact) ? (
@@ -6915,7 +7330,14 @@ export default function LabyrinthGame() {
         />
       )}
 
-      <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          minHeight: 0,
+          overflow: combatOverlayVisible ? "visible" : "hidden",
+        }}
+      >
         {!isMobile && (
         <aside style={statsPanelStyle}>
           <div style={{ fontSize: "0.9rem", fontWeight: "bold", color: "#00ff88", marginBottom: 4 }}>Players</div>
@@ -6996,7 +7418,12 @@ export default function LabyrinthGame() {
         </aside>
         )}
 
-        <div style={mainContentStyle}>
+        <div
+          style={{
+            ...mainContentStyle,
+            ...(combatOverlayVisible ? { overflow: "visible" as const } : {}),
+          }}
+        >
       {lab && combatOverlayVisible && (
         <div
             style={{
@@ -9519,7 +9946,8 @@ export default function LabyrinthGame() {
               )}
               {isoImmersiveUi && (
                 <>
-                  {(!!catapultPicker ||
+                  {(!!pendingCombatOffer ||
+                    !!catapultPicker ||
                     !!teleportPicker ||
                     (magicPortalReady && !teleportPicker) ||
                     (immersiveInventoryPick !== null && showMoveGrid)) && (
@@ -9528,20 +9956,61 @@ export default function LabyrinthGame() {
                         position: "absolute",
                         left: "max(10px, env(safe-area-inset-left, 0px))",
                         right: "max(10px, env(safe-area-inset-right, 0px))",
-                        bottom: "calc(max(12px, env(safe-area-inset-bottom, 0px)) + 172px)",
+                        ...(pendingCombatOffer
+                          ? {
+                              bottom: "auto",
+                              top: "calc(max(10px, env(safe-area-inset-top, 0px)) + 52px)",
+                              maxHeight: "min(32vh, 220px)",
+                            }
+                          : {
+                              bottom: "calc(max(12px, env(safe-area-inset-bottom, 0px)) + 172px)",
+                              maxHeight: "min(38vh, 280px)",
+                            }),
                         zIndex: ISO_IMMERSIVE_HUD_Z + 6,
                         pointerEvents: "auto",
-                        maxHeight: "min(38vh, 280px)",
                         overflowY: "auto",
                         WebkitOverflowScrolling: "touch",
                         borderRadius: 16,
                         padding: "12px 14px",
                         background: "linear-gradient(180deg, rgba(22,24,36,0.97) 0%, rgba(12,13,22,0.99) 100%)",
-                        border: "1px solid rgba(0,255,136,0.25)",
+                        border: pendingCombatOffer ? "1px solid rgba(255,102,68,0.35)" : "1px solid rgba(0,255,136,0.25)",
                         boxShadow: "0 12px 40px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.05)",
                       }}
                     >
-                      {catapultPicker ? (
+                      {pendingCombatOffer && lab ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#9aa0b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                            Combat
+                          </div>
+                          <p style={{ margin: 0, fontSize: "0.82rem", color: "#c8cdd8", lineHeight: 1.45 }}>
+                            {pendingCombatOffer.source === "player" ? (
+                              <>
+                                You are on <strong style={{ color: "#ffaa88" }}>{getMonsterName(pendingCombatOffer.monsterType)}</strong>’s tile.
+                              </>
+                            ) : (
+                              <>
+                                <strong style={{ color: "#ffaa88" }}>{getMonsterName(pendingCombatOffer.monsterType)}</strong> is on you.
+                              </>
+                            )}{" "}
+                            Start the fight?
+                          </p>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                            <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, background: "#6b1010", borderColor: "#ff4444", fontSize: "0.78rem", padding: "6px 12px" }}>
+                              Fight
+                            </button>
+                            {(pendingCombatOffer.source === "player" ||
+                              monsterHasAdjacentEscapeCell(lab, pendingCombatOffer.monsterIndex)) && (
+                              <button
+                                type="button"
+                                onClick={declinePendingCombat}
+                                style={{ ...buttonStyle, background: "#2a2830", borderColor: "#666", color: "#ccc", fontSize: "0.78rem", padding: "6px 12px" }}
+                              >
+                                {pendingCombatOffer.source === "player" ? "Step back" : "It slips away"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ) : catapultPicker ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#9aa0b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
                             Slingshot
@@ -9886,6 +10355,7 @@ export default function LabyrinthGame() {
                               focusDisabled={
                                 winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)
                               }
+                              onJoystickLookGrid={mobileJoystickLookGrid}
                             />
                           ) : (
                             <CircularIsoMinimapMoveHud
@@ -9916,6 +10386,7 @@ export default function LabyrinthGame() {
                               focusDisabled={
                                 winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)
                               }
+                              onJoystickLookGrid={mobileJoystickLookGrid}
                             />
                           )
                         ) : null}
@@ -10533,7 +11004,7 @@ export default function LabyrinthGame() {
         </div>
         </div>
 
-      {mazeMapView === "grid" && isMobile && mobileDockExpanded && lab && (
+      {mazeMapView === "grid" && isMobile && mobileDockExpanded && lab && !pendingCombatOffer && (
         <>
           <div
             ref={mobileDockExpandedHandleRef}
@@ -10748,6 +11219,7 @@ export default function LabyrinthGame() {
               focusDisabled={
                 winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
               }
+              onJoystickLookGrid={mobileJoystickLookGrid}
             />
           </div>
         </>
@@ -10792,15 +11264,119 @@ export default function LabyrinthGame() {
             focusDisabled={
               winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
             }
+            onJoystickLookGrid={mobileJoystickLookGrid}
           />
         </div>
       ) : null}
+
+      {!isMobile && mazeMapView === "grid" && pendingCombatOffer && lab && (
+        <div
+          style={{
+            alignSelf: "center",
+            width: "min(760px, 100%)",
+            maxWidth: 760,
+            marginTop: 10,
+            marginBottom: 2,
+            padding: "10px 12px",
+            borderRadius: 10,
+            boxSizing: "border-box",
+            background: "linear-gradient(180deg, rgba(48,22,18,0.96) 0%, rgba(20,10,12,0.99) 100%)",
+            border: "1px solid rgba(255,102,68,0.5)",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 10,
+            zIndex: 2,
+          }}
+        >
+          <span style={{ fontSize: "0.82rem", color: "#e8d8d4", flex: "1 1 180px", lineHeight: 1.4, minWidth: 0 }}>
+            {pendingCombatOffer.source === "player" ? (
+              <>
+                You entered <strong style={{ color: "#ffaa88" }}>{getMonsterName(pendingCombatOffer.monsterType)}</strong>’s tile.
+              </>
+            ) : (
+              <>
+                <strong style={{ color: "#ffaa88" }}>{getMonsterName(pendingCombatOffer.monsterType)}</strong> reached you.
+              </>
+            )}{" "}
+            Start combat?
+          </span>
+          <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, background: "#6b1010", borderColor: "#ff4444", fontSize: "0.82rem", padding: "8px 14px" }}>
+            Fight
+          </button>
+          {(pendingCombatOffer.source === "player" ||
+            monsterHasAdjacentEscapeCell(lab, pendingCombatOffer.monsterIndex)) && (
+            <button
+              type="button"
+              onClick={declinePendingCombat}
+              style={{ ...buttonStyle, background: "#2a2830", borderColor: "#666", color: "#ccc", fontSize: "0.82rem", padding: "8px 14px" }}
+            >
+              {pendingCombatOffer.source === "player" ? "Step back" : "It slips away"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {isMobile &&
+        pendingCombatOffer &&
+        lab &&
+        !(isoImmersiveUi && mazeMapView === "iso") && (
+        <div
+          role="dialog"
+          aria-label="Combat encounter"
+          style={{
+            position: "fixed",
+            left: "max(8px, env(safe-area-inset-left, 0px))",
+            right: "max(8px, env(safe-area-inset-right, 0px))",
+            bottom: "max(10px, env(safe-area-inset-bottom, 0px))",
+            zIndex: 118,
+            padding: "10px 12px",
+            borderRadius: 12,
+            boxSizing: "border-box",
+            background: "linear-gradient(180deg, rgba(48,22,18,0.98) 0%, rgba(18,8,10,0.99) 100%)",
+            border: "1px solid rgba(255,102,68,0.55)",
+            boxShadow: "0 8px 28px rgba(0,0,0,0.55)",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span style={{ fontSize: "0.78rem", color: "#e8d8d4", flex: "1 1 200px", lineHeight: 1.35 }}>
+            {pendingCombatOffer.source === "player" ? (
+              <>
+                <strong style={{ color: "#ffaa88" }}>{getMonsterName(pendingCombatOffer.monsterType)}</strong> — fight?
+              </>
+            ) : (
+              <>
+                <strong style={{ color: "#ffaa88" }}>{getMonsterName(pendingCombatOffer.monsterType)}</strong> ambush — fight?
+              </>
+            )}
+          </span>
+          <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, background: "#6b1010", borderColor: "#ff4444", fontSize: "0.78rem", padding: "8px 12px" }}>
+            Fight
+          </button>
+          {(pendingCombatOffer.source === "player" ||
+            monsterHasAdjacentEscapeCell(lab, pendingCombatOffer.monsterIndex)) && (
+            <button
+              type="button"
+              onClick={declinePendingCombat}
+              style={{ ...buttonStyle, background: "#2a2830", borderColor: "#666", color: "#ccc", fontSize: "0.78rem", padding: "8px 12px" }}
+            >
+              {pendingCombatOffer.source === "player" ? "Step back" : "Flee"}
+            </button>
+          )}
+        </div>
+      )}
 
       <div
         ref={mobileDockRef}
         className="controls-panel unified-bottom-dock"
         style={{
           ...controlsPanelStyle,
+          ...(isMobile && pendingCombatOffer && mazeMapView === "grid"
+            ? { opacity: 0.25, pointerEvents: "none" as const }
+            : {}),
           ...(isMobile
             ? {
                 position: "fixed",
@@ -11155,7 +11731,13 @@ export default function LabyrinthGame() {
                       type="button"
                       onClick={endTurn}
                       className="secondary"
-                      disabled={winner !== null || !!catapultPicker || !!teleportPicker || !!combatState}
+                      disabled={
+                        winner !== null ||
+                        !!catapultPicker ||
+                        !!teleportPicker ||
+                        !!combatState ||
+                        !!pendingCombatOffer
+                      }
                       style={{
                         ...buttonStyle,
                         ...secondaryButtonStyle,
@@ -11308,7 +11890,13 @@ export default function LabyrinthGame() {
                   type="button"
           onClick={endTurn}
           className="secondary"
-                  disabled={winner !== null || !!catapultPicker || !!teleportPicker || !!combatState}
+                  disabled={
+                    winner !== null ||
+                    !!catapultPicker ||
+                    !!teleportPicker ||
+                    !!combatState ||
+                    !!pendingCombatOffer
+                  }
                   style={{
                     ...buttonStyle,
                     ...secondaryButtonStyle,
