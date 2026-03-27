@@ -5351,6 +5351,15 @@ export default function LabyrinthGame() {
 
   const isoPlayRootRef = useRef<HTMLDivElement>(null);
   const mazeIsoViewRef = useRef<MazeIsoViewImperativeHandle>(null);
+  /** Touch 3D: joystick “forward” tracks camera aim (cardinal snap in parent state + ref for same-frame reads). */
+  const onTouchCameraForwardGrid = useCallback((dx: number, dy: number) => {
+    const pi = currentPlayerRef.current;
+    setPlayerFacing((prev) => {
+      const next = { ...prev, [pi]: { dx, dy } };
+      playerFacingRef.current = next;
+      return next;
+    });
+  }, []);
   const [isoCamRotateActive, setIsoCamRotateActive] = useState(false);
   useEffect(() => {
     if (mazeMapView !== "iso") setIsoCamRotateActive(false);
@@ -9465,6 +9474,7 @@ export default function LabyrinthGame() {
                 miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
                 fogIntensityMap={fogIntensityMap}
                 fillViewport={mazeIsoFillViewport}
+                onTouchCameraForwardGrid={isMobile ? onTouchCameraForwardGrid : undefined}
               />
               {catapultPicker && (
                 <div

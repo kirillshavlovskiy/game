@@ -61,6 +61,11 @@ type Props = {
   hideOverlayViewButtons?: boolean;
   /** Notifies parent when temporary camera-rotate mode is active (for chrome button highlight). */
   onRotateModeChange?: (active: boolean) => void;
+  /**
+   * Touch play: cardinal walk forward (into the view) derived from camera aim, snapped to grid (±1,0)/(0,±1).
+   * Keeps joystick / marker facing aligned with orbit like a mobile third-person shooter.
+   */
+  onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
 };
 
 export type MazeIsoViewImperativeHandle = {
@@ -1085,6 +1090,7 @@ function applyManualOrbitFromDelta(
 function CameraController({
   grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy, zoom, rotateMode, resetTick, teleportMode, catapultMode, focusVersion,
   touchUi,
+  onTouchCameraForwardGrid,
 }: {
   grid: string[][];
   mapWidth: number;
@@ -1100,6 +1106,7 @@ function CameraController({
   catapultMode: boolean;
   focusVersion?: number;
   touchUi: boolean;
+  onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
 }) {
   const { camera, gl } = useThree();
   const controlsRef = useRef<any>(null);
@@ -1118,8 +1125,15 @@ function CameraController({
   const lastOrientRef = useRef<{ g: number; b: number } | null>(null);
   /** One-time snap so touch sessions start behind the pawn (Canvas default camera is a fixed diagonal). */
   const touchCameraBootstrappedRef = useRef(false);
+  const lastTouchForwardGridRef = useRef<{ dx: number; dy: number } | null>(null);
+  const onTouchCameraForwardGridRef = useRef(onTouchCameraForwardGrid);
+  onTouchCameraForwardGridRef.current = onTouchCameraForwardGrid;
 
   const teleportLikeFraming = teleportMode || catapultMode;
+
+  useEffect(() => {
+    lastTouchForwardGridRef.current = null;
+  }, [focusVersion, playerX, playerY]);
 
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera) {
@@ -1370,6 +1384,30 @@ function CameraController({
       camera.position.lerp(desiredCameraPos, rotLerp);
       transitionBlendRef.current = Math.max(0, transitionBlend * 0.86 - 0.02);
       ctrl.update();
+    }
+
+    /* Mobile: walk “forward” = deeper into the view — horizontal camera→pawn, snapped to N/E/S/W for grid moves. */
+    if (touchUi && onTouchCameraForwardGridRef.current && !teleportLikeFraming) {
+      const toPawn = new THREE.Vector3().subVectors(ctrl.target, camera.position);
+      toPawn.y = 0;
+      const hLen = toPawn.length();
+      if (hLen > 1e-4) {
+        toPawn.multiplyScalar(1 / hLen);
+        let gdx: number;
+        let gdy: number;
+        if (Math.abs(toPawn.x) >= Math.abs(toPawn.z)) {
+          gdx = toPawn.x >= 0 ? 1 : -1;
+          gdy = 0;
+        } else {
+          gdx = 0;
+          gdy = toPawn.z >= 0 ? 1 : -1;
+        }
+        const prev = lastTouchForwardGridRef.current;
+        if (prev == null || prev.dx !== gdx || prev.dy !== gdy) {
+          lastTouchForwardGridRef.current = { dx: gdx, dy: gdy };
+          onTouchCameraForwardGridRef.current(gdx, gdy);
+        }
+      }
     }
   });
 
@@ -1870,6 +1908,7 @@ function MazeScene({
   catapultTrajectoryStrength, catapultFrom, magicPortalPreviewOptions, teleportSourceType,
   focusVersion, miniMonsters, fogIntensityMap,
   touchUi = false,
+  onTouchCameraForwardGrid,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
   resetTick: number;
@@ -1881,6 +1920,7 @@ function MazeScene({
   catapultFrom?: [number, number] | null;
   magicPortalPreviewOptions?: [number, number][] | null;
   teleportSourceType?: "magic" | "gem" | "artifact" | null;
+  onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
 }) {
   const shadowRange = Math.max(mapWidth, mapHeight) * CS;
   return (
@@ -1958,6 +1998,7 @@ function MazeScene({
         catapultMode={!!catapultMode}
         focusVersion={focusVersion}
         touchUi={touchUi}
+        onTouchCameraForwardGrid={onTouchCameraForwardGrid}
       />
       {teleportMode && !!teleportOptions?.length && (
         <TeleportTargetMarkers
@@ -2264,6 +2305,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     touchUi = false,
     hideOverlayViewButtons = false,
     onRotateModeChange,
+    onTouchCameraForwardGrid,
   }: Props,
   ref: Ref<MazeIsoViewImperativeHandle>,
 ) {
@@ -2429,6 +2471,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           miniMonsters={miniMonsters}
           fogIntensityMap={fogIntensityMap}
           touchUi={touchUi}
+          onTouchCameraForwardGrid={onTouchCameraForwardGrid}
         />
       </Canvas>
     </div>
