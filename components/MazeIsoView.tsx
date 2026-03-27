@@ -1116,6 +1116,8 @@ function CameraController({
     dy: Math.abs(facingDx) + Math.abs(facingDy) > 0 ? Math.sign(facingDy) : 1,
   });
   const lastOrientRef = useRef<{ g: number; b: number } | null>(null);
+  /** One-time snap so touch sessions start behind the pawn (Canvas default camera is a fixed diagonal). */
+  const touchCameraBootstrappedRef = useRef(false);
 
   const teleportLikeFraming = teleportMode || catapultMode;
 
@@ -1158,6 +1160,7 @@ function CameraController({
     };
     const onMouseUp = () => { dragRef.current = null; };
     const onWheel = () => {
+      if (touchUi) return;
       const ctrl = controlsRef.current;
       if (!ctrl) return;
       const target = ctrl.target;
@@ -1165,20 +1168,22 @@ function CameraController({
       manualOffsetRef.current = camera.position.clone().sub(target);
     };
 
+    /** Touch UI: one-finger drag on the canvas adjusts orbit (same as rotate mode) without tapping Rotate. */
     const onTouchStart = (e: TouchEvent) => {
-      if (!rotateMode || touchUi === false) return;
+      if (!touchUi) return;
       if (e.touches.length !== 1) return;
       e.preventDefault();
       dragRef.current = { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY };
     };
     const onTouchMove = (e: TouchEvent) => {
-      if (!rotateMode || !dragRef.current || e.touches.length !== 1) return;
+      if (!touchUi || !dragRef.current || e.touches.length !== 1) return;
       e.preventDefault();
       const t = e.touches[0]!;
       const dx = t.clientX - dragRef.current.x;
       const dy = t.clientY - dragRef.current.y;
       dragRef.current = { x: t.clientX, y: t.clientY };
-      applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
+      /* Drag up → tilt toward the pawn; drag down → pull back (screen coords: y grows downward). */
+      applyManualOrbitFromDelta(camera, controlsRef, dx, -dy, hasManualCameraRef, manualOffsetRef);
     };
     const onTouchEnd = () => {
       if (touchUi) dragRef.current = null;
@@ -1283,6 +1288,21 @@ function CameraController({
         ? manualOffsetRef.current.clone()
         : autoOffset.clone();
 
+    if (
+      touchUi &&
+      !touchCameraBootstrappedRef.current &&
+      !hasManualCameraRef.current &&
+      manualOffsetRef.current == null &&
+      !teleportLikeFraming
+    ) {
+      touchCameraBootstrappedRef.current = true;
+      camera.position.copy(autoCameraPos);
+      ctrl.target.copy(desiredTarget);
+      ctrl.update();
+      prevPlayerPosRef.current = { x: playerX, y: playerY };
+      return;
+    }
+
     const prevPos = prevPlayerPosRef.current;
     const movedFar = Math.hypot(playerX - prevPos.x, playerY - prevPos.y) > 1.01;
     const facingNow = { dx: Math.sign(facingDx), dy: Math.sign(facingDy) };
@@ -1299,6 +1319,7 @@ function CameraController({
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       transitionBlendRef.current = 0;
+      touchCameraBootstrappedRef.current = true;
       camera.position.copy(autoCameraPos);
       ctrl.target.copy(desiredTarget);
       ctrl.update();

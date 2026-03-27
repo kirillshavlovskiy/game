@@ -71,6 +71,8 @@ import {
   useState,
   type Dispatch,
   type MutableRefObject,
+  type PointerEvent as ReactPointerEvent,
+  type Ref,
   type SetStateAction,
 } from "react";
 import { flushSync } from "react-dom";
@@ -289,9 +291,11 @@ const ISO_IMMERSIVE_Z = 10000;
 const ISO_IMMERSIVE_HUD_Z = 10050;
 /** Victory / game-over — above immersive 3D, movement dice, combat, and settings so it is never hidden. */
 const GAME_OVER_OVERLAY_Z = 10200;
-/** Full-screen 3D HUD: circular move ring + bottom sheet offset */
-const ISO_HUD_MOVE_RING_PX = 132;
-const ISO_HUD_DIR_BTN_PX = 40;
+/** Full-screen 3D HUD: circular minimap + joystick (fits both in one disc) */
+const ISO_HUD_MOVE_RING_PX = 196;
+const ISO_HUD_JOYSTICK_PAD_PX = 112;
+const ISO_HUD_KNOB_MAX_PX = 36;
+const MOVE_KNOB_REPEAT_MS = 220;
 /** Mobile 3D (non-immersive): fixed WebGL layer; header / zoom strip / docks use higher z-index. */
 const MOBILE_ISO_CANVAS_Z = 90;
 
@@ -617,6 +621,7 @@ function IsoDockGridMiniMap({
   setIsoMiniMapZoom,
   isoMiniMapPinchStartRef,
   onOpenGrid,
+  clipDiameter,
 }: {
   lab: Labyrinth;
   currentPlayer: number;
@@ -627,9 +632,15 @@ function IsoDockGridMiniMap({
   setIsoMiniMapZoom: Dispatch<SetStateAction<number>>;
   isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
   onOpenGrid: () => void;
+  /** Square size; circular clip applied by parent. Overrides default 140px height. */
+  clipDiameter?: number;
 }) {
-  const miniCellBase = Math.max(3, Math.min(10, Math.floor(Math.min(180 / lab.width, 120 / lab.height))));
-  const miniCell = Math.max(3, Math.min(22, Math.round(miniCellBase * isoMiniMapZoom)));
+  const boxInner = clipDiameter != null ? clipDiameter - 14 : null;
+  const miniCellBase =
+    boxInner != null
+      ? Math.max(2, Math.min(10, Math.floor(Math.min(boxInner / lab.width, boxInner / lab.height))))
+      : Math.max(3, Math.min(10, Math.floor(Math.min(180 / lab.width, 120 / lab.height))));
+  const miniCell = Math.max(clipDiameter != null ? 2 : 3, Math.min(22, Math.round(miniCellBase * isoMiniMapZoom)));
   const activeFacing = playerFacing[currentPlayer] ?? { dx: 0, dy: 1 };
   const activeFacingLen = Math.hypot(activeFacing.dx, activeFacing.dy) || 1;
   const activeFacingAngleDeg =
@@ -683,9 +694,9 @@ function IsoDockGridMiniMap({
         isoMiniMapPinchStartRef.current = null;
       }}
       style={{
-        width: "100%",
-        height: 140,
-        borderRadius: 6,
+        width: clipDiameter != null ? clipDiameter : "100%",
+        height: clipDiameter != null ? clipDiameter : 140,
+        borderRadius: clipDiameter != null ? "50%" : 6,
         border: "1px solid #3a3a46",
         background: "#0f0f16",
         overflow: "hidden",
@@ -905,6 +916,256 @@ function IsoDockGridMiniMap({
             );
           })
         )}
+      </div>
+    </div>
+  );
+}
+
+/** Circular minimap (optional) + draggable center knob: direction from center moves the pawn; edges still open the 2D grid. */
+function CircularIsoMinimapMoveHud({
+  diameter,
+  showMinimap,
+  lab,
+  currentPlayer,
+  playerFacing,
+  fogIntensityMap,
+  playerCells,
+  isoMiniMapZoom,
+  setIsoMiniMapZoom,
+  isoMiniMapPinchStartRef,
+  onOpenGrid,
+  canMoveUp,
+  canMoveDown,
+  canMoveLeft,
+  canMoveRight,
+  relativeForward,
+  relativeBackward,
+  relativeLeft,
+  relativeRight,
+  doMove,
+  scrollToCurrentPlayerOnMap,
+  focusDisabled,
+  outerRef,
+}: {
+  diameter: number;
+  showMinimap: boolean;
+  lab: Labyrinth;
+  currentPlayer: number;
+  playerFacing: Record<number, { dx: number; dy: number }>;
+  fogIntensityMap: Map<string, number>;
+  playerCells: Record<string, number>;
+  isoMiniMapZoom: number;
+  setIsoMiniMapZoom: Dispatch<SetStateAction<number>>;
+  isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
+  onOpenGrid: () => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  canMoveLeft: boolean;
+  canMoveRight: boolean;
+  relativeForward: { dx: number; dy: number };
+  relativeBackward: { dx: number; dy: number };
+  relativeLeft: { dx: number; dy: number };
+  relativeRight: { dx: number; dy: number };
+  doMove: (dx: number, dy: number, jump: boolean) => void;
+  scrollToCurrentPlayerOnMap: () => void;
+  focusDisabled: boolean;
+  outerRef?: Ref<HTMLDivElement>;
+}) {
+  const padPx = Math.min(ISO_HUD_JOYSTICK_PAD_PX, Math.round(diameter * 0.58));
+  const knobMax = Math.min(ISO_HUD_KNOB_MAX_PX, Math.round(padPx * 0.4));
+  const [knob, setKnob] = useState({ x: 0, y: 0 });
+  const knobRef = useRef({ x: 0, y: 0 });
+  const dragActive = useRef(false);
+  const ptrStartRef = useRef<{ x: number; y: number } | null>(null);
+  const repeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearRepeat = useCallback(() => {
+    if (repeatRef.current != null) {
+      clearInterval(repeatRef.current);
+      repeatRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => clearRepeat(), [clearRepeat]);
+
+  const tryMoveFromKnob = useCallback(
+    (ox: number, oy: number) => {
+      const dead = 10;
+      if (Math.hypot(ox, oy) < dead) return;
+      let dx: number;
+      let dy: number;
+      let ok: boolean;
+      if (Math.abs(ox) >= Math.abs(oy)) {
+        dx = ox > 0 ? relativeRight.dx : relativeLeft.dx;
+        dy = ox > 0 ? relativeRight.dy : relativeLeft.dy;
+        ok = ox > 0 ? canMoveRight : canMoveLeft;
+      } else {
+        dx = oy < 0 ? relativeForward.dx : relativeBackward.dx;
+        dy = oy < 0 ? relativeForward.dy : relativeBackward.dy;
+        ok = oy < 0 ? canMoveUp : canMoveDown;
+      }
+      if (ok) doMove(dx, dy, false);
+    },
+    [
+      canMoveUp,
+      canMoveDown,
+      canMoveLeft,
+      canMoveRight,
+      relativeForward,
+      relativeBackward,
+      relativeLeft,
+      relativeRight,
+      doMove,
+    ],
+  );
+
+  const onJoystickPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragActive.current = true;
+    ptrStartRef.current = { x: e.clientX, y: e.clientY };
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    clearRepeat();
+  };
+
+  const onJoystickPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragActive.current) return;
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    let ox = e.clientX - cx;
+    let oy = e.clientY - cy;
+    const m = Math.hypot(ox, oy);
+    if (m > knobMax) {
+      ox = (ox / m) * knobMax;
+      oy = (oy / m) * knobMax;
+    }
+    knobRef.current = { x: ox, y: oy };
+    setKnob({ x: ox, y: oy });
+    tryMoveFromKnob(ox, oy);
+    if (repeatRef.current == null) {
+      repeatRef.current = setInterval(() => {
+        const k = knobRef.current;
+        tryMoveFromKnob(k.x, k.y);
+      }, MOVE_KNOB_REPEAT_MS);
+    }
+  };
+
+  const endJoystickPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const start = ptrStartRef.current;
+    const isShortDrag =
+      start != null && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 14;
+    const knobNearCenter = Math.hypot(knobRef.current.x, knobRef.current.y) < 12;
+    if (isShortDrag && knobNearCenter && !focusDisabled) {
+      scrollToCurrentPlayerOnMap();
+    }
+    dragActive.current = false;
+    ptrStartRef.current = null;
+    clearRepeat();
+    knobRef.current = { x: 0, y: 0 };
+    setKnob({ x: 0, y: 0 });
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return (
+    <div
+      ref={outerRef}
+      style={{
+        position: "relative",
+        width: diameter,
+        height: diameter,
+        flexShrink: 0,
+      }}
+    >
+      {showMinimap ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: "50%",
+            overflow: "hidden",
+            zIndex: 0,
+            pointerEvents: "auto",
+          }}
+        >
+          <IsoDockGridMiniMap
+            lab={lab}
+            currentPlayer={currentPlayer}
+            playerFacing={playerFacing}
+            fogIntensityMap={fogIntensityMap}
+            playerCells={playerCells}
+            isoMiniMapZoom={isoMiniMapZoom}
+            setIsoMiniMapZoom={setIsoMiniMapZoom}
+            isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+            onOpenGrid={onOpenGrid}
+            clipDiameter={diameter}
+          />
+        </div>
+      ) : (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: "50%",
+            zIndex: 0,
+            background:
+              "radial-gradient(circle at 50% 42%, rgba(48,56,68,0.95) 0%, rgba(18,20,30,0.98) 55%, rgba(8,9,14,1) 100%)",
+            border: "2px solid rgba(0,255,136,0.3)",
+            boxShadow: "0 6px 26px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      <div
+        role="presentation"
+        onPointerDown={onJoystickPointerDown}
+        onPointerMove={onJoystickPointerMove}
+        onPointerUp={endJoystickPointer}
+        onPointerCancel={endJoystickPointer}
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: "50%",
+          width: padPx,
+          height: padPx,
+          marginLeft: -padPx / 2,
+          marginTop: -padPx / 2,
+          borderRadius: "50%",
+          zIndex: 2,
+          touchAction: "none",
+          background: showMinimap
+            ? "radial-gradient(circle, rgba(10,12,20,0.88) 0%, rgba(10,12,20,0.35) 72%, transparent 100%)"
+            : "rgba(10,12,20,0.2)",
+          border: "1px solid rgba(0,255,136,0.22)",
+          boxSizing: "border-box",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            left: `calc(50% + ${knob.x}px)`,
+            top: `calc(50% + ${knob.y}px)`,
+            transform: "translate(-50%, -50%)",
+            width: 44,
+            height: 44,
+            borderRadius: "50%",
+            background: "#1a2e22",
+            border: "2px solid #00ff88",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+            boxShadow: "0 0 12px rgba(0,255,136,0.22)",
+          }}
+        >
+          <MovePadFocusTargetIcon size={22} />
+        </div>
       </div>
     </div>
   );
@@ -4601,10 +4862,18 @@ export default function LabyrinthGame() {
     if (wp) for (const [wx, wy] of wp) s.add(`${wx},${wy}`);
     return s;
   }, [lab?.webPositions]);
-  const canMoveUp = !moveDisabled && lab?.canMoveOnly(relativeForward.dx, relativeForward.dy, currentPlayer);
-  const canMoveLeft = !moveDisabled && lab?.canMoveOnly(relativeLeft.dx, relativeLeft.dy, currentPlayer);
-  const canMoveRight = !moveDisabled && lab?.canMoveOnly(relativeRight.dx, relativeRight.dy, currentPlayer);
-  const canMoveDown = !moveDisabled && lab?.canMoveOnly(relativeBackward.dx, relativeBackward.dy, currentPlayer);
+  const canMoveUp = Boolean(
+    !moveDisabled && lab?.canMoveOnly(relativeForward.dx, relativeForward.dy, currentPlayer),
+  );
+  const canMoveLeft = Boolean(
+    !moveDisabled && lab?.canMoveOnly(relativeLeft.dx, relativeLeft.dy, currentPlayer),
+  );
+  const canMoveRight = Boolean(
+    !moveDisabled && lab?.canMoveOnly(relativeRight.dx, relativeRight.dy, currentPlayer),
+  );
+  const canMoveDown = Boolean(
+    !moveDisabled && lab?.canMoveOnly(relativeBackward.dx, relativeBackward.dy, currentPlayer),
+  );
   const canJumpUp = !moveDisabled && lab?.canJumpInDirection(relativeForward.dx, relativeForward.dy, currentPlayer);
   const canJumpLeft = !moveDisabled && lab?.canJumpInDirection(relativeLeft.dx, relativeLeft.dy, currentPlayer);
   const canJumpRight = !moveDisabled && lab?.canJumpInDirection(relativeRight.dx, relativeRight.dy, currentPlayer);
@@ -4693,7 +4962,7 @@ export default function LabyrinthGame() {
 
   useEffect(() => {
     if (!catapultMode || !catapultPicker) return;
-    const onPointerUp = (e: PointerEvent) => {
+    const onPointerUp = (e: globalThis.PointerEvent) => {
       if (gamePausedRef.current) return;
       const d = catapultDragRef.current;
       catapultDragRef.current = null;
@@ -9265,32 +9534,6 @@ export default function LabyrinthGame() {
                         maxWidth: "min(210px, 40vw)",
                       }}
                     >
-                      <div
-                        style={{
-                          ...controlsSectionStyle,
-                          marginTop: 0,
-                          padding: 6,
-                          width: 194,
-                          flexShrink: 0,
-                          boxSizing: "border-box",
-                        }}
-                      >
-                        <div style={controlsSectionLabelStyle}>2D mini map</div>
-                        <IsoDockGridMiniMap
-                          lab={lab}
-                          currentPlayer={currentPlayer}
-                          playerFacing={playerFacing}
-                          fogIntensityMap={fogIntensityMap}
-                          playerCells={playerCells}
-                          isoMiniMapZoom={isoMiniMapZoom}
-                          setIsoMiniMapZoom={setIsoMiniMapZoom}
-                          isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-                          onOpenGrid={() => {
-                            if (!isMobile) void leaveIsoImmersiveOnly();
-                            switchToGridAndFocusCurrentPlayer();
-                          }}
-                        />
-                      </div>
                       {!(lab && isoImmersiveUi && !combatState) && (
                       <div
                         style={{
@@ -9420,145 +9663,36 @@ export default function LabyrinthGame() {
                         flexShrink: 0,
                       }}
                     >
-                      {showMoveGrid && (
-                        <div
-                          style={{
-                            position: "relative",
-                            width: ISO_HUD_MOVE_RING_PX,
-                            height: ISO_HUD_MOVE_RING_PX,
-                            borderRadius: "50%",
-                            background:
-                              "radial-gradient(circle at 50% 42%, rgba(48,56,68,0.95) 0%, rgba(18,20,30,0.98) 55%, rgba(8,9,14,1) 100%)",
-                            border: "2px solid rgba(0,255,136,0.3)",
-                            boxShadow: "0 6px 26px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)",
+                      {showMoveGrid && lab && (
+                        <CircularIsoMinimapMoveHud
+                          diameter={ISO_HUD_MOVE_RING_PX}
+                          showMinimap={mazeMapView === "iso"}
+                          lab={lab}
+                          currentPlayer={currentPlayer}
+                          playerFacing={playerFacing}
+                          fogIntensityMap={fogIntensityMap}
+                          playerCells={playerCells}
+                          isoMiniMapZoom={isoMiniMapZoom}
+                          setIsoMiniMapZoom={setIsoMiniMapZoom}
+                          isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                          onOpenGrid={() => {
+                            if (!isMobile) void leaveIsoImmersiveOnly();
+                            switchToGridAndFocusCurrentPlayer();
                           }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => doMove(relativeForward.dx, relativeForward.dy, false)}
-                            disabled={!canMoveUp}
-                            title="Forward"
-                            style={{
-                              position: "absolute",
-                              left: "50%",
-                              top: 6,
-                              transform: "translateX(-50%)",
-                              width: ISO_HUD_DIR_BTN_PX,
-                              height: ISO_HUD_DIR_BTN_PX,
-                              borderRadius: "50%",
-                              padding: 0,
-                              fontSize: "1.05rem",
-                              fontWeight: "bold",
-                              background: "linear-gradient(180deg, #343b4a 0%, #1e222c 100%)",
-                              color: "#00ff88",
-                              border: "2px solid rgba(0,255,136,0.35)",
-                              cursor: "pointer",
-                              opacity: canMoveUp ? 1 : 0.35,
-                            }}
-                          >
-                            ↑
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => doMove(relativeBackward.dx, relativeBackward.dy, false)}
-                            disabled={!canMoveDown}
-                            title="Back"
-                            style={{
-                              position: "absolute",
-                              left: "50%",
-                              bottom: 6,
-                              transform: "translateX(-50%)",
-                              width: ISO_HUD_DIR_BTN_PX,
-                              height: ISO_HUD_DIR_BTN_PX,
-                              borderRadius: "50%",
-                              padding: 0,
-                              fontSize: "1.05rem",
-                              fontWeight: "bold",
-                              background: "linear-gradient(180deg, #343b4a 0%, #1e222c 100%)",
-                              color: "#00ff88",
-                              border: "2px solid rgba(0,255,136,0.35)",
-                              cursor: "pointer",
-                              opacity: canMoveDown ? 1 : 0.35,
-                            }}
-                          >
-                            ↓
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => doMove(relativeLeft.dx, relativeLeft.dy, false)}
-                            disabled={!canMoveLeft}
-                            title="Left"
-                            style={{
-                              position: "absolute",
-                              left: 6,
-                              top: "50%",
-                              transform: "translateY(-50%)",
-                              width: ISO_HUD_DIR_BTN_PX,
-                              height: ISO_HUD_DIR_BTN_PX,
-                              borderRadius: "50%",
-                              padding: 0,
-                              fontSize: "1.05rem",
-                              fontWeight: "bold",
-                              background: "linear-gradient(180deg, #343b4a 0%, #1e222c 100%)",
-                              color: "#00ff88",
-                              border: "2px solid rgba(0,255,136,0.35)",
-                              cursor: "pointer",
-                              opacity: canMoveLeft ? 1 : 0.35,
-                            }}
-                          >
-                            ←
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => doMove(relativeRight.dx, relativeRight.dy, false)}
-                            disabled={!canMoveRight}
-                            title="Right"
-                            style={{
-                              position: "absolute",
-                              right: 6,
-                              top: "50%",
-                              transform: "translateY(-50%)",
-                              width: ISO_HUD_DIR_BTN_PX,
-                              height: ISO_HUD_DIR_BTN_PX,
-                              borderRadius: "50%",
-                              padding: 0,
-                              fontSize: "1.05rem",
-                              fontWeight: "bold",
-                              background: "linear-gradient(180deg, #343b4a 0%, #1e222c 100%)",
-                              color: "#00ff88",
-                              border: "2px solid rgba(0,255,136,0.35)",
-                              cursor: "pointer",
-                              opacity: canMoveRight ? 1 : 0.35,
-                            }}
-                          >
-                            →
-                          </button>
-                          <button
-                            type="button"
-                            onClick={scrollToCurrentPlayerOnMap}
-                            disabled={winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)}
-                            title="Focus pawn (grid map)"
-                            style={{
-                              position: "absolute",
-                              left: "50%",
-                              top: "50%",
-                              transform: "translate(-50%, -50%)",
-                              width: 46,
-                              height: 46,
-                              borderRadius: "50%",
-                              padding: 0,
-                              background: "#1a2e22",
-                              border: "2px solid #00ff88",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              cursor: "pointer",
-                              boxShadow: "0 0 12px rgba(0,255,136,0.25)",
-                            }}
-                          >
-                            <MovePadFocusTargetIcon size={22} />
-                          </button>
-                        </div>
+                          canMoveUp={canMoveUp}
+                          canMoveDown={canMoveDown}
+                          canMoveLeft={canMoveLeft}
+                          canMoveRight={canMoveRight}
+                          relativeForward={relativeForward}
+                          relativeBackward={relativeBackward}
+                          relativeLeft={relativeLeft}
+                          relativeRight={relativeRight}
+                          doMove={doMove}
+                          scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+                          focusDisabled={
+                            winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)
+                          }
+                        />
                       )}
                     </div>
                   </div>
@@ -10322,62 +10456,52 @@ export default function LabyrinthGame() {
               <div style={{ color: "#666", fontSize: "0.65rem", padding: "4px 0" }}>No items</div>
             )}
           </div>
-          {showMoveGrid && (
-            <div
-              ref={mobileDockExpandedMovePadRef}
-              style={{
-                position: "fixed",
-                right: "max(8px, env(safe-area-inset-right, 0px))",
-                bottom: "max(36px, calc(20px + env(safe-area-inset-bottom, 0px)))",
-                zIndex: 114,
-                padding: "8px 10px",
-                borderRadius: 10,
-                background: "rgba(26,26,36,0.92)",
-                border: "1px solid #444",
-                boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
-                pointerEvents: "auto",
-              }}
-            >
-              <div
-                className="move-buttons"
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: `repeat(3, ${MOBILE_MOVE_PAD_CELL_PX}px)`,
-                  gridTemplateRows: `repeat(3, ${MOBILE_MOVE_PAD_CELL_PX}px)`,
-                  gap: 2,
-                  margin: "0 auto",
-                }}
-              >
-                <button type="button" onClick={() => doMove(relativeForward.dx, relativeForward.dy, false)} disabled={!canMoveUp} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 2, gridRow: 1, fontSize: "1rem" }} title="Forward">↑</button>
-                <button type="button" onClick={() => doMove(relativeLeft.dx, relativeLeft.dy, false)} disabled={!canMoveLeft} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 1, gridRow: 2, fontSize: "1rem" }} title="Left">←</button>
-                <button
-                  type="button"
-                  onClick={scrollToCurrentPlayerOnMap}
-                  disabled={winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)}
-                  style={{
-                    ...moveButtonStyle,
-                    width: MOBILE_MOVE_PAD_CELL_PX,
-                    height: MOBILE_MOVE_PAD_CELL_PX,
-                    minWidth: MOBILE_MOVE_PAD_CELL_PX,
-                    minHeight: MOBILE_MOVE_PAD_CELL_PX,
-                    gridColumn: 2,
-                    gridRow: 2,
-                    background: "#1a2e22",
-                    border: "1px solid #00ff88",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                  title="Center map on your pawn"
-                >
-                  <MovePadFocusTargetIcon size={Math.max(16, Math.round(MOBILE_MOVE_PAD_CELL_PX * 0.5))} />
-                </button>
-                <button type="button" onClick={() => doMove(relativeRight.dx, relativeRight.dy, false)} disabled={!canMoveRight} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 3, gridRow: 2, fontSize: "1rem" }} title="Right">→</button>
-                <button type="button" onClick={() => doMove(relativeBackward.dx, relativeBackward.dy, false)} disabled={!canMoveDown} style={{ ...moveButtonStyle, width: MOBILE_MOVE_PAD_CELL_PX, height: MOBILE_MOVE_PAD_CELL_PX, minWidth: MOBILE_MOVE_PAD_CELL_PX, minHeight: MOBILE_MOVE_PAD_CELL_PX, gridColumn: 2, gridRow: 3, fontSize: "1rem" }} title="Back">↓</button>
-              </div>
-            </div>
-          )}
         </>
+      )}
+
+      {isMobile && showMoveGrid && lab && !isoImmersiveUi && (
+        <div
+          style={{
+            position: "fixed",
+            right: "max(8px, env(safe-area-inset-right, 0px))",
+            bottom: "max(36px, calc(20px + env(safe-area-inset-bottom, 0px)))",
+            zIndex: 114,
+            padding: "8px 10px",
+            borderRadius: 10,
+            background: "rgba(26,26,36,0.92)",
+            border: "1px solid #444",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+            pointerEvents: "auto",
+          }}
+        >
+          <CircularIsoMinimapMoveHud
+            outerRef={mobileDockExpandedMovePadRef}
+            diameter={Math.min(ISO_HUD_MOVE_RING_PX, 168)}
+            showMinimap={mazeMapView === "iso"}
+            lab={lab}
+            currentPlayer={currentPlayer}
+            playerFacing={playerFacing}
+            fogIntensityMap={fogIntensityMap}
+            playerCells={playerCells}
+            isoMiniMapZoom={isoMiniMapZoom}
+            setIsoMiniMapZoom={setIsoMiniMapZoom}
+            isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+            onOpenGrid={switchToGridAndFocusCurrentPlayer}
+            canMoveUp={canMoveUp}
+            canMoveDown={canMoveDown}
+            canMoveLeft={canMoveLeft}
+            canMoveRight={canMoveRight}
+            relativeForward={relativeForward}
+            relativeBackward={relativeBackward}
+            relativeLeft={relativeLeft}
+            relativeRight={relativeRight}
+            doMove={doMove}
+            scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+            focusDisabled={
+              winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+            }
+          />
+        </div>
       )}
 
       <div
@@ -10767,110 +10891,44 @@ export default function LabyrinthGame() {
                       alignSelf: "flex-start",
                     }}
                   >
-                    {lab && mazeMapView === "iso" && (
-                      <div
-                        style={{
-                          ...controlsSectionStyle,
-                          marginTop: 0,
-                          padding: 6,
-                          width: 194,
-                          flexShrink: 0,
-                        }}
-                      >
-                        <div style={controlsSectionLabelStyle}>2D mini map</div>
-                        <IsoDockGridMiniMap
-                          lab={lab}
-                          currentPlayer={currentPlayer}
-                          playerFacing={playerFacing}
-                          fogIntensityMap={fogIntensityMap}
-                          playerCells={playerCells}
-                          isoMiniMapZoom={isoMiniMapZoom}
-                          setIsoMiniMapZoom={setIsoMiniMapZoom}
-                          isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-                          onOpenGrid={switchToGridAndFocusCurrentPlayer}
-                        />
+                    <div
+                      style={{
+                        ...controlsSectionStyle,
+                        marginTop: 0,
+                        padding: 6,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <div style={controlsSectionLabelStyle}>
+                        {mazeMapView === "iso" ? "2D mini map & move" : "Move"}
                       </div>
-                    )}
-                    {showMoveGrid && (
-                      <div
-                        style={{
-                          ...controlsSectionStyle,
-                          marginTop: 0,
-                          padding: 6,
-                          width: 134,
-                          flexShrink: 0,
-                        }}
-                      >
-                        <div style={controlsSectionLabelStyle}>Move</div>
-                        <div
-                          className="move-buttons"
-                          style={{
-                            ...moveButtonsStyle,
-                            display: "grid",
-                            gridTemplateColumns: "repeat(3, 2.5rem)",
-                            gridTemplateRows: "repeat(3, 2.5rem)",
-                            gap: 2,
-                            alignSelf: "center",
-                            margin: "0.25rem auto 0",
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => doMove(relativeForward.dx, relativeForward.dy, false)}
-                            disabled={!canMoveUp}
-                            style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 1 }}
-                            title="Move forward"
-                          >
-                            ↑
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => doMove(relativeLeft.dx, relativeLeft.dy, false)}
-                            disabled={!canMoveLeft}
-                            style={{ ...moveButtonStyle, gridColumn: 1, gridRow: 2 }}
-                            title="Move left"
-                          >
-                            ←
-                          </button>
-                          <button
-                            type="button"
-                            onClick={scrollToCurrentPlayerOnMap}
-                            disabled={winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)}
-                            style={{
-                              ...moveButtonStyle,
-                              gridColumn: 2,
-                              gridRow: 2,
-                              background: "#1a2e22",
-                              border: "1px solid #00ff88",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                            title="Center map on your pawn"
-                          >
-                            <MovePadFocusTargetIcon size={20} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => doMove(relativeRight.dx, relativeRight.dy, false)}
-                            disabled={!canMoveRight}
-                            style={{ ...moveButtonStyle, gridColumn: 3, gridRow: 2 }}
-                            title="Move right"
-                          >
-                            →
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => doMove(relativeBackward.dx, relativeBackward.dy, false)}
-                            disabled={!canMoveDown}
-                            style={{ ...moveButtonStyle, gridColumn: 2, gridRow: 3 }}
-                            title="Move back"
-                          >
-                            ↓
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                      <CircularIsoMinimapMoveHud
+                        diameter={ISO_HUD_MOVE_RING_PX}
+                        showMinimap={!!lab && mazeMapView === "iso"}
+                        lab={lab!}
+                        currentPlayer={currentPlayer}
+                        playerFacing={playerFacing}
+                        fogIntensityMap={fogIntensityMap}
+                        playerCells={playerCells}
+                        isoMiniMapZoom={isoMiniMapZoom}
+                        setIsoMiniMapZoom={setIsoMiniMapZoom}
+                        isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                        onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                        canMoveUp={canMoveUp}
+                        canMoveDown={canMoveDown}
+                        canMoveLeft={canMoveLeft}
+                        canMoveRight={canMoveRight}
+                        relativeForward={relativeForward}
+                        relativeBackward={relativeBackward}
+                        relativeLeft={relativeLeft}
+                        relativeRight={relativeRight}
+                        doMove={doMove}
+                        scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+                        focusDisabled={
+                          winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+                        }
+                      />
+                    </div>
                   </div>
                 ) : null}
         </div>
