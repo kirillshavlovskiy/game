@@ -304,8 +304,8 @@ const ISO_HUD_KNOB_ICON_PX = Math.round(22 / 1.5);
 const MOVE_KNOB_DEAD_PX = Math.max(6, Math.round(10 / 1.5));
 /** Legacy inner ring radius when `onJoystickLookGrid` is passed (unused in move+map HUD). */
 const MOVE_KNOB_LOOK_RING_OUTER_PX = Math.max(12, Math.round(26 / 1.5));
-/** Full deflection → fastest step repeat. */
-const MOVE_KNOB_REPEAT_MS_FAST = 88;
+/** Full deflection → fastest step repeat (75% slower max rate than legacy 88ms ≈ 4× interval). */
+const MOVE_KNOB_REPEAT_MS_FAST = 352;
 /** Just past dead zone → slowest repeat. */
 const MOVE_KNOB_REPEAT_MS_SLOW = 400;
 /** Mobile 3D (non-immersive): fixed WebGL layer; header / zoom strip / docks use higher z-index. */
