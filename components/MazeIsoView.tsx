@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1224,9 +1225,26 @@ function CameraController({
     return () => window.removeEventListener("deviceorientation", onOrient, true);
   }, [touchUi, rotateMode, camera]);
 
+  /** Touch play: turn off OrbitControls entirely so one/two-finger drags never pan, rotate, or pinch-zoom the camera. */
+  useLayoutEffect(() => {
+    const apply = () => {
+      const c = controlsRef.current;
+      if (!c) return false;
+      c.enabled = !touchUi;
+      return true;
+    };
+    if (apply()) return undefined;
+    const id = requestAnimationFrame(() => {
+      apply();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [touchUi]);
+
   useFrame(() => {
     const ctrl = controlsRef.current;
     if (!ctrl) return;
+    const wantEnabled = !touchUi;
+    if (ctrl.enabled !== wantEnabled) ctrl.enabled = wantEnabled;
 
     const isWalkable = (cx: number, cy: number) =>
       cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && grid[cy]?.[cx] !== WALL;
@@ -1335,6 +1353,7 @@ function CameraController({
       enableDamping={false}
       enableRotate={false}
       enablePan={!touchUi}
+      enableZoom={!touchUi}
       minDistance={2.2}
       maxDistance={180}
       zoomSpeed={1.6}
