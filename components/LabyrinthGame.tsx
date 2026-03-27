@@ -244,7 +244,10 @@ function releaseDraculaTelegraphIfPending(lab: Labyrinth, mi: number): void {
   }
 }
 
-/** ↑/↓/←/→ and WASD as forward/back/left/right from the pawn’s last move facing (same as marker + move pad highlights). */
+/**
+ * ↑/↓/←/→ and WASD / joystick: forward/back/left/right from the walk basis (`playerFacing`).
+ * On 3D iso that basis tracks camera aim; strafe moves no longer overwrite it (see `doMove` `updateFacing`).
+ */
 function getRelativeDirectionsFromFacing(
   playerIndex: number,
   facingMap: Record<number, { dx: number; dy: number }>
@@ -292,16 +295,15 @@ const ISO_IMMERSIVE_HUD_Z = 10050;
 /** Victory / game-over — above immersive 3D, movement dice, combat, and settings so it is never hidden. */
 const GAME_OVER_OVERLAY_Z = 10200;
 /** Full-screen 3D HUD: circular minimap + joystick (fits both in one disc) */
-const ISO_HUD_MOVE_RING_PX = 196;
-const ISO_HUD_JOYSTICK_PAD_PX = 112;
-const ISO_HUD_KNOB_MAX_PX = 36;
+const ISO_HUD_MOVE_RING_PX = Math.round(196 / 1.5);
+const ISO_HUD_JOYSTICK_PAD_PX = Math.round(112 / 1.5);
+const ISO_HUD_KNOB_MAX_PX = Math.round(36 / 1.5);
+const ISO_HUD_KNOB_HANDLE_PX = Math.round(44 / 1.5);
+const ISO_HUD_KNOB_ICON_PX = Math.round(22 / 1.5);
 /** Joystick: no move below this radius (px). */
-const MOVE_KNOB_DEAD_PX = 10;
-/**
- * Outside dead zone, inside this radius (clamped vs knob travel): orbit ring — adjust facing only, no tile steps.
- * Pushing past this ring steps tiles; repeat interval scales from slow → fast across the outer annulus.
- */
-const MOVE_KNOB_LOOK_RING_OUTER_PX = 26;
+const MOVE_KNOB_DEAD_PX = Math.max(6, Math.round(10 / 1.5));
+/** Legacy inner ring radius when `onJoystickLookGrid` is passed (unused in move+map HUD). */
+const MOVE_KNOB_LOOK_RING_OUTER_PX = Math.max(12, Math.round(26 / 1.5));
 /** Full deflection → fastest step repeat. */
 const MOVE_KNOB_REPEAT_MS_FAST = 88;
 /** Just past dead zone → slowest repeat. */
@@ -632,6 +634,8 @@ function IsoDockGridMiniMap({
   isoMiniMapPinchStartRef,
   onOpenGrid,
   clipDiameter,
+  /** Move-HUD disc: player stays centered; map rotates so facing points up (no separate ▲ rotation). */
+  playerCenteredRotate = false,
 }: {
   lab: Labyrinth;
   currentPlayer: number;
@@ -644,6 +648,7 @@ function IsoDockGridMiniMap({
   onOpenGrid: () => void;
   /** Square size; circular clip applied by parent. Overrides default 140px height. */
   clipDiameter?: number;
+  playerCenteredRotate?: boolean;
 }) {
   const boxInner = clipDiameter != null ? clipDiameter - 14 : null;
   const miniCellBase =
@@ -655,6 +660,153 @@ function IsoDockGridMiniMap({
   const activeFacingLen = Math.hypot(activeFacing.dx, activeFacing.dy) || 1;
   const activeFacingAngleDeg =
     (Math.atan2(activeFacing.dy / activeFacingLen, activeFacing.dx / activeFacingLen) * 180) / Math.PI + 90;
+  const curPl = lab.players[currentPlayer];
+  const playerGX = curPl?.x ?? 0;
+  const playerGY = curPl?.y ?? 0;
+  const gridW = lab.width * miniCell;
+  const gridH = lab.height * miniCell;
+  const playerCenterPx = (playerGX + 0.5) * miniCell;
+  const playerCenterPy = (playerGY + 0.5) * miniCell;
+
+  const renderMiniMapGrid = () => (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: `repeat(${lab.width}, ${miniCell}px)`,
+        gridTemplateRows: `repeat(${lab.height}, ${miniCell}px)`,
+        position: "relative",
+        boxShadow: "0 0 0 1px rgba(255,255,255,0.08)",
+      }}
+    >
+      {Array.from({ length: lab.height }).map((_, y) =>
+        Array.from({ length: lab.width }).map((_, x) => {
+          const cellType = lab.grid[y]?.[x] ?? "#";
+          const isWallCell = cellType === "#";
+          const rawCellFog = fogIntensityMap.get(`${x},${y}`) ?? 0;
+          const walkableForFloor = isWalkable(cellType);
+          const adjacentWallFog = walkableForFloor
+            ? adjacentWallFogFromIntensityMap(lab, x, y, fogIntensityMap)
+            : undefined;
+          const wallLightCount = walkableForFloor ? pathFloorWallLightCount(lab, x, y, adjacentWallFog) : 0;
+          const cellFogVisual = walkableForFloor ? pathFogVisualIntensity(rawCellFog, wallLightCount) : rawCellFog;
+          const corridorLightDeg = mazeCorridorLightAngleDeg(lab, x, y);
+          const bg: React.CSSProperties = MAZE_LITE_TEXTURES
+            ? classicFlatMazeCellBackground(isWallCell ? "cell wall" : "cell path", { isTeleportOption: false })
+            : isWallCell
+              ? wallStyleWithOptionalSconce(miniCell, x, y, lab)
+              : basePathStyle(miniCell, corridorLightDeg, lab, x, y, rawCellFog, adjacentWallFog);
+          const monster = lab.monsters.find((m) => m.x === x && m.y === y);
+          const pi = playerCells[`${x},${y}`];
+          const showPlayer = pi !== undefined && !lab.eliminatedPlayers.has(pi);
+          const isHiddenCell = lab.hiddenCells.has(`${x},${y}`);
+          const showArtifactDot =
+            !isWallCell &&
+            !isHiddenCell &&
+            rawCellFog <= 0 &&
+            isArtifactCell(cellType) &&
+            !monster &&
+            !showPlayer;
+          return (
+            <div
+              key={`mini-${x}-${y}`}
+              style={{
+                width: miniCell,
+                height: miniCell,
+                position: "relative",
+                ...bg,
+              }}
+            >
+              {monster && (
+                <span
+                  style={{
+                    position: "absolute",
+                    left: "50%",
+                    top: "50%",
+                    transform: "translate(-50%, -50%)",
+                    width: Math.max(2, miniCell * 0.36),
+                    height: Math.max(2, miniCell * 0.36),
+                    borderRadius: "50%",
+                    background: "#ff4f4f",
+                    boxShadow: "0 0 4px rgba(255,80,80,0.7)",
+                    zIndex: 3,
+                  }}
+                />
+              )}
+              {showPlayer && (
+                <span
+                  style={{
+                    position: "absolute",
+                    left: "50%",
+                    top: "50%",
+                    transform: "translate(-50%, -50%)",
+                    width: Math.max(2, miniCell * 0.44),
+                    height: Math.max(2, miniCell * 0.44),
+                    borderRadius: "50%",
+                    background: pi === currentPlayer ? "#00ff88" : "#6fb8ff",
+                    boxShadow:
+                      pi === currentPlayer
+                        ? "0 0 5px rgba(0,255,136,0.75)"
+                        : "0 0 4px rgba(100,180,255,0.55)",
+                    zIndex: 4,
+                  }}
+                />
+              )}
+              {showPlayer && pi === currentPlayer && (
+                <span
+                  style={{
+                    position: "absolute",
+                    left: "50%",
+                    top: "50%",
+                    transform: playerCenteredRotate
+                      ? "translate(-50%, -50%)"
+                      : `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
+                    color: "#062214",
+                    fontSize: `${Math.max(7, miniCell * 0.85)}px`,
+                    fontWeight: 900,
+                    lineHeight: 1,
+                    textShadow: "0 0 2px rgba(0,255,136,0.95)",
+                    pointerEvents: "none",
+                    zIndex: 5,
+                  }}
+                  title="Active player facing direction"
+                >
+                  ▲
+                </span>
+              )}
+              {showArtifactDot && (
+                <span
+                  style={{
+                    position: "absolute",
+                    left: "50%",
+                    top: "50%",
+                    transform: "translate(-50%, -50%)",
+                    width: Math.max(2, miniCell * 0.3),
+                    height: Math.max(2, miniCell * 0.3),
+                    borderRadius: "50%",
+                    background: "#ffd166",
+                    boxShadow: "0 0 4px rgba(255,209,102,0.8)",
+                    zIndex: 2,
+                  }}
+                />
+              )}
+              {cellFogVisual > 0 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    background: `rgba(3, 3, 8, ${Math.min(0.95, 0.1 + cellFogVisual * 0.85)})`,
+                    pointerEvents: "none",
+                    zIndex: 1,
+                  }}
+                />
+              )}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+
   return (
     <div
       role="button"
@@ -793,140 +945,34 @@ function IsoDockGridMiniMap({
           +
         </button>
       </div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: `repeat(${lab.width}, ${miniCell}px)`,
-          gridTemplateRows: `repeat(${lab.height}, ${miniCell}px)`,
-          position: "relative",
-          boxShadow: "0 0 0 1px rgba(255,255,255,0.08)",
-        }}
-      >
-        {Array.from({ length: lab.height }).map((_, y) =>
-          Array.from({ length: lab.width }).map((_, x) => {
-            const cellType = lab.grid[y]?.[x] ?? "#";
-            const isWallCell = cellType === "#";
-            const rawCellFog = fogIntensityMap.get(`${x},${y}`) ?? 0;
-            const walkableForFloor = isWalkable(cellType);
-            const adjacentWallFog = walkableForFloor
-              ? adjacentWallFogFromIntensityMap(lab, x, y, fogIntensityMap)
-              : undefined;
-            const wallLightCount = walkableForFloor ? pathFloorWallLightCount(lab, x, y, adjacentWallFog) : 0;
-            const cellFogVisual = walkableForFloor ? pathFogVisualIntensity(rawCellFog, wallLightCount) : rawCellFog;
-            const corridorLightDeg = mazeCorridorLightAngleDeg(lab, x, y);
-            const bg: React.CSSProperties = MAZE_LITE_TEXTURES
-              ? classicFlatMazeCellBackground(isWallCell ? "cell wall" : "cell path", { isTeleportOption: false })
-              : isWallCell
-                ? wallStyleWithOptionalSconce(miniCell, x, y, lab)
-                : basePathStyle(miniCell, corridorLightDeg, lab, x, y, rawCellFog, adjacentWallFog);
-            const monster = lab.monsters.find((m) => m.x === x && m.y === y);
-            const pi = playerCells[`${x},${y}`];
-            const showPlayer = pi !== undefined && !lab.eliminatedPlayers.has(pi);
-            const isHiddenCell = lab.hiddenCells.has(`${x},${y}`);
-            const showArtifactDot =
-              !isWallCell &&
-              !isHiddenCell &&
-              rawCellFog <= 0 &&
-              isArtifactCell(cellType) &&
-              !monster &&
-              !showPlayer;
-            return (
-              <div
-                key={`mini-${x}-${y}`}
-                style={{
-                  width: miniCell,
-                  height: miniCell,
-                  position: "relative",
-                  ...bg,
-                }}
-              >
-                {monster && (
-                  <span
-                    style={{
-                      position: "absolute",
-                      left: "50%",
-                      top: "50%",
-                      transform: "translate(-50%, -50%)",
-                      width: Math.max(2, miniCell * 0.36),
-                      height: Math.max(2, miniCell * 0.36),
-                      borderRadius: "50%",
-                      background: "#ff4f4f",
-                      boxShadow: "0 0 4px rgba(255,80,80,0.7)",
-                      zIndex: 3,
-                    }}
-                  />
-                )}
-                {showPlayer && (
-                  <span
-                    style={{
-                      position: "absolute",
-                      left: "50%",
-                      top: "50%",
-                      transform: "translate(-50%, -50%)",
-                      width: Math.max(2, miniCell * 0.44),
-                      height: Math.max(2, miniCell * 0.44),
-                      borderRadius: "50%",
-                      background: pi === currentPlayer ? "#00ff88" : "#6fb8ff",
-                      boxShadow:
-                        pi === currentPlayer
-                          ? "0 0 5px rgba(0,255,136,0.75)"
-                          : "0 0 4px rgba(100,180,255,0.55)",
-                      zIndex: 4,
-                    }}
-                  />
-                )}
-                {showPlayer && pi === currentPlayer && (
-                  <span
-                    style={{
-                      position: "absolute",
-                      left: "50%",
-                      top: "50%",
-                      transform: `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
-                      color: "#062214",
-                      fontSize: `${Math.max(7, miniCell * 0.85)}px`,
-                      fontWeight: 900,
-                      lineHeight: 1,
-                      textShadow: "0 0 2px rgba(0,255,136,0.95)",
-                      pointerEvents: "none",
-                      zIndex: 5,
-                    }}
-                    title="Active player facing direction"
-                  >
-                    ▲
-                  </span>
-                )}
-                {showArtifactDot && (
-                  <span
-                    style={{
-                      position: "absolute",
-                      left: "50%",
-                      top: "50%",
-                      transform: "translate(-50%, -50%)",
-                      width: Math.max(2, miniCell * 0.3),
-                      height: Math.max(2, miniCell * 0.3),
-                      borderRadius: "50%",
-                      background: "#ffd166",
-                      boxShadow: "0 0 4px rgba(255,209,102,0.8)",
-                      zIndex: 2,
-                    }}
-                  />
-                )}
-                {cellFogVisual > 0 && (
-                  <span
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      background: `rgba(3, 3, 8, ${Math.min(0.95, 0.1 + cellFogVisual * 0.85)})`,
-                      pointerEvents: "none",
-                      zIndex: 1,
-                    }}
-                  />
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
+      {playerCenteredRotate ? (
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: `calc(50% - ${playerCenterPx}px)`,
+              top: `calc(50% - ${playerCenterPy}px)`,
+              width: gridW,
+              height: gridH,
+              transform: `rotate(${-activeFacingAngleDeg}deg)`,
+              transformOrigin: `${playerCenterPx}px ${playerCenterPy}px`,
+            }}
+          >
+            {renderMiniMapGrid()}
+          </div>
+        </div>
+      ) : (
+        renderMiniMapGrid()
+      )}
     </div>
   );
 }
@@ -1278,8 +1324,8 @@ function IsoHudJoystickMoveRing({
           left: `calc(50% + ${knob.x}px)`,
           top: `calc(50% + ${knob.y}px)`,
           transform: "translate(-50%, -50%)",
-          width: 44,
-          height: 44,
+          width: ISO_HUD_KNOB_HANDLE_PX,
+          height: ISO_HUD_KNOB_HANDLE_PX,
           borderRadius: "50%",
           background: "#1a2e22",
           border: "2px solid #00ff88",
@@ -1291,7 +1337,7 @@ function IsoHudJoystickMoveRing({
           zIndex: 2,
         }}
       >
-        <MovePadFocusTargetIcon size={22} />
+        <MovePadFocusTargetIcon size={ISO_HUD_KNOB_ICON_PX} />
       </div>
     </div>
   );
@@ -1345,7 +1391,6 @@ function CircularIsoMinimapMoveHud({
   scrollToCurrentPlayerOnMap,
   focusDisabled,
   outerRef,
-  onJoystickLookGrid,
 }: {
   diameter: number;
   showMinimap: boolean;
@@ -1370,7 +1415,6 @@ function CircularIsoMinimapMoveHud({
   scrollToCurrentPlayerOnMap: () => void;
   focusDisabled: boolean;
   outerRef?: Ref<HTMLDivElement>;
-  onJoystickLookGrid?: (dx: number, dy: number) => void;
 }) {
   return (
     <div
@@ -1404,6 +1448,7 @@ function CircularIsoMinimapMoveHud({
             isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
             onOpenGrid={onOpenGrid}
             clipDiameter={diameter}
+            playerCenteredRotate
           />
         </div>
       ) : null}
@@ -1419,10 +1464,9 @@ function CircularIsoMinimapMoveHud({
         relativeBackward={relativeBackward}
         relativeLeft={relativeLeft}
         relativeRight={relativeRight}
-        doMove={doMove}
+        doMove={doMoveStrafe}
         scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
         focusDisabled={focusDisabled}
-        onJoystickLookGrid={onJoystickLookGrid}
       />
     </div>
   );
@@ -4452,7 +4496,8 @@ export default function LabyrinthGame() {
   }, []);
 
   const doMove = useCallback(
-    (dx: number, dy: number, jumpOnly = false) => {
+    (dx: number, dy: number, jumpOnly = false, opts?: { updateFacing?: boolean }) => {
+      const updateFacing = opts?.updateFacing !== false;
       if (winner !== null || !lab) return;
       if (combatStateRef.current) {
         combatLog("doMove BLOCKED: combatStateRef.current is set");
@@ -4540,8 +4585,12 @@ export default function LabyrinthGame() {
         }
         return;
       }
-      if (dx !== 0 || dy !== 0) {
-        setPlayerFacing((prev) => ({ ...prev, [currentPlayer]: { dx, dy } }));
+      if (updateFacing && (dx !== 0 || dy !== 0)) {
+        setPlayerFacing((prev) => {
+          const next = { ...prev, [currentPlayer]: { dx, dy } };
+          playerFacingRef.current = next;
+          return next;
+        });
       }
       setSuppressMagicPortalUntilMove(false);
       expandDesktopControlsRef.current();
@@ -4846,6 +4895,12 @@ export default function LabyrinthGame() {
       releaseSinglePlayerEncounterShell,
       scheduleScrollCurrentPlayerCellAfterMove,
     ]
+  );
+
+  /** Keyboard / on-screen joystick: grid steps without rotating the walk basis or 3D marker facing. */
+  const doMoveStrafe = useCallback(
+    (dx: number, dy: number, jumpOnly: boolean) => doMove(dx, dy, jumpOnly, { updateFacing: false }),
+    [doMove]
   );
 
   // Game starts only when user clicks Start in the start modal
@@ -5161,7 +5216,7 @@ export default function LabyrinthGame() {
         if (movesLeftRef.current <= 0 || winnerRef.current !== null || !l || passThroughMagicRef.current) return;
         // Same keys for move and jump: prefer jump when possible in that direction
         const jumpPreferred = l.canJumpInDirection(d[0], d[1], currentPlayerRef.current);
-        doMove(d[0], d[1], jumpPreferred);
+        doMove(d[0], d[1], jumpPreferred, { updateFacing: false });
         e.preventDefault();
       }
     };
@@ -5685,8 +5740,6 @@ export default function LabyrinthGame() {
       return next;
     });
   }, []);
-  /** Same facing update as 3D camera snap — mobile joystick inner ring orbits look without stepping. */
-  const mobileJoystickLookGrid = isMobile ? onTouchCameraForwardGrid : undefined;
   const [isoCamRotateActive, setIsoCamRotateActive] = useState(false);
   useEffect(() => {
     if (mazeMapView !== "iso") setIsoCamRotateActive(false);
@@ -9901,7 +9954,7 @@ export default function LabyrinthGame() {
                 miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
                 fogIntensityMap={fogIntensityMap}
                 fillViewport={mazeIsoFillViewport}
-                onTouchCameraForwardGrid={isMobile ? onTouchCameraForwardGrid : undefined}
+                onTouchCameraForwardGrid={mazeMapView === "iso" ? onTouchCameraForwardGrid : undefined}
               />
               {catapultPicker && (
                 <div
@@ -10350,12 +10403,11 @@ export default function LabyrinthGame() {
                               relativeBackward={relativeBackward}
                               relativeLeft={relativeLeft}
                               relativeRight={relativeRight}
-                              doMove={doMove}
+                              doMove={doMoveStrafe}
                               scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
                               focusDisabled={
                                 winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)
                               }
-                              onJoystickLookGrid={mobileJoystickLookGrid}
                             />
                           ) : (
                             <CircularIsoMinimapMoveHud
@@ -10381,12 +10433,11 @@ export default function LabyrinthGame() {
                               relativeBackward={relativeBackward}
                               relativeLeft={relativeLeft}
                               relativeRight={relativeRight}
-                              doMove={doMove}
+                              doMove={doMoveStrafe}
                               scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
                               focusDisabled={
                                 winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)
                               }
-                              onJoystickLookGrid={mobileJoystickLookGrid}
                             />
                           )
                         ) : null}
@@ -11214,12 +11265,11 @@ export default function LabyrinthGame() {
               relativeBackward={relativeBackward}
               relativeLeft={relativeLeft}
               relativeRight={relativeRight}
-              doMove={doMove}
+              doMove={doMoveStrafe}
               scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
               focusDisabled={
                 winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
               }
-              onJoystickLookGrid={mobileJoystickLookGrid}
             />
           </div>
         </>
@@ -11259,12 +11309,11 @@ export default function LabyrinthGame() {
             relativeBackward={relativeBackward}
             relativeLeft={relativeLeft}
             relativeRight={relativeRight}
-            doMove={doMove}
+            doMove={doMoveStrafe}
             scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
             focusDisabled={
               winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
             }
-            onJoystickLookGrid={mobileJoystickLookGrid}
           />
         </div>
       ) : null}
@@ -11823,7 +11872,7 @@ export default function LabyrinthGame() {
                             relativeBackward={relativeBackward}
                             relativeLeft={relativeLeft}
                             relativeRight={relativeRight}
-                            doMove={doMove}
+                            doMove={doMoveStrafe}
                             scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
                             focusDisabled={
                               winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
@@ -11851,7 +11900,7 @@ export default function LabyrinthGame() {
                           relativeBackward={relativeBackward}
                           relativeLeft={relativeLeft}
                           relativeRight={relativeRight}
-                          doMove={doMove}
+                          doMove={doMoveStrafe}
                           scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
                           focusDisabled={
                             winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)

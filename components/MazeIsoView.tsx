@@ -62,8 +62,8 @@ type Props = {
   /** Notifies parent when temporary camera-rotate mode is active (for chrome button highlight). */
   onRotateModeChange?: (active: boolean) => void;
   /**
-   * Touch play: cardinal walk forward (into the view) derived from camera aim, snapped to grid (±1,0)/(0,±1).
-   * Keeps joystick / marker facing aligned with orbit like a mobile third-person shooter.
+   * Cardinal “into the view” from camera aim, snapped to grid (±1,0)/(0,±1).
+   * Touch: always synced. Desktop: only while right-drag / Ctrl+drag / Rotate mode so left-drag pan still works.
    */
   onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
 };
@@ -1128,6 +1128,8 @@ function CameraController({
   const lastTouchForwardGridRef = useRef<{ dx: number; dy: number } | null>(null);
   const onTouchCameraForwardGridRef = useRef(onTouchCameraForwardGrid);
   onTouchCameraForwardGridRef.current = onTouchCameraForwardGrid;
+  /** Smoothed grid (dx,dy) for auto camera offset — eases orbit when facing/turn changes instead of snapping. */
+  const smoothFollowDirRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 1 });
 
   const teleportLikeFraming = teleportMode || catapultMode;
 
@@ -1155,15 +1157,18 @@ function CameraController({
     prevCatapultRef.current = catapultMode;
   }, [catapultMode]);
 
-  /* Manual rotation: mouse Ctrl+drag or rotateMode drag; touch: rotateMode + one-finger drag on canvas.
-     Orbit pan is disabled on touchUi so walking isn’t confused with camera pan. */
+  /* Desktop: right-drag (or Ctrl+left) orbits and aims; left-drag stays pan. Touch: rotateMode + one-finger drag. */
   useEffect(() => {
     const canvas = gl.domElement;
 
     const onMouseDown = (e: MouseEvent) => {
-      if (!rotateMode && !e.ctrlKey) return;
+      if (touchUi) return;
+      const rightOrbit = e.button === 2;
+      const ctrlOrbit = e.button === 0 && e.ctrlKey;
+      const rotateLeftOrbit = e.button === 0 && rotateMode;
+      if (!rightOrbit && !ctrlOrbit && !rotateLeftOrbit) return;
       dragRef.current = { x: e.clientX, y: e.clientY };
-      e.preventDefault();
+      if (rightOrbit || ctrlOrbit || rotateLeftOrbit) e.preventDefault();
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!dragRef.current) return;
@@ -1173,6 +1178,9 @@ function CameraController({
       applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
     const onMouseUp = () => { dragRef.current = null; };
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
     const onWheel = () => {
       if (touchUi) return;
       const ctrl = controlsRef.current;
@@ -1202,7 +1210,9 @@ function CameraController({
       if (touchUi) dragRef.current = null;
     };
 
-    canvas.addEventListener("mousedown", onMouseDown);
+    const capMouse: AddEventListenerOptions = { capture: true };
+    canvas.addEventListener("mousedown", onMouseDown, capMouse);
+    canvas.addEventListener("contextmenu", onContextMenu);
     canvas.addEventListener("wheel", onWheel, { passive: true });
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
@@ -1211,7 +1221,8 @@ function CameraController({
     canvas.addEventListener("touchend", onTouchEnd);
     canvas.addEventListener("touchcancel", onTouchEnd);
     return () => {
-      canvas.removeEventListener("mousedown", onMouseDown);
+      canvas.removeEventListener("mousedown", onMouseDown, capMouse);
+      canvas.removeEventListener("contextmenu", onContextMenu);
       canvas.removeEventListener("wheel", onWheel);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
@@ -1290,19 +1301,31 @@ function CameraController({
     const desiredTarget = new THREE.Vector3(px, 0, pz);
     const followDist = teleportLikeFraming ? CAM_BEHIND * 2 : CAM_BEHIND;
     const followHeight = teleportLikeFraming ? CAM_HEIGHT * 1.7 : CAM_HEIGHT;
+
+    const ndx = desiredDir.dx / len;
+    const ndy = desiredDir.dy / len;
+    const sPrev = smoothFollowDirRef.current;
+    const followSmooth = THREE.MathUtils.lerp(0.085, 0.2, Math.min(1, transitionBlendRef.current));
+    let sx = THREE.MathUtils.lerp(sPrev.dx, ndx, followSmooth);
+    let sy = THREE.MathUtils.lerp(sPrev.dy, ndy, followSmooth);
+    const slen = Math.hypot(sx, sy) || 1;
+    sx /= slen;
+    sy /= slen;
+    smoothFollowDirRef.current = { dx: sx, dy: sy };
+
     const autoCameraPos = new THREE.Vector3(
-      px - (desiredDir.dx / len) * followDist,
+      px - sx * followDist,
       followHeight,
-      pz - (desiredDir.dy / len) * followDist
+      pz - sy * followDist
     );
     const autoOffset = autoCameraPos.clone().sub(desiredTarget);
 
     const prevPosForMove = prevPlayerPosRef.current;
     const movedFar = Math.hypot(playerX - prevPosForMove.x, playerY - prevPosForMove.y) > 1.01;
-    if (movedFar && touchUi && !rotateMode && !dragRef.current && !teleportLikeFraming) {
+    if (movedFar && !rotateMode && !dragRef.current && !teleportLikeFraming) {
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
-      transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.5);
+      transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.42);
     }
 
     const desiredOffset =
@@ -1318,7 +1341,8 @@ function CameraController({
       !teleportLikeFraming
     ) {
       touchCameraBootstrappedRef.current = true;
-      camera.position.copy(autoCameraPos);
+      smoothFollowDirRef.current = { dx: ndx, dy: ndy };
+      camera.position.set(px - ndx * followDist, followHeight, pz - ndy * followDist);
       ctrl.target.copy(desiredTarget);
       ctrl.update();
       prevPlayerPosRef.current = { x: playerX, y: playerY };
@@ -1340,7 +1364,8 @@ function CameraController({
       manualOffsetRef.current = null;
       transitionBlendRef.current = 0;
       touchCameraBootstrappedRef.current = true;
-      camera.position.copy(autoCameraPos);
+      smoothFollowDirRef.current = { dx: ndx, dy: ndy };
+      camera.position.set(px - ndx * followDist, followHeight, pz - ndy * followDist);
       ctrl.target.copy(desiredTarget);
       ctrl.update();
       return;
@@ -1358,16 +1383,15 @@ function CameraController({
           ? facingCandidate
           : (neighbors[0] ?? autoDirRef.current);
       autoDirRef.current = resetDir;
-      // Smoothly glide to the new behind-marker view instead of snapping instantly.
-      transitionBlendRef.current = 1;
+      transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.55);
     }
 
-    // Facing direction changed: bias toward the new behind-marker view, but keep motion smooth.
+    // Facing direction changed: ease camera behind the marker (smoothFollowDirRef does the heavy lifting).
     if (facingChanged && !rotateMode) {
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       autoDirRef.current = desiredDir;
-      transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.75);
+      transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.32);
     }
 
     // Keep manual camera adjustment persistent while following the player.
@@ -1382,12 +1406,16 @@ function CameraController({
       // Keep a stable camera offset from the current target to prevent tilt drift.
       const desiredCameraPos = ctrl.target.clone().add(desiredOffset);
       camera.position.lerp(desiredCameraPos, rotLerp);
-      transitionBlendRef.current = Math.max(0, transitionBlend * 0.86 - 0.02);
+      transitionBlendRef.current = Math.max(0, transitionBlend * 0.9 - 0.012);
       ctrl.update();
     }
 
-    /* Mobile: walk “forward” = deeper into the view — horizontal camera→pawn, snapped to N/E/S/W for grid moves. */
-    if (touchUi && onTouchCameraForwardGridRef.current && !teleportLikeFraming) {
+    /* Walk “forward” = into the view: camera→pawn on XZ, snapped to cardinals. Touch: always. Desktop: while aiming. */
+    const cameraDrivesFacingGrid =
+      !!onTouchCameraForwardGridRef.current &&
+      !teleportLikeFraming &&
+      (touchUi || hasManualCameraRef.current || dragRef.current != null || rotateMode);
+    if (cameraDrivesFacingGrid) {
       const toPawn = new THREE.Vector3().subVectors(ctrl.target, camera.position);
       toPawn.y = 0;
       const hLen = toPawn.length();
@@ -1405,7 +1433,7 @@ function CameraController({
         const prev = lastTouchForwardGridRef.current;
         if (prev == null || prev.dx !== gdx || prev.dy !== gdy) {
           lastTouchForwardGridRef.current = { dx: gdx, dy: gdy };
-          onTouchCameraForwardGridRef.current(gdx, gdy);
+          onTouchCameraForwardGridRef.current!(gdx, gdy);
         }
       }
     }
@@ -1422,7 +1450,7 @@ function CameraController({
       minDistance={2.2}
       maxDistance={180}
       zoomSpeed={1.6}
-      mouseButtons={{ LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }}
+      mouseButtons={{ LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }}
     />
   );
 }
@@ -2408,7 +2436,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
             title={
               touchUi
                 ? "Tap: then tilt the device or drag on the 3D view to aim the camera. Walking uses the dock controls only."
-                : "Click to temporarily enable camera rotation. You can also hold Ctrl and drag."
+                : "Right-drag on the 3D view to aim the camera (or hold Ctrl and left-drag). Optional: Rotate View then left-drag."
             }
           >
             {rotateMode ? "Rotating..." : "Rotate View"}
