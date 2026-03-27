@@ -10,6 +10,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MutableRefObject,
 } from "react";
 import type { Ref } from "react";
 import { Canvas, useThree, useFrame, ThreeEvent } from "@react-three/fiber";
@@ -71,6 +72,8 @@ type Props = {
 export type MazeIsoViewImperativeHandle = {
   activateRotate: () => void;
   resetCameraView: () => void;
+  /** Apply the same orbit deltas as dragging on the 3D canvas (e.g. mini-map ring in landscape). */
+  orbitLookByPixelDelta: (dxPx: number, dyPx: number) => void;
 };
 
 /** Each grid cell = 3x3 world units. */
@@ -1091,6 +1094,7 @@ function CameraController({
   grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy, zoom, rotateMode, resetTick, teleportMode, catapultMode, focusVersion,
   touchUi,
   onTouchCameraForwardGrid,
+  orbitLookApplierRef,
 }: {
   grid: string[][];
   mapWidth: number;
@@ -1107,6 +1111,7 @@ function CameraController({
   focusVersion?: number;
   touchUi: boolean;
   onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
+  orbitLookApplierRef: MutableRefObject<((dxPx: number, dyPx: number) => void) | null>;
 }) {
   const { camera, gl } = useThree();
   const controlsRef = useRef<any>(null);
@@ -1132,6 +1137,15 @@ function CameraController({
   const smoothFollowDirRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 1 });
 
   const teleportLikeFraming = teleportMode || catapultMode;
+
+  useLayoutEffect(() => {
+    orbitLookApplierRef.current = (dxPx: number, dyPx: number) => {
+      applyManualOrbitFromDelta(camera, controlsRef, dxPx, dyPx, hasManualCameraRef, manualOffsetRef);
+    };
+    return () => {
+      orbitLookApplierRef.current = null;
+    };
+  }, [camera, orbitLookApplierRef]);
 
   useEffect(() => {
     lastTouchForwardGridRef.current = null;
@@ -1937,6 +1951,7 @@ function MazeScene({
   focusVersion, miniMonsters, fogIntensityMap,
   touchUi = false,
   onTouchCameraForwardGrid,
+  orbitLookApplierRef,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
   resetTick: number;
@@ -1949,6 +1964,7 @@ function MazeScene({
   magicPortalPreviewOptions?: [number, number][] | null;
   teleportSourceType?: "magic" | "gem" | "artifact" | null;
   onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
+  orbitLookApplierRef: MutableRefObject<((dxPx: number, dyPx: number) => void) | null>;
 }) {
   const shadowRange = Math.max(mapWidth, mapHeight) * CS;
   return (
@@ -2027,6 +2043,7 @@ function MazeScene({
         focusVersion={focusVersion}
         touchUi={touchUi}
         onTouchCameraForwardGrid={onTouchCameraForwardGrid}
+        orbitLookApplierRef={orbitLookApplierRef}
       />
       {teleportMode && !!teleportOptions?.length && (
         <TeleportTargetMarkers
@@ -2342,6 +2359,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
   const [resetTick, setResetTick] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rotateMode = btnRotate || ctrlHeld;
+  const orbitLookApplierRef = useRef<((dxPx: number, dyPx: number) => void) | null>(null);
 
   const resetCameraView = useCallback(() => {
     setBtnRotate(false);
@@ -2366,7 +2384,17 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     enable();
   }, [touchUi]);
 
-  useImperativeHandle(ref, () => ({ activateRotate, resetCameraView }), [activateRotate, resetCameraView]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      activateRotate,
+      resetCameraView,
+      orbitLookByPixelDelta: (dxPx: number, dyPx: number) => {
+        orbitLookApplierRef.current?.(dxPx, dyPx);
+      },
+    }),
+    [activateRotate, resetCameraView],
+  );
 
   useEffect(() => {
     onRotateModeChange?.(rotateMode);
@@ -2500,6 +2528,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           fogIntensityMap={fogIntensityMap}
           touchUi={touchUi}
           onTouchCameraForwardGrid={onTouchCameraForwardGrid}
+          orbitLookApplierRef={orbitLookApplierRef}
         />
       </Canvas>
     </div>

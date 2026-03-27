@@ -73,6 +73,7 @@ import {
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
   type Ref,
+  type RefObject,
   type SetStateAction,
 } from "react";
 import { flushSync } from "react-dom";
@@ -308,6 +309,13 @@ const MOVE_KNOB_LOOK_RING_OUTER_PX = Math.max(12, Math.round(26 / 1.5));
 const MOVE_KNOB_REPEAT_MS_FAST = 352;
 /** Just past dead zone → slowest repeat. */
 const MOVE_KNOB_REPEAT_MS_SLOW = 400;
+/** Drag band between mini map disc and compass (easier touch target). */
+const MINIMAP_ORBIT_RING_PX = 22;
+/** Space outside orbit for N/E/S/W labels and ticks (fixed = global map north). */
+const MINIMAP_COMPASS_PAD_PX = 14;
+/** Extra orbit sensitivity when dragging the mini-map ring (vs canvas drag). */
+const MINIMAP_ORBIT_POINTER_SENS = 2.15;
+
 /** Mobile 3D (non-immersive): fixed WebGL layer; header / zoom strip / docks use higher z-index. */
 const MOBILE_ISO_CANVAS_Z = 90;
 
@@ -989,6 +997,7 @@ function IsoHudMinimapCircle({
   isoMiniMapPinchStartRef,
   onOpenGrid,
   diameter,
+  playerCenteredRotate = false,
 }: {
   lab: Labyrinth;
   currentPlayer: number;
@@ -1000,6 +1009,8 @@ function IsoHudMinimapCircle({
   isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
   onOpenGrid: () => void;
   diameter: number;
+  /** Player dot fixed in center; map rotates so walk-forward is up (matches 3D camera basis). */
+  playerCenteredRotate?: boolean;
 }) {
   const mapDiscPx = Math.min(diameter, Math.round(diameter * 0.98));
   return (
@@ -1027,7 +1038,215 @@ function IsoHudMinimapCircle({
         isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
         onOpenGrid={onOpenGrid}
         clipDiameter={mapDiscPx}
+        playerCenteredRotate={playerCenteredRotate}
       />
+    </div>
+  );
+}
+
+/** SVG even-odd donut: annulus rInner..rOuter for reliable touch (not pointer-events:stroke). */
+function minimapOrbitDonutPath(cx: number, cy: number, rInner: number, rOuter: number): string {
+  return [
+    `M ${cx + rOuter} ${cy}`,
+    `A ${rOuter} ${rOuter} 0 1 1 ${cx - rOuter} ${cy}`,
+    `A ${rOuter} ${rOuter} 0 1 1 ${cx + rOuter} ${cy}`,
+    `M ${cx + rInner} ${cy}`,
+    `A ${rInner} ${rInner} 0 1 0 ${cx - rInner} ${cy}`,
+    `A ${rInner} ${rInner} 0 1 0 ${cx + rInner} ${cy}`,
+    "Z",
+  ].join(" ");
+}
+
+/** Phone landscape: fixed N/E/S/W compass (global map) + green orbit band; center mini map rotates under the player dot. */
+function MobileLandscapeMinimapOrbitWrap({
+  mazeIsoViewRef,
+  diameter,
+  lab,
+  currentPlayer,
+  playerFacing,
+  fogIntensityMap,
+  playerCells,
+  isoMiniMapZoom,
+  setIsoMiniMapZoom,
+  isoMiniMapPinchStartRef,
+  onOpenGrid,
+}: {
+  mazeIsoViewRef: RefObject<MazeIsoViewImperativeHandle | null>;
+  diameter: number;
+  lab: Labyrinth;
+  currentPlayer: number;
+  playerFacing: Record<number, { dx: number; dy: number }>;
+  fogIntensityMap: Map<string, number>;
+  playerCells: Record<string, number>;
+  isoMiniMapZoom: number;
+  setIsoMiniMapZoom: Dispatch<SetStateAction<number>>;
+  isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
+  onOpenGrid: () => void;
+}) {
+  const mapDiscPx = Math.min(diameter, Math.round(diameter * 0.98));
+  const wrap = mapDiscPx + 2 * MINIMAP_ORBIT_RING_PX + 2 * MINIMAP_COMPASS_PAD_PX;
+  const inset = (wrap - mapDiscPx) / 2;
+  const cx = wrap / 2;
+  const cy = wrap / 2;
+  const rMap = mapDiscPx / 2;
+  const rDonutInner = rMap + 1.5;
+  const rDonutOuter = rMap + MINIMAP_ORBIT_RING_PX;
+  const rEdge = wrap / 2 - 2;
+  const tickOuter = rEdge;
+  const tickLen = 6;
+  const labelR = rEdge - 9;
+
+  const cardinals = [
+    { label: "N", ang: -Math.PI / 2 },
+    { label: "E", ang: 0 },
+    { label: "S", ang: Math.PI / 2 },
+    { label: "W", ang: Math.PI },
+  ] as const;
+
+  const ringDragRef = useRef<{ x: number; y: number } | null>(null);
+
+  const onRingPointerDown = useCallback(
+    (e: ReactPointerEvent<SVGPathElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      mazeIsoViewRef.current?.activateRotate();
+      ringDragRef.current = { x: e.clientX, y: e.clientY };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    [mazeIsoViewRef],
+  );
+
+  const onRingPointerMove = useCallback(
+    (e: ReactPointerEvent<SVGPathElement>) => {
+      if (ringDragRef.current == null) return;
+      e.preventDefault();
+      const prev = ringDragRef.current;
+      const dx = (e.clientX - prev.x) * MINIMAP_ORBIT_POINTER_SENS;
+      const dy = (e.clientY - prev.y) * MINIMAP_ORBIT_POINTER_SENS;
+      ringDragRef.current = { x: e.clientX, y: e.clientY };
+      if (dx !== 0 || dy !== 0) mazeIsoViewRef.current?.orbitLookByPixelDelta(dx, dy);
+    },
+    [mazeIsoViewRef],
+  );
+
+  const onRingPointerEnd = useCallback((e: ReactPointerEvent<SVGPathElement>) => {
+    ringDragRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const donutD = minimapOrbitDonutPath(cx, cy, rDonutInner, rDonutOuter);
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        width: wrap,
+        height: wrap,
+        flexShrink: 0,
+      }}
+      title="Outer ring: map north · drag green band to orbit 3D · center follows you"
+    >
+      <div
+        style={{
+          position: "absolute",
+          left: inset,
+          top: inset,
+          width: mapDiscPx,
+          height: mapDiscPx,
+          borderRadius: "50%",
+          overflow: "hidden",
+          zIndex: 1,
+        }}
+      >
+        <IsoHudMinimapCircle
+          diameter={diameter}
+          lab={lab}
+          currentPlayer={currentPlayer}
+          playerFacing={playerFacing}
+          fogIntensityMap={fogIntensityMap}
+          playerCells={playerCells}
+          isoMiniMapZoom={isoMiniMapZoom}
+          setIsoMiniMapZoom={setIsoMiniMapZoom}
+          isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+          onOpenGrid={onOpenGrid}
+          playerCenteredRotate
+        />
+      </div>
+      <svg
+        width={wrap}
+        height={wrap}
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          zIndex: 2,
+          overflow: "visible",
+        }}
+        aria-hidden
+      >
+        <g style={{ pointerEvents: "none" }}>
+          <circle
+            cx={cx}
+            cy={cy}
+            r={rMap}
+            fill="none"
+            stroke="rgba(140,150,170,0.45)"
+            strokeWidth={1.25}
+          />
+          <circle
+            cx={cx}
+            cy={cy}
+            r={rDonutOuter + 0.5}
+            fill="none"
+            stroke="rgba(100,110,130,0.35)"
+            strokeWidth={1}
+          />
+          {cardinals.map(({ label, ang }) => {
+            const x1 = cx + Math.cos(ang) * tickOuter;
+            const y1 = cy + Math.sin(ang) * tickOuter;
+            const x2 = cx + Math.cos(ang) * (tickOuter - tickLen);
+            const y2 = cy + Math.sin(ang) * (tickOuter - tickLen);
+            const lx = cx + Math.cos(ang) * labelR;
+            const ly = cy + Math.sin(ang) * labelR;
+            return (
+              <Fragment key={label}>
+                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(180,190,210,0.75)" strokeWidth={1.5} strokeLinecap="round" />
+                <text
+                  x={lx}
+                  y={ly}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill="rgba(200,210,230,0.9)"
+                  style={{ fontSize: 10, fontWeight: 700, fontFamily: "monospace" }}
+                >
+                  {label}
+                </text>
+              </Fragment>
+            );
+          })}
+        </g>
+        <path
+          d={donutD}
+          fill="rgba(0,255,136,0.16)"
+          fillRule="evenodd"
+          stroke="rgba(0,255,136,0.55)"
+          strokeWidth={1}
+          style={{
+            pointerEvents: "auto",
+            touchAction: "none",
+            cursor: "grab",
+            filter: "drop-shadow(0 0 3px rgba(0,255,136,0.35))",
+          }}
+          onPointerDown={onRingPointerDown}
+          onPointerMove={onRingPointerMove}
+          onPointerUp={onRingPointerEnd}
+          onPointerCancel={onRingPointerEnd}
+        />
+      </svg>
     </div>
   );
 }
@@ -1464,7 +1683,7 @@ function CircularIsoMinimapMoveHud({
         relativeBackward={relativeBackward}
         relativeLeft={relativeLeft}
         relativeRight={relativeRight}
-        doMove={doMoveStrafe}
+        doMove={doMove}
         scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
         focusDisabled={focusDisabled}
       />
@@ -9323,18 +9542,24 @@ export default function LabyrinthGame() {
                 justifyContent: "flex-start",
                 gap: 6,
                 width: "100%",
-                minHeight: combatLandscapePostFight ? 0 : combatResultSlotHeightPx,
+                /** Landscape face-off: Roll/Run sit above this slot; a tall minHeight here stacks on top (paint order) and steals taps. */
+                minHeight:
+                  combatLandscapePostFight || useCombatLandscapeFaceoff ? 0 : combatResultSlotHeightPx,
                 maxHeight: combatLandscapePostFight
                   ? "none"
-                  : combatState
-                    ? `min(420px, calc(100dvh - 140px))`
-                    : combatResultSlotHeightPx,
-                overflowY: combatLandscapePostFight ? "visible" : "auto",
+                  : useCombatLandscapeFaceoff
+                    ? "none"
+                    : combatState
+                      ? `min(420px, calc(100dvh - 140px))`
+                      : combatResultSlotHeightPx,
+                overflowY:
+                  combatLandscapePostFight || useCombatLandscapeFaceoff ? "visible" : "auto",
                 WebkitOverflowScrolling: "touch",
                 boxSizing: "border-box",
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
+                pointerEvents: useCombatLandscapeFaceoff ? ("none" as const) : "auto",
               }}
             >
             {/* Fixed-height slot: result banner/bonus OR roll controls — never jumps */}
@@ -10266,21 +10491,40 @@ export default function LabyrinthGame() {
                           </div>
                         )}
                         {splitIsoHudOppositeScreen && showMoveGrid && lab && mazeMapView === "iso" ? (
-                          <IsoHudMinimapCircle
-                            diameter={ISO_HUD_MOVE_RING_PX}
-                            lab={lab}
-                            currentPlayer={currentPlayer}
-                            playerFacing={playerFacing}
-                            fogIntensityMap={fogIntensityMap}
-                            playerCells={playerCells}
-                            isoMiniMapZoom={isoMiniMapZoom}
-                            setIsoMiniMapZoom={setIsoMiniMapZoom}
-                            isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-                            onOpenGrid={() => {
-                              if (!isMobile) void leaveIsoImmersiveOnly();
-                              switchToGridAndFocusCurrentPlayer();
-                            }}
-                          />
+                          isMobile && splitIsoHudMapAndMove ? (
+                            <MobileLandscapeMinimapOrbitWrap
+                              mazeIsoViewRef={mazeIsoViewRef}
+                              diameter={ISO_HUD_MOVE_RING_PX}
+                              lab={lab}
+                              currentPlayer={currentPlayer}
+                              playerFacing={playerFacing}
+                              fogIntensityMap={fogIntensityMap}
+                              playerCells={playerCells}
+                              isoMiniMapZoom={isoMiniMapZoom}
+                              setIsoMiniMapZoom={setIsoMiniMapZoom}
+                              isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                              onOpenGrid={() => {
+                                if (!isMobile) void leaveIsoImmersiveOnly();
+                                switchToGridAndFocusCurrentPlayer();
+                              }}
+                            />
+                          ) : (
+                            <IsoHudMinimapCircle
+                              diameter={ISO_HUD_MOVE_RING_PX}
+                              lab={lab}
+                              currentPlayer={currentPlayer}
+                              playerFacing={playerFacing}
+                              fogIntensityMap={fogIntensityMap}
+                              playerCells={playerCells}
+                              isoMiniMapZoom={isoMiniMapZoom}
+                              setIsoMiniMapZoom={setIsoMiniMapZoom}
+                              isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                              onOpenGrid={() => {
+                                if (!isMobile) void leaveIsoImmersiveOnly();
+                                switchToGridAndFocusCurrentPlayer();
+                              }}
+                            />
+                          )
                         ) : null}
                       </div>
                       <div
@@ -11055,7 +11299,12 @@ export default function LabyrinthGame() {
         </div>
         </div>
 
-      {mazeMapView === "grid" && isMobile && mobileDockExpanded && lab && !pendingCombatOffer && (
+      {mazeMapView === "grid" &&
+        isMobile &&
+        mobileDockExpanded &&
+        lab &&
+        !pendingCombatOffer &&
+        !combatOverlayVisible && (
         <>
           <div
             ref={mobileDockExpandedHandleRef}
@@ -11222,9 +11471,13 @@ export default function LabyrinthGame() {
                 border: "1px solid #444",
                 boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
                 pointerEvents: "auto",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
               }}
             >
-              <IsoHudMinimapCircle
+              <MobileLandscapeMinimapOrbitWrap
+                mazeIsoViewRef={mazeIsoViewRef}
                 diameter={Math.min(ISO_HUD_MOVE_RING_PX, 168)}
                 lab={lab}
                 currentPlayer={currentPlayer}
@@ -11423,8 +11676,10 @@ export default function LabyrinthGame() {
         className="controls-panel unified-bottom-dock"
         style={{
           ...controlsPanelStyle,
-          ...(isMobile && pendingCombatOffer && mazeMapView === "grid"
-            ? { opacity: 0.25, pointerEvents: "none" as const }
+          ...(isMobile &&
+          (pendingCombatOffer || combatOverlayVisible) &&
+          mazeMapView === "grid"
+            ? { opacity: pendingCombatOffer ? 0.25 : 1, pointerEvents: "none" as const }
             : {}),
           ...(isMobile
             ? {
