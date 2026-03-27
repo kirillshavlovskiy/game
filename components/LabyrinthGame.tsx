@@ -292,22 +292,11 @@ const GAME_OVER_OVERLAY_Z = 10200;
 /** Full-screen 3D HUD: circular move ring + bottom sheet offset */
 const ISO_HUD_MOVE_RING_PX = 132;
 const ISO_HUD_DIR_BTN_PX = 40;
+/** Mobile 3D (non-immersive): fixed WebGL layer; header / zoom strip / docks use higher z-index. */
+const MOBILE_ISO_CANVAS_Z = 90;
 
-/** In-play fullscreen top strip (3D or 2D): menu, stats, exit FS, view switch. */
-const PLAY_FULLSCREEN_TOP_BAR_STYLE: React.CSSProperties = {
-  flexShrink: 0,
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  flexWrap: "wrap",
-  paddingLeft: "max(10px, env(safe-area-inset-left, 0px))",
-  paddingRight: "max(10px, env(safe-area-inset-right, 0px))",
-  paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
-  paddingBottom: 8,
-  background: "rgba(10,10,16,0.94)",
-  borderBottom: "1px solid #333",
-  zIndex: ISO_IMMERSIVE_HUD_Z + 20,
-};
+/** Full-screen play: fixed top-left “island” — same z stack family as other immersive HUD. */
+const PLAY_FULLSCREEN_ISLAND_Z = ISO_IMMERSIVE_HUD_Z + 25;
 
 function getFullscreenElement(): Element | null {
   if (typeof document === "undefined") return null;
@@ -354,6 +343,18 @@ async function requestFullscreenOnElement(el: HTMLElement): Promise<void> {
     return;
   }
   throw new Error("fullscreen unsupported");
+}
+
+/**
+ * iOS / iPadOS (all WebKit-based browsers there): programmatic element fullscreen is missing or unreliable,
+ * and `fullscreenElement` often stays null. Use the fixed “immersive” shell instead of the Fullscreen API.
+ */
+function isIosLikeFullscreenHost(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/i.test(ua)) return true;
+  if (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) return true;
+  return false;
 }
 
 async function exitDocumentFullscreen(): Promise<void> {
@@ -4932,17 +4933,23 @@ export default function LabyrinthGame() {
     if (typeof document === "undefined") return;
     const el = mazeAreaRef.current ?? mazeWrapRef.current;
     if (!el) return;
+    if (isIosLikeFullscreenHost()) {
+      setIsoImmersiveFallback(true);
+      return;
+    }
     try {
       await requestFullscreenOnElement(el);
     } catch {
       setIsoImmersiveFallback(true);
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    if (!getFullscreenElement()) {
+      setIsoImmersiveFallback(true);
     }
   }, []);
-
-  const handleIsoImmersiveMenuExit = useCallback(async () => {
-    await leaveIsoImmersiveOnly();
-    setHeaderMenuOpen(true);
-  }, [leaveIsoImmersiveOnly]);
 
   const onIsoViewButtonClick = useCallback(() => {
     setMazeMapView("iso");
@@ -5318,6 +5325,17 @@ export default function LabyrinthGame() {
   const combatOverlayVisible =
     !!(combatState || combatResult) && (!combatState || combatState.playerIndex === currentPlayer);
 
+  /** Mobile flat 3D: viewport-sized canvas behind UI (immersive full-screen uses its own layer). */
+  const mobileIsoEdgeToEdge =
+    isMobile && mazeMapView === "iso" && lab && !isoImmersiveUi && !combatOverlayVisible;
+
+  /** 3D: drop padded `maze-wrap` frame; WebGL fills the play shell (non-immersive mobile + any immersive iso). */
+  const mazeIsoFillViewport =
+    mazeMapView === "iso" && (mobileIsoEdgeToEdge || isoImmersiveUi);
+  /** Mobile 3D: fixed viewport-sized layer so canvas is not inset by `maze-wrap` / mazeArea padding. */
+  const isoPlayRootViewportFill =
+    mazeMapView === "iso" && (mobileIsoEdgeToEdge || (isoImmersiveUi && isMobile));
+
   /** Phone landscape: dice + roll/run live in the face-off row; hide duplicate lower dice strip. */
   const useCombatLandscapeFaceoff =
     isLandscapeCompact && combatState !== null && combatResult === null;
@@ -5330,118 +5348,6 @@ export default function LabyrinthGame() {
     lab && combatState && !combatResult
       ? `💡 ${getMonsterHint(combatState.monsterType, lab.monsters[combatState.monsterIndex]?.hasShield)}`
       : null;
-
-  const renderPlayFullscreenTopBar = () => (
-    <div style={PLAY_FULLSCREEN_TOP_BAR_STYLE}>
-      <button
-        type="button"
-        onClick={() => void handleIsoImmersiveMenuExit()}
-        style={{
-          ...buttonStyle,
-          ...headerButtonStyle,
-          background: START_MENU_CTRL_BG,
-          color: "#ecc0b0",
-          border: `1px solid ${START_MENU_BORDER_MUTE}`,
-          fontWeight: 700,
-        }}
-        title="Leave full screen and open the game menu"
-      >
-        ☰ Menu
-      </button>
-      <div
-        style={{
-          flex: 1,
-          minWidth: 0,
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          gap: 6,
-          fontSize: "0.72rem",
-        }}
-      >
-        <span
-          style={{
-            ...headerStatItemStyle,
-            color:
-              winner !== null
-                ? winner >= 0
-                  ? "#00ff88"
-                  : "#ff4444"
-                : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88"),
-            fontWeight: "bold",
-          }}
-        >
-          {winner !== null
-            ? winner >= 0
-              ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
-              : "Monsters win!"
-            : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
-        </span>
-        <span style={headerStatDivider}>|</span>
-        <span style={headerStatItemStyle}>
-          Moves:{" "}
-          {diceResult !== null
-            ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}`
-            : "—/—"}
-        </span>
-        <span style={headerStatDivider}>|</span>
-        <span style={headerStatItemStyle}>
-          Round: {(lab.round ?? 0) + 1}/{MAX_ROUNDS}
-        </span>
-        <span style={headerStatDivider}>|</span>
-        <span style={headerStatItemStyle}>Total: {totalMoves}</span>
-        <span style={headerStatDivider}>|</span>
-        <span style={headerStatItemStyle}>
-          {lab.players.map((p, i) => (
-            <span
-              key={i}
-              style={{
-                marginRight: 8,
-                color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#888"),
-                textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
-              }}
-            >
-              {playerNames[i] ?? `P${i + 1}`}:{" "}
-              <ArtifactIcon variant="diamond" size={14} style={{ marginLeft: 2, marginRight: 2, verticalAlign: "middle" }} />
-              {p?.diamonds ?? 0}
-            </span>
-          ))}
-        </span>
-      </div>
-      <button
-        type="button"
-        onClick={() => void leaveIsoImmersiveOnly()}
-        style={{
-          ...buttonStyle,
-          ...secondaryButtonStyle,
-          fontSize: "0.72rem",
-          padding: "6px 12px",
-          whiteSpace: "nowrap",
-        }}
-        title="Leave full-screen mode"
-      >
-        Exit FS
-      </button>
-      <button
-        type="button"
-        onClick={() => setMazeMapView(mazeMapView === "iso" ? "grid" : "iso")}
-        style={{
-          ...buttonStyle,
-          ...secondaryButtonStyle,
-          fontSize: "0.72rem",
-          padding: "6px 12px",
-          whiteSpace: "nowrap",
-        }}
-        title={
-          mazeMapView === "iso"
-            ? "Switch to 2D grid (stay full-screen)"
-            : "Switch to 3D view (stay full-screen)"
-        }
-      >
-        {mazeMapView === "iso" ? "2D" : "3D"}
-      </button>
-    </div>
-  );
 
   const renderCombatBonusLootPicker = () => {
     if (!combatResult) return null;
@@ -5833,8 +5739,422 @@ export default function LabyrinthGame() {
     );
   };
 
+  const landscapeCompactPlayHud = isLandscapeCompact && lab;
+  /** Fixed menu panel position — must clear immersive HUD rows or the main header. */
+  const headerMenuFixedDropdownTop =
+    !isMobile && isoImmersiveUi
+      ? "calc(max(8px, env(safe-area-inset-top, 0px)) + 58px)"
+      : isMobile && landscapeCompactPlayHud && isoImmersiveUi
+        ? "calc(max(6px, env(safe-area-inset-top, 0px)) + 56px)"
+        : isMobile && landscapeCompactPlayHud
+          ? "calc(max(6px, env(safe-area-inset-top, 0px)) + 52px)"
+          : isoImmersiveUi
+            ? "calc(max(8px, env(safe-area-inset-top, 0px)) + 118px)"
+            : `${HEADER_HEIGHT + 8}px`;
+  const headerMenuUseFixedLayer = isMobile || isoImmersiveUi;
+
+  const renderHeaderMenuBlock = () => (
+    <div ref={headerMenuRef} style={{ position: "relative", flexShrink: 0 }}>
+      <button
+        type="button"
+        className="header-menu-trigger"
+        onClick={() => setHeaderMenuOpen((o) => !o)}
+        aria-expanded={headerMenuOpen}
+        aria-haspopup="menu"
+        aria-label="Menu"
+        title="Menu"
+        style={{
+          ...buttonStyle,
+          ...headerButtonStyle,
+          ...headerMenuTriggerStyle,
+          background: headerMenuOpen ? "rgba(42, 20, 18, 0.98)" : START_MENU_CTRL_BG,
+          border: `1px solid ${headerMenuOpen ? START_MENU_BORDER : START_MENU_BORDER_MUTE}`,
+          color: headerMenuOpen ? "#ffd4c4" : "#ecc0b0",
+          ...(isMobile
+            ? {
+                minWidth: 44,
+                minHeight: 44,
+                padding: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "1.35rem",
+                lineHeight: 1,
+              }
+            : {
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+              }),
+        }}
+      >
+        {isMobile ? "☰" : (
+          <>
+            Menu
+            <span aria-hidden style={{ fontSize: "0.65rem", opacity: 0.9, lineHeight: 1 }}>
+              ▼
+            </span>
+          </>
+        )}
+      </button>
+      {headerMenuOpen && (
+        <div
+          role="menu"
+          className="header-menu-dropdown"
+          style={{
+            ...headerDropdownPanelStyle,
+            ...(headerMenuUseFixedLayer
+              ? {
+                  position: "fixed",
+                  left: 12,
+                  right: 12,
+                  top: headerMenuFixedDropdownTop,
+                  marginTop: 0,
+                  maxHeight: "min(72vh, 520px)",
+                  overflowY: "auto",
+                  zIndex: isoImmersiveUi ? ISO_IMMERSIVE_HUD_Z + 70 : HEADER_Z_INDEX + 2,
+                }
+              : {
+                  position: "absolute",
+                  top: "100%",
+                  right: 0,
+                  marginTop: 6,
+                  minWidth: 272,
+                  maxWidth: "min(92vw, 340px)",
+                }),
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontSize: "0.65rem",
+                fontWeight: 700,
+                color: "#c9a090",
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                marginBottom: 8,
+              }}
+            >
+              Current progress
+            </div>
+            <div style={headerDropdownBodyStyle}>
+              <div
+                style={{
+                  fontWeight: 700,
+                  color:
+                    winner !== null
+                      ? winner >= 0
+                        ? START_MENU_ACCENT_BRIGHT
+                        : "#ff6666"
+                      : START_MENU_ACCENT_BRIGHT,
+                }}
+              >
+                {winner !== null
+                  ? winner >= 0
+                    ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
+                    : "Monsters win!"
+                  : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
+              </div>
+              <div>
+                <span style={headerDropdownMutedStyle}>Maze: </span>
+                {lab.width}×{lab.height}
+              </div>
+              <div>
+                <span style={headerDropdownMutedStyle}>Moves: </span>
+                {diceResult !== null ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}` : "—/—"}
+              </div>
+              <div>
+                <span style={headerDropdownMutedStyle}>Round: </span>
+                {(lab.round ?? 0) + 1}/{MAX_ROUNDS}
+              </div>
+              <div>
+                <span style={headerDropdownMutedStyle}>Total moves: </span>
+                {totalMoves}
+              </div>
+              <div style={{ borderTop: `1px solid ${START_MENU_BORDER_MUTE}`, paddingTop: 8 }}>
+                <div style={{ ...headerDropdownMutedStyle, fontSize: "0.72rem", marginBottom: 6 }}>Diamonds</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {lab.players.map((p, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#aaa"),
+                        textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
+                      }}
+                    >
+                      <span style={{ fontWeight: 600 }}>{playerNames[i] ?? `P${i + 1}`}</span>
+                      <ArtifactIcon variant="diamond" size={16} style={{ flexShrink: 0 }} />
+                      <span>{p?.diamonds ?? 0}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button
+              type="button"
+              role="menuitem"
+              className="start-menu-cta"
+              onClick={() => {
+                setHeaderMenuOpen(false);
+                setSettingsOpen(true);
+              }}
+              style={{ ...startButtonStyle, ...headerButtonStyle, width: "100%", justifyContent: "center", display: "flex" }}
+            >
+              Game setup
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="header-menu-dropdown-secondary"
+              onClick={() => {
+                setHeaderMenuOpen(false);
+                setGameStarted(false);
+              }}
+              style={headerDropdownSecondaryBtnStyle}
+            >
+              New game
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  /** Immersive chrome: full-width top bar (desktop + mobile landscape) or stacked island (mobile portrait). */
+  const renderPlayFullscreenChrome = () => {
+    const landscapeFsBar = isLandscapeCompact && isMobile;
+    const desktopFsBar = !isMobile;
+    const useFsTopBarRow = desktopFsBar || landscapeFsBar;
+    const zoomViewCluster = (
+      <>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
+            style={mazeZoomButtonStyle}
+            title="Zoom out"
+          >
+            −
+          </button>
+          <span style={{ fontSize: "0.72rem", color: "#888", minWidth: 34, textAlign: "center" }}>
+            {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
+          </span>
+          <button
+            type="button"
+            onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
+            style={mazeZoomButtonStyle}
+            title="Zoom in"
+          >
+            +
+          </button>
+        </div>
+        <span style={{ fontSize: "0.65rem", color: "#888" }}>View</span>
+        <button
+          type="button"
+          onClick={() => setMazeMapView("grid")}
+          style={mazeViewToggleButtonStyle(mazeMapView === "grid")}
+          title="Top-down grid (stays full-screen)"
+          aria-pressed={mazeMapView === "grid"}
+        >
+          Grid
+        </button>
+        <button
+          type="button"
+          onClick={onIsoViewButtonClick}
+          style={mazeViewToggleButtonStyle(mazeMapView === "iso")}
+          title="3D view (stays full-screen)"
+          aria-pressed={mazeMapView === "iso"}
+        >
+          3D
+        </button>
+        <button
+          type="button"
+          onClick={() => void leaveIsoImmersiveOnly()}
+          style={{
+            ...buttonStyle,
+            ...headerButtonStyle,
+            background: "#2a2a38",
+            color: "#c8c8d8",
+            border: "1px solid #555",
+            fontWeight: 700,
+          }}
+          title="Exit full-screen"
+        >
+          Exit
+        </button>
+      </>
+    );
+
+    const statsCluster = (
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 4,
+          fontSize: "0.65rem",
+          lineHeight: 1.35,
+        }}
+      >
+        <span
+          style={{
+            ...headerStatItemStyle,
+            color:
+              winner !== null
+                ? winner >= 0
+                  ? "#00ff88"
+                  : "#ff4444"
+                : (PLAYER_COLORS_ACTIVE[currentPlayer] ?? "#00ff88"),
+            fontWeight: "bold",
+          }}
+        >
+          {winner !== null
+            ? winner >= 0
+              ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
+              : "Monsters win!"
+            : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
+        </span>
+        <span style={headerStatDivider}>|</span>
+        <span style={headerStatItemStyle}>
+          Moves{" "}
+          {diceResult !== null
+            ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}`
+            : "—/—"}
+        </span>
+        <span style={headerStatDivider}>|</span>
+        <span style={headerStatItemStyle}>
+          R{(lab.round ?? 0) + 1}/{MAX_ROUNDS}
+        </span>
+        <span style={headerStatDivider}>|</span>
+        <span style={headerStatItemStyle}>Tot {totalMoves}</span>
+        <span style={headerStatDivider}>|</span>
+        <span style={headerStatItemStyle}>
+          {lab.players.map((p, i) => (
+            <span
+              key={i}
+              style={{
+                marginRight: 6,
+                color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#888"),
+                textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
+              }}
+            >
+              {playerNames[i] ?? `P${i + 1}`}
+              <ArtifactIcon variant="diamond" size={12} style={{ marginLeft: 2, marginRight: 2, verticalAlign: "middle" }} />
+              {p?.diamonds ?? 0}
+            </span>
+          ))}
+        </span>
+      </div>
+    );
+
+    return (
+      <div
+        style={{
+          position: "fixed" as const,
+          top: "max(8px, env(safe-area-inset-top, 0px))",
+          left: useFsTopBarRow ? "max(12px, env(safe-area-inset-left, 0px))" : "max(10px, env(safe-area-inset-left, 0px))",
+          right: useFsTopBarRow ? "max(12px, env(safe-area-inset-right, 0px))" : undefined,
+          zIndex: PLAY_FULLSCREEN_ISLAND_Z,
+          maxWidth: useFsTopBarRow
+            ? undefined
+            : "min(440px, calc(100vw - max(20px, env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px))))",
+          width: useFsTopBarRow ? "auto" : undefined,
+          pointerEvents: "none",
+        }}
+      >
+        <div
+          style={{
+            pointerEvents: "auto",
+            display: "flex",
+            flexDirection: useFsTopBarRow ? "row" : "column",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: useFsTopBarRow ? "space-between" : undefined,
+            gap: 8,
+            rowGap: 8,
+            width: "100%",
+            boxSizing: "border-box",
+            padding: useFsTopBarRow ? "8px 12px" : "8px 10px",
+            background: useFsTopBarRow ? "rgba(26, 26, 36, 0.92)" : "rgba(14,16,24,0.94)",
+            border: "1px solid rgba(80, 80, 96, 0.65)",
+            borderRadius: useFsTopBarRow ? 8 : 10,
+            boxShadow: "0 8px 28px rgba(0,0,0,0.45)",
+          }}
+        >
+          {useFsTopBarRow ? (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: 10,
+                  flex: 1,
+                  minWidth: 0,
+                }}
+              >
+                {desktopFsBar ? statsCluster : null}
+                {desktopFsBar ? (
+                  <span
+                    style={{
+                      width: 1,
+                      height: 22,
+                      background: "rgba(100,100,120,0.45)",
+                      flexShrink: 0,
+                      alignSelf: "center",
+                    }}
+                    aria-hidden
+                  />
+                ) : null}
+                {zoomViewCluster}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                {landscapeFsBar && cp ? (
+                  <span style={{ fontSize: "0.72rem", color: "#c4c4d4", whiteSpace: "nowrap" }}>
+                    Moves {movesLeft}
+                    <span style={{ margin: "0 6px", color: "#555" }}>·</span>
+                    Jumps {cp.jumps ?? 0}
+                  </span>
+                ) : null}
+                {renderHeaderMenuBlock()}
+              </div>
+            </>
+          ) : (
+            <>
+              {statsCluster}
+              {isMobile && cp && (
+                <div style={{ fontSize: "0.62rem", color: "#9aa0b0", marginTop: -4 }}>
+                  Moves left {movesLeft} · Jumps {cp?.jumps ?? 0}
+                </div>
+              )}
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                {zoomViewCluster}
+                {renderHeaderMenuBlock()}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div style={gamePaneStyle}>
+    <div className="labyrinth-game-pane" style={gamePaneStyle}>
+      {!landscapeCompactPlayHud &&
+        !(isoImmersiveUi && isMobile) &&
+        !(isoImmersiveUi && !isMobile && lab && !combatState && !teleportPicker) && (
       <header
         style={{
           ...headerStyle,
@@ -5939,177 +6259,112 @@ export default function LabyrinthGame() {
           </button>
           </div>
         )}
-        <div ref={headerMenuRef} style={{ position: "relative", flexShrink: 0 }}>
-        <button
-            type="button"
-            className="header-menu-trigger"
-            onClick={() => setHeaderMenuOpen((o) => !o)}
-            aria-expanded={headerMenuOpen}
-            aria-haspopup="menu"
-            aria-label="Menu"
-            title="Menu"
-            style={{
-              ...buttonStyle,
-              ...headerButtonStyle,
-              ...headerMenuTriggerStyle,
-              background: headerMenuOpen ? "rgba(42, 20, 18, 0.98)" : START_MENU_CTRL_BG,
-              border: `1px solid ${headerMenuOpen ? START_MENU_BORDER : START_MENU_BORDER_MUTE}`,
-              color: headerMenuOpen ? "#ffd4c4" : "#ecc0b0",
-              ...(isMobile
-                ? {
-                    minWidth: 44,
-                    minHeight: 44,
-                    padding: 0,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "1.35rem",
-                    lineHeight: 1,
-                  }
-                : {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 6,
-                  }),
-            }}
-          >
-            {isMobile ? "☰" : (
-              <>
-                Menu
-                <span aria-hidden style={{ fontSize: "0.65rem", opacity: 0.9, lineHeight: 1 }}>
-                  ▼
-                </span>
-              </>
-            )}
-        </button>
-          {headerMenuOpen && (
+        {renderHeaderMenuBlock()}
+      </header>
+      )}
+
+      {landscapeCompactPlayHud && (!isoImmersiveUi || teleportPicker) && (
+        <div
+          style={{
+            position: "fixed",
+            left: 0,
+            right: 0,
+            top: 0,
+            paddingTop: "max(4px, env(safe-area-inset-top, 0px))",
+            paddingLeft: "max(8px, env(safe-area-inset-left, 0px))",
+            paddingRight: "max(8px, env(safe-area-inset-right, 0px))",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "flex-start",
+            justifyContent: "flex-end",
+            gap: 8,
+            pointerEvents: "none",
+            zIndex: isoImmersiveUi ? ISO_IMMERSIVE_HUD_Z + 60 : HEADER_Z_INDEX + 25,
+          }}
+        >
+          {teleportPicker && (
             <div
-              role="menu"
-              className="header-menu-dropdown"
               style={{
-                ...headerDropdownPanelStyle,
-                ...(isMobile
-                  ? {
-                      position: "fixed",
-                      left: 12,
-                      right: 12,
-                      top: HEADER_HEIGHT + 8,
-                      marginTop: 0,
-                      maxHeight: "min(72vh, 520px)",
-                      overflowY: "auto",
-                    }
-                  : {
-                      position: "absolute",
-                      top: "100%",
-                      right: 0,
-                      marginTop: 6,
-                      minWidth: 272,
-                      maxWidth: "min(92vw, 340px)",
-                    }),
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 6,
+                alignItems: "center",
+                pointerEvents: "auto",
+                marginRight: "auto",
               }}
             >
-              <div>
-                <div
-                  style={{
-                    fontSize: "0.65rem",
-                    fontWeight: 700,
-                    color: "#c9a090",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.08em",
-                    marginBottom: 8,
-                  }}
-                >
-                  Current progress
-                </div>
-                <div style={headerDropdownBodyStyle}>
-                  <div
-                    style={{
-                      fontWeight: 700,
-                      color:
-                        winner !== null
-                          ? winner >= 0
-                            ? START_MENU_ACCENT_BRIGHT
-                            : "#ff6666"
-                          : START_MENU_ACCENT_BRIGHT,
-                    }}
-                  >
-                    {winner !== null
-                      ? winner >= 0
-                        ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
-                        : "Monsters win!"
-                      : `${playerNames[currentPlayer] ?? `Player ${currentPlayer + 1}`}'s turn`}
-                  </div>
-                  <div>
-                    <span style={headerDropdownMutedStyle}>Maze: </span>
-                    {lab.width}×{lab.height}
-                  </div>
-                  <div>
-                    <span style={headerDropdownMutedStyle}>Moves: </span>
-                    {diceResult !== null ? `${Math.max(0, (bonusAdded ?? diceResult) - movesLeft)}/${bonusAdded ?? diceResult}` : "—/—"}
-                  </div>
-                  <div>
-                    <span style={headerDropdownMutedStyle}>Round: </span>
-                    {(lab.round ?? 0) + 1}/{MAX_ROUNDS}
-                  </div>
-                  <div>
-                    <span style={headerDropdownMutedStyle}>Total moves: </span>
-                    {totalMoves}
-                  </div>
-                  <div style={{ borderTop: `1px solid ${START_MENU_BORDER_MUTE}`, paddingTop: 8 }}>
-                    <div style={{ ...headerDropdownMutedStyle, fontSize: "0.72rem", marginBottom: 6 }}>Diamonds</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      {lab.players.map((p, i) => (
-                        <div
-                          key={i}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#aaa"),
-                            textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
-                          }}
-                        >
-                          <span style={{ fontWeight: 600 }}>{playerNames[i] ?? `P${i + 1}`}</span>
-                          <ArtifactIcon variant="diamond" size={16} style={{ flexShrink: 0 }} />
-                          <span>{p?.diamonds ?? 0}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="start-menu-cta"
-                  onClick={() => {
-                    setHeaderMenuOpen(false);
-                    setSettingsOpen(true);
-                  }}
-                  style={{ ...startButtonStyle, ...headerButtonStyle, width: "100%", justifyContent: "center", display: "flex" }}
-                >
-                  Game setup
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="header-menu-dropdown-secondary"
-                  onClick={() => {
-                    setHeaderMenuOpen(false);
-                    setGameStarted(false);
-                  }}
-                  style={headerDropdownSecondaryBtnStyle}
-                >
-                  New game
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  manualTeleportPendingRef.current = false;
+                  setTeleportPicker(null);
+                }}
+                style={{ ...buttonStyle, ...headerButtonStyle, background: "#664400", borderColor: "#aa66ff" }}
+              >
+                Cancel teleport
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const opts = teleportPicker.options;
+                  if (opts.length === 0) return;
+                  const pick = opts[Math.floor(Math.random() * opts.length)]!;
+                  handleTeleportSelect(pick[0], pick[1]);
+                }}
+                style={{ ...buttonStyle, ...headerButtonStyle, background: "#2a2048", borderColor: "#8866cc", color: "#e8ddff" }}
+                title={
+                  movesLeft <= 0
+                    ? "Last move: tap a highlighted cell or pick random — no automatic teleport."
+                    : `Pick a random valid destination now, or wait ${MAGIC_TELEPORT_PICK_IDLE_MS / 1000}s after opening for an auto-pick among closest valid cells`
+                }
+              >
+                Random destination
+              </button>
+            </div>
+          )}
+          {!isoImmersiveUi && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: 6,
+                pointerEvents: "auto",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => void enterPlayFullscreen()}
+                style={mazeViewToggleButtonStyle(false)}
+                title="Full-screen play area (2D or 3D)"
+              >
+                Full screen
+              </button>
+              <button
+                type="button"
+                onClick={() => setMazeMapView("grid")}
+                style={mazeViewToggleButtonStyle(mazeMapView === "grid")}
+                title="Top-down grid map"
+                aria-pressed={mazeMapView === "grid"}
+              >
+                Grid
+              </button>
+              <button
+                type="button"
+                onClick={onIsoViewButtonClick}
+                style={mazeViewToggleButtonStyle(mazeMapView === "iso")}
+                title="3D — full screen where supported"
+                aria-pressed={mazeMapView === "iso"}
+              >
+                3D
+              </button>
+              {renderHeaderMenuBlock()}
             </div>
           )}
         </div>
-      </header>
+      )}
 
-      {isMobile && headerMenuOpen && (
+      {(isMobile || isoImmersiveUi) && headerMenuOpen && (
         <div
           role="presentation"
           aria-hidden
@@ -6117,7 +6372,7 @@ export default function LabyrinthGame() {
           style={{
             position: "fixed",
             inset: 0,
-            zIndex: HEADER_Z_INDEX - 1,
+            zIndex: isoImmersiveUi ? ISO_IMMERSIVE_HUD_Z + 58 : HEADER_Z_INDEX - 1,
             background: "rgba(0,0,0,0.45)",
           }}
         />
@@ -8354,6 +8609,7 @@ export default function LabyrinthGame() {
 
       <div
         ref={mazeAreaRef}
+        className={isoImmersiveFallback ? "labyrinth-immersive-maze-area" : undefined}
         style={{
           ...mazeAreaStyle,
           ...((mazeMapView === "iso" ||
@@ -8363,23 +8619,48 @@ export default function LabyrinthGame() {
           ...(isoImmersiveFallback
             ? {
                 position: "fixed" as const,
-                inset: 0,
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                width: "100%",
+                maxWidth: "100%",
+                height: "100dvh",
+                minHeight: "100vh",
                 zIndex: ISO_IMMERSIVE_Z,
               }
             : {}),
           ...(isoImmersiveUi
+            ? isoPlayRootViewportFill
+              ? {
+                  paddingTop: "env(safe-area-inset-top, 0px)",
+                  paddingRight: "env(safe-area-inset-right, 0px)",
+                  paddingLeft: "env(safe-area-inset-left, 0px)",
+                  paddingBottom: "env(safe-area-inset-bottom, 0px)",
+                  alignItems: "stretch" as const,
+                  alignSelf: "stretch",
+                  width: "100%",
+                  boxSizing: "border-box",
+                }
+              : {
+                  paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
+                  paddingRight: "max(12px, env(safe-area-inset-right, 0px))",
+                  paddingLeft: "max(12px, env(safe-area-inset-left, 0px))",
+                  paddingBottom: "max(10px, env(safe-area-inset-bottom, 0px))",
+                  alignItems: "stretch" as const,
+                  alignSelf: "stretch",
+                  width: "100%",
+                  boxSizing: "border-box",
+                }
+            : {}),
+          ...(isLandscapeCompact && lab && !isoImmersiveUi && !mobileIsoEdgeToEdge
             ? {
-                paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
-                paddingRight: "max(12px, env(safe-area-inset-right, 0px))",
-                paddingLeft: "max(12px, env(safe-area-inset-left, 0px))",
-                paddingBottom: "max(10px, env(safe-area-inset-bottom, 0px))",
-                alignItems: "stretch" as const,
-                alignSelf: "stretch",
-                width: "100%",
-                boxSizing: "border-box",
+                paddingTop: "calc(max(4px, env(safe-area-inset-top, 0px)) + 48px)",
               }
             : {}),
-          ...(isMobile
+          ...(isMobile &&
+            !mobileIsoEdgeToEdge &&
+            !(isoImmersiveUi && mazeMapView === "iso")
             ? {
                 paddingBottom: isoImmersiveUi
                   ? `calc(max(10px, env(safe-area-inset-bottom, 0px)) + ${MAZE_MARGIN + mobileDockInsetPx + 10}px)`
@@ -8394,13 +8675,8 @@ export default function LabyrinthGame() {
             : {}),
         }}
       >
-        {lab &&
-          cp &&
-          !combatState &&
-          !lab.eliminatedPlayers.has(currentPlayer) &&
-          isoImmersiveUi &&
-          renderPlayFullscreenTopBar()}
-        {!isLandscapeCompact && (
+        {lab && isoImmersiveUi && !combatState && renderPlayFullscreenChrome()}
+        {(!isLandscapeCompact || lab) && !isoImmersiveUi && (
         <div
           style={{
             ...mazeZoomControlsStyle,
@@ -8410,6 +8686,25 @@ export default function LabyrinthGame() {
                   boxSizing: "border-box",
                   justifyContent: "space-between",
                   gap: 8,
+                }
+              : {}),
+            ...(mobileIsoEdgeToEdge
+              ? {
+                  position: "fixed" as const,
+                  left: "max(8px, env(safe-area-inset-left, 0px))",
+                  right: "max(8px, env(safe-area-inset-right, 0px))",
+                  top:
+                    isLandscapeCompact && lab
+                      ? "calc(max(8px, env(safe-area-inset-top, 0px)) + 48px)"
+                      : `${HEADER_HEIGHT + 6}px`,
+                  zIndex: MOBILE_ISO_CANVAS_Z + 150,
+                  margin: 0,
+                  marginBottom: 0,
+                  padding: "6px 10px",
+                  background: "rgba(10,10,16,0.94)",
+                  borderRadius: 10,
+                  border: "1px solid #333",
+                  boxShadow: "0 4px 20px rgba(0,0,0,0.45)",
                 }
               : {}),
           }}
@@ -8433,7 +8728,7 @@ export default function LabyrinthGame() {
             +
           </button>
           </div>
-          {lab && !combatState && (
+          {lab && !combatState && !isoImmersiveUi && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
               <span style={{ fontSize: "0.7rem", color: "#888" }}>View</span>
               <button
@@ -8456,16 +8751,16 @@ export default function LabyrinthGame() {
               </button>
               <button
                 type="button"
-                onClick={() => void (isoImmersiveUi ? leaveIsoImmersiveOnly() : enterPlayFullscreen())}
-                style={mazeViewToggleButtonStyle(isoImmersiveUi)}
-                title={isoImmersiveUi ? "Leave full-screen" : "Full-screen play area (2D or 3D)"}
-                aria-pressed={isoImmersiveUi}
+                onClick={() => void enterPlayFullscreen()}
+                style={mazeViewToggleButtonStyle(false)}
+                title="Full-screen play area (2D or 3D)"
+                aria-pressed={false}
               >
-                {isoImmersiveUi ? "Exit FS" : "Full screen"}
+                Full screen
               </button>
             </div>
           )}
-          {isMobile && (
+          {isMobile && cp && (
             <div
               style={{
                 display: "flex",
@@ -8483,63 +8778,32 @@ export default function LabyrinthGame() {
           )}
         </div>
         )}
-        {isLandscapeCompact && lab && !combatState && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              flexWrap: "wrap",
-              marginBottom: 8,
-              padding: "4px 8px",
-              background: "#1a1a24",
-              borderRadius: 6,
-              border: "1px solid #333",
-            }}
-          >
-            <span style={{ fontSize: "0.7rem", color: "#888" }}>View</span>
-            <button
-              type="button"
-              onClick={() => setMazeMapView("grid")}
-              style={mazeViewToggleButtonStyle(mazeMapView === "grid")}
-              aria-pressed={mazeMapView === "grid"}
-            >
-              Grid
-            </button>
-            <button
-              type="button"
-              onClick={onIsoViewButtonClick}
-              style={mazeViewToggleButtonStyle(mazeMapView === "iso")}
-              aria-pressed={mazeMapView === "iso"}
-              title="3D — full screen where supported"
-            >
-              3D
-            </button>
-            <button
-              type="button"
-              onClick={() => void (isoImmersiveUi ? leaveIsoImmersiveOnly() : enterPlayFullscreen())}
-              style={mazeViewToggleButtonStyle(isoImmersiveUi)}
-              aria-pressed={isoImmersiveUi}
-              title={isoImmersiveUi ? "Leave full-screen" : "Full-screen play area (2D or 3D)"}
-            >
-              {isoImmersiveUi ? "Exit FS" : "Full screen"}
-            </button>
-          </div>
-        )}
         <div
           ref={mazeWrapRef}
           className={MAZE_LITE_TEXTURES ? "maze-wrap" : "maze-wrap maze-horror-render"}
           style={{
             ...mazeWrapStyle,
-            marginTop: isLandscapeCompact || isoImmersiveUi ? 0 : MAZE_MARGIN,
+            marginTop: mobileIsoEdgeToEdge || isLandscapeCompact || isoImmersiveUi ? 0 : MAZE_MARGIN,
             position: "relative",
+            ...(mazeIsoFillViewport
+              ? {
+                  padding: 0,
+                  border: "none",
+                  boxShadow: "none",
+                  borderRadius: 0,
+                  background: "transparent",
+                  alignSelf: "stretch",
+                }
+              : {}),
             ...((mazeMapView === "iso" ||
               (mazeMapView === "grid" && isoImmersiveUi))
               ? {
                   display: "flex",
                   flexDirection: "column",
-                  flex: 1,
+                  flex:
+                    mazeMapView === "iso" && isoPlayRootViewportFill
+                      ? 0
+                      : 1,
                   minHeight: 0,
                   width: "100%",
                 }
@@ -8557,13 +8821,26 @@ export default function LabyrinthGame() {
         {lab && cp && !combatState && !lab.eliminatedPlayers.has(currentPlayer) && mazeMapView === "iso" && (
           <div
             ref={isoPlayRootRef}
+            className={isoPlayRootViewportFill ? "labyrinth-iso-edge-canvas-host" : undefined}
             style={{
-              flex: 1,
-              minHeight: 0,
+              flex: isoPlayRootViewportFill ? undefined : 1,
+              minHeight: isoPlayRootViewportFill ? undefined : 0,
               width: "100%",
               display: "flex",
               flexDirection: "column",
-              position: "relative",
+              position: isoPlayRootViewportFill ? ("fixed" as const) : "relative",
+              ...(isoPlayRootViewportFill
+                ? {
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    zIndex: MOBILE_ISO_CANVAS_Z,
+                    height: "100dvh",
+                    minHeight: "100vh",
+                    maxHeight: "100dvh",
+                  }
+                : {}),
               background: "#06060a",
             }}
           >
@@ -8571,6 +8848,7 @@ export default function LabyrinthGame() {
               style={{
                 flex: 1,
                 minHeight: 0,
+                height: isoPlayRootViewportFill ? "100%" : undefined,
                 position: "relative",
                 display: "flex",
                 flexDirection: "column",
@@ -8599,6 +8877,7 @@ export default function LabyrinthGame() {
                 focusVersion={currentPlayer}
                 miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
                 fogIntensityMap={fogIntensityMap}
+                fillViewport={mazeIsoFillViewport}
               />
               {catapultPicker && (
                 <div
@@ -8851,6 +9130,7 @@ export default function LabyrinthGame() {
                           }}
                         />
                       </div>
+                      {!(lab && isoImmersiveUi && !combatState) && (
                       <div
                         style={{
                           display: "flex",
@@ -8883,6 +9163,7 @@ export default function LabyrinthGame() {
                           +
                         </button>
                       </div>
+                      )}
                     </div>
                     <div
                       style={{
@@ -10656,8 +10937,8 @@ const HEADER_HEIGHT = 64;
 const COMBAT_MODAL_Z = 10090;
 /** Above combat overlay so menu / mobile backdrop work when combat is closed; settings use SETTINGS_MODAL_Z */
 const HEADER_Z_INDEX = 1300;
-/** Game setup — above combat / immersive layers */
-const SETTINGS_MODAL_Z = 10120;
+/** Game setup — above immersive menu dropdown (ISO_IMMERSIVE_HUD_Z + 70) */
+const SETTINGS_MODAL_Z = 10150;
 
 const gameOverOverlayStyle: React.CSSProperties = {
   position: "fixed",
@@ -10726,7 +11007,14 @@ const gameOverRestartButtonStyle: React.CSSProperties = {
 
 const gamePaneStyle: React.CSSProperties = {
   position: "fixed",
-  inset: 0,
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  width: "100%",
+  maxWidth: "100%",
+  height: "100dvh",
+  minHeight: "100vh",
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",

@@ -39,6 +39,8 @@ type Props = {
   focusVersion?: number;
   miniMonsters?: MiniMonster[];
   fogIntensityMap?: Map<string, number>;
+  /** Mobile: WebGL fills the parent (e.g. fixed viewport); chrome stacks above in the shell. */
+  fillViewport?: boolean;
 };
 
 /** Each grid cell = 3x3 world units. */
@@ -2124,6 +2126,7 @@ export default function MazeIsoView({
   focusVersion,
   miniMonsters,
   fogIntensityMap,
+  fillViewport = false,
 }: Props) {
   const [btnRotate, setBtnRotate] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
@@ -2159,10 +2162,18 @@ export default function MazeIsoView({
   return (
     <div
       style={{
-        width: "100%", maxWidth: "100%", flex: 1, minHeight: 0,
-        margin: "0 auto", borderRadius: 8, overflow: "hidden",
-        border: "1px solid #333", boxShadow: "inset 0 0 24px rgba(0,0,0,0.5)",
-        background: "#06060a", position: "relative",
+        width: "100%",
+        maxWidth: "100%",
+        flex: 1,
+        minHeight: 0,
+        height: fillViewport ? "100%" : undefined,
+        margin: "0 auto",
+        borderRadius: fillViewport ? 0 : 8,
+        overflow: "hidden",
+        border: fillViewport ? "none" : "1px solid #333",
+        boxShadow: fillViewport ? "none" : "inset 0 0 24px rgba(0,0,0,0.5)",
+        background: "#06060a",
+        position: "relative",
         display: "flex",
         flexDirection: "column",
       }}
@@ -2171,8 +2182,8 @@ export default function MazeIsoView({
       <div
         style={{
           position: "absolute",
-          top: 8,
-          right: 8,
+          top: fillViewport ? "max(8px, env(safe-area-inset-top, 0px))" : 8,
+          right: fillViewport ? "max(8px, env(safe-area-inset-right, 0px))" : 8,
           zIndex: 10,
           display: "flex",
           gap: 8,
@@ -2212,7 +2223,19 @@ export default function MazeIsoView({
       <Canvas
         shadows
         camera={{ position: [camDist, CAM_HEIGHT, camDist], fov: THREE.MathUtils.clamp(92 - zoom * 16, 58, 95), near: 0.1, far: 800 }}
-        style={{ width: "100%", flex: 1, minHeight: 0 }}
+        style={
+          fillViewport
+            ? {
+                position: "absolute",
+                left: 0,
+                top: 0,
+                width: "100%",
+                height: "100%",
+                display: "block",
+                touchAction: "auto",
+              }
+            : { width: "100%", flex: 1, minHeight: 0 }
+        }
         gl={{ antialias: true, alpha: false }}
         dpr={[1, 1.4]}
         onCreated={({ gl }) => { gl.setClearColor("#06060a"); }}
