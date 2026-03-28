@@ -1078,6 +1078,18 @@ const CAM_HEIGHT = 5.42;
 const CAM_BEHIND = CS * 0.9;
 /** Orbit / follow target Y at the pawn (not floor) so framing favors the marker against a wall ahead. */
 const CAM_LOOK_AT_Y = 0.52;
+/**
+ * Slingshot aim: camera lifts well above the board (scales with map span) while staying slightly back
+ * along facing so trajectory and landing stay readable — not the low “walking” follow height.
+ */
+const CATAPULT_CAM_HEIGHT_BASE = 5.35;
+const CATAPULT_CAM_HEIGHT_PER_CELL = 0.56;
+const CATAPULT_CAM_BACK_BASE = 1.65;
+/** Extra pull-back along facing, capped so huge maps do not move the rig too far horizontally. */
+const CATAPULT_CAM_BACK_EXTRA_MAX = 1.88;
+const CATAPULT_CAM_BACK_PER_CELL = 0.065;
+/** Look-at near the launch tile floor so the grid and arc read as a plan view. */
+const CATAPULT_LOOK_AT_Y = 0.14;
 /** How fast the camera follows position (0-1 per frame). */
 const CAM_POS_LERP = 0.2;
 /** How fast the camera rotates to face behind the player (0-1 per frame). */
@@ -1134,6 +1146,8 @@ function CameraController({
   const controlsRef = useRef<any>(null);
   const prevResetTick = useRef(resetTick);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
+  /** True for exactly the frame when orbitLookByPixelDelta (minimap ring) applied a delta — synchronous guard like dragRef. */
+  const externalOrbitActiveRef = useRef(false);
   const hasManualCameraRef = useRef(false);
   const manualOffsetRef = useRef<THREE.Vector3 | null>(null);
   const prevPlayerPosRef = useRef<{ x: number; y: number }>({ x: playerX, y: playerY });
@@ -1161,6 +1175,7 @@ function CameraController({
   useLayoutEffect(() => {
     orbitLookApplierRef.current = (dxPx: number, dyPx: number) => {
       applyManualOrbitFromDelta(camera, controlsRef, dxPx, dyPx, hasManualCameraRef, manualOffsetRef);
+      externalOrbitActiveRef.current = true;
     };
     return () => {
       orbitLookApplierRef.current = null;
@@ -1174,16 +1189,21 @@ function CameraController({
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera) {
       let baseFov = THREE.MathUtils.clamp(92 - zoom * 16, 58, 95);
-      if (touchUi && !teleportLikeFraming) {
+      if (touchUi && !teleportMode && !catapultMode) {
         baseFov = THREE.MathUtils.clamp(baseFov + 5, 58, 99);
       }
-      // Magic portal + slingshot: same raised wide view as teleport targeting.
-      camera.fov = teleportLikeFraming
-        ? THREE.MathUtils.clamp(baseFov + 18, 72, 108)
-        : baseFov;
+      // Teleport: wide FOV. Slingshot: even wider so the raised overview shows arc + landing.
+      let fovBoost = 0;
+      if (teleportMode || catapultMode) {
+        fovBoost = 18 + (catapultMode ? 8 : 0);
+      }
+      camera.fov =
+        fovBoost > 0
+          ? THREE.MathUtils.clamp(baseFov + fovBoost, 72, catapultMode ? 114 : 108)
+          : baseFov;
       camera.updateProjectionMatrix();
     }
-  }, [camera, zoom, teleportLikeFraming, touchUi]);
+  }, [camera, zoom, touchUi, teleportMode, catapultMode]);
 
   const prevCatapultRef = useRef(false);
   useEffect(() => {
@@ -1335,9 +1355,25 @@ function CameraController({
     const len = Math.hypot(desiredDir.dx, desiredDir.dy) || 1;
     const px = playerX * CS;
     const pz = playerY * CS;
-    const desiredTarget = new THREE.Vector3(px, CAM_LOOK_AT_Y, pz);
-    const followDist = teleportLikeFraming ? CAM_BEHIND * 2 : CAM_BEHIND;
-    const followHeight = teleportLikeFraming ? CAM_HEIGHT * 1.7 : CAM_HEIGHT;
+    const mapSpan = Math.max(8, mapWidth, mapHeight);
+    const lookY = catapultMode ? CATAPULT_LOOK_AT_Y : CAM_LOOK_AT_Y;
+    const desiredTarget = new THREE.Vector3(px, lookY, pz);
+
+    let followDist: number;
+    let followHeight: number;
+    if (catapultMode) {
+      followHeight = CS * (CATAPULT_CAM_HEIGHT_BASE + mapSpan * CATAPULT_CAM_HEIGHT_PER_CELL);
+      followDist =
+        CS *
+        (CATAPULT_CAM_BACK_BASE +
+          Math.min(CATAPULT_CAM_BACK_EXTRA_MAX, mapSpan * CATAPULT_CAM_BACK_PER_CELL));
+    } else if (teleportMode) {
+      followDist = CAM_BEHIND * 2;
+      followHeight = CAM_HEIGHT * 1.7;
+    } else {
+      followDist = CAM_BEHIND;
+      followHeight = CAM_HEIGHT;
+    }
 
     const ndx = desiredDir.dx / len;
     const ndy = desiredDir.dy / len;
@@ -1359,7 +1395,7 @@ function CameraController({
 
     const prevPosForMove = prevPlayerPosRef.current;
     const movedFar = Math.hypot(playerX - prevPosForMove.x, playerY - prevPosForMove.y) > 1.01;
-    if (movedFar && !rotateMode && !dragRef.current && !teleportLikeFraming) {
+    if (movedFar && !rotateMode && !dragRef.current && !externalOrbitActiveRef.current && !teleportLikeFraming) {
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.42);
@@ -1438,10 +1474,14 @@ function CameraController({
     // Reset: explicit reset, turn/facing change, teleport/catapult framing, or a touch step to a new tile.
 
     // Auto-follow current player and orient behind movement direction unless user is actively rotating.
-    if (!rotateMode && !dragRef.current) {
+    if (!rotateMode && !dragRef.current && !externalOrbitActiveRef.current) {
       const transitionBlend = transitionBlendRef.current;
-      const posLerp = THREE.MathUtils.lerp(CAM_POS_LERP, 0.42, transitionBlend);
-      const rotLerp = THREE.MathUtils.lerp(CAM_ROT_LERP, 0.34, transitionBlend);
+      let posLerp = THREE.MathUtils.lerp(CAM_POS_LERP, 0.42, transitionBlend);
+      let rotLerp = THREE.MathUtils.lerp(CAM_ROT_LERP, 0.34, transitionBlend);
+      if (catapultMode) {
+        posLerp = Math.max(posLerp, 0.46);
+        rotLerp = Math.max(rotLerp, 0.44);
+      }
       ctrl.target.lerp(desiredTarget, posLerp);
       // Keep a stable camera offset from the current target to prevent tilt drift.
       const desiredCameraPos = ctrl.target.clone().add(desiredOffset);
@@ -1454,7 +1494,7 @@ function CameraController({
     const cameraDrivesFacingGrid =
       !!onTouchCameraForwardGridRef.current &&
       !teleportLikeFraming &&
-      (touchUi || hasManualCameraRef.current || dragRef.current != null || rotateMode);
+      (touchUi || hasManualCameraRef.current || dragRef.current != null || externalOrbitActiveRef.current || rotateMode);
     if (cameraDrivesFacingGrid) {
       const toPawn = new THREE.Vector3().subVectors(ctrl.target, camera.position);
       toPawn.y = 0;
@@ -1488,19 +1528,21 @@ function CameraController({
         const bearingDeg = (Math.atan2(toB.z, toB.x) * 180) / Math.PI + 90;
         const prevB = lastEmittedBearingDegRef.current;
         const bearingThresh =
-          hasManualCameraRef.current || dragRef.current != null || rotateMode ? 0.04 : 0.12;
+          hasManualCameraRef.current || dragRef.current != null || externalOrbitActiveRef.current || rotateMode ? 0.04 : 0.12;
         if (prevB == null || Math.abs(bearingDeg - prevB) > bearingThresh) {
           lastEmittedBearingDegRef.current = bearingDeg;
           onIsoCameraBearingDegRef.current(bearingDeg);
         }
       }
     }
+
+    externalOrbitActiveRef.current = false;
   });
 
   return (
     <OrbitControls
       ref={controlsRef}
-      target={[playerX * CS, CAM_LOOK_AT_Y, playerY * CS]}
+      target={[playerX * CS, catapultMode ? CATAPULT_LOOK_AT_Y : CAM_LOOK_AT_Y, playerY * CS]}
       enableDamping={false}
       enableRotate={false}
       enablePan={!touchUi}
@@ -2421,6 +2463,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => setBtnRotate(false), ROTATE_TIMEOUT_MS);
     };
+    btnRotateRef.current = true;
     if (touchUi && typeof window !== "undefined") {
       const DO = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
         requestPermission?: () => Promise<"granted" | "denied">;
