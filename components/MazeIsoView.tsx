@@ -67,6 +67,11 @@ type Props = {
    * Touch: always synced. Desktop: only while right-drag / Ctrl+drag / Rotate mode so left-drag pan still works.
    */
   onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
+  /**
+   * Touch play: continuous compass bearing (deg) for “into the view” on the map plane, same convention as
+   * `IsoDockGridMiniMap`’s `atan2(dy,dx)+90`. Lets the mini-map rotate with orbit, not only cardinal facing snaps.
+   */
+  onIsoCameraBearingDeg?: (deg: number) => void;
 };
 
 export type MazeIsoViewImperativeHandle = {
@@ -1094,6 +1099,7 @@ function CameraController({
   grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy, zoom, rotateMode, resetTick, teleportMode, catapultMode, focusVersion,
   touchUi,
   onTouchCameraForwardGrid,
+  onIsoCameraBearingDeg,
   orbitLookApplierRef,
 }: {
   grid: string[][];
@@ -1111,6 +1117,7 @@ function CameraController({
   focusVersion?: number;
   touchUi: boolean;
   onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
+  onIsoCameraBearingDeg?: (deg: number) => void;
   orbitLookApplierRef: MutableRefObject<((dxPx: number, dyPx: number) => void) | null>;
 }) {
   const { camera, gl } = useThree();
@@ -1132,7 +1139,10 @@ function CameraController({
   const touchCameraBootstrappedRef = useRef(false);
   const lastTouchForwardGridRef = useRef<{ dx: number; dy: number } | null>(null);
   const onTouchCameraForwardGridRef = useRef(onTouchCameraForwardGrid);
+  const onIsoCameraBearingDegRef = useRef(onIsoCameraBearingDeg);
+  const lastEmittedBearingDegRef = useRef<number | null>(null);
   onTouchCameraForwardGridRef.current = onTouchCameraForwardGrid;
+  onIsoCameraBearingDegRef.current = onIsoCameraBearingDeg;
   /** Smoothed grid (dx,dy) for auto camera offset — eases orbit when facing/turn changes instead of snapping. */
   const smoothFollowDirRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 1 });
 
@@ -1379,6 +1389,7 @@ function CameraController({
       transitionBlendRef.current = 0;
       touchCameraBootstrappedRef.current = true;
       smoothFollowDirRef.current = { dx: ndx, dy: ndy };
+      lastEmittedBearingDegRef.current = null;
       camera.position.set(px - ndx * followDist, followHeight, pz - ndy * followDist);
       ctrl.target.copy(desiredTarget);
       ctrl.update();
@@ -1448,6 +1459,22 @@ function CameraController({
         if (prev == null || prev.dx !== gdx || prev.dy !== gdy) {
           lastTouchForwardGridRef.current = { dx: gdx, dy: gdy };
           onTouchCameraForwardGridRef.current!(gdx, gdy);
+        }
+      }
+    }
+
+    /* Mini-map: continuous bearing matches 3D orbit (touch drag, right-drag desktop, mini-map ring, etc.). */
+    if (!teleportLikeFraming && onIsoCameraBearingDegRef.current) {
+      const toB = new THREE.Vector3().subVectors(ctrl.target, camera.position);
+      toB.y = 0;
+      const hB = toB.length();
+      if (hB > 1e-4) {
+        toB.multiplyScalar(1 / hB);
+        const bearingDeg = (Math.atan2(toB.z, toB.x) * 180) / Math.PI + 90;
+        const prevB = lastEmittedBearingDegRef.current;
+        if (prevB == null || Math.abs(bearingDeg - prevB) > 0.2) {
+          lastEmittedBearingDegRef.current = bearingDeg;
+          onIsoCameraBearingDegRef.current(bearingDeg);
         }
       }
     }
@@ -1951,6 +1978,7 @@ function MazeScene({
   focusVersion, miniMonsters, fogIntensityMap,
   touchUi = false,
   onTouchCameraForwardGrid,
+  onIsoCameraBearingDeg,
   orbitLookApplierRef,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
@@ -2043,6 +2071,7 @@ function MazeScene({
         focusVersion={focusVersion}
         touchUi={touchUi}
         onTouchCameraForwardGrid={onTouchCameraForwardGrid}
+        onIsoCameraBearingDeg={onIsoCameraBearingDeg}
         orbitLookApplierRef={orbitLookApplierRef}
       />
       {teleportMode && !!teleportOptions?.length && (
@@ -2351,6 +2380,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     hideOverlayViewButtons = false,
     onRotateModeChange,
     onTouchCameraForwardGrid,
+    onIsoCameraBearingDeg,
   }: Props,
   ref: Ref<MazeIsoViewImperativeHandle>,
 ) {
@@ -2528,6 +2558,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           fogIntensityMap={fogIntensityMap}
           touchUi={touchUi}
           onTouchCameraForwardGrid={onTouchCameraForwardGrid}
+          onIsoCameraBearingDeg={onIsoCameraBearingDeg}
           orbitLookApplierRef={orbitLookApplierRef}
         />
       </Canvas>

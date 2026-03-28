@@ -644,6 +644,8 @@ function IsoDockGridMiniMap({
   clipDiameter,
   /** Move-HUD disc: player stays centered; map rotates so facing points up (no separate ▲ rotation). */
   playerCenteredRotate = false,
+  /** Touch 3D: when set, map rotation follows camera “into view” bearing (smooth orbit); else player facing only. */
+  bearingAngleDeg,
 }: {
   lab: Labyrinth;
   currentPlayer: number;
@@ -657,6 +659,7 @@ function IsoDockGridMiniMap({
   /** Square size; circular clip applied by parent. Overrides default 140px height. */
   clipDiameter?: number;
   playerCenteredRotate?: boolean;
+  bearingAngleDeg?: number | null;
 }) {
   const boxInner = clipDiameter != null ? clipDiameter - 14 : null;
   const miniCellBase =
@@ -668,6 +671,8 @@ function IsoDockGridMiniMap({
   const activeFacingLen = Math.hypot(activeFacing.dx, activeFacing.dy) || 1;
   const activeFacingAngleDeg =
     (Math.atan2(activeFacing.dy / activeFacingLen, activeFacing.dx / activeFacingLen) * 180) / Math.PI + 90;
+  const bearing = bearingAngleDeg ?? null;
+  const mapRotationDeg = playerCenteredRotate && bearing != null ? bearing : activeFacingAngleDeg;
   const curPl = lab.players[currentPlayer];
   const playerGX = curPl?.x ?? 0;
   const playerGY = curPl?.y ?? 0;
@@ -971,7 +976,7 @@ function IsoDockGridMiniMap({
               top: `calc(50% - ${playerCenterPy}px)`,
               width: gridW,
               height: gridH,
-              transform: `rotate(${-activeFacingAngleDeg}deg)`,
+              transform: `rotate(${-mapRotationDeg}deg)`,
               transformOrigin: `${playerCenterPx}px ${playerCenterPy}px`,
             }}
           >
@@ -998,6 +1003,7 @@ function IsoHudMinimapCircle({
   onOpenGrid,
   diameter,
   playerCenteredRotate = false,
+  bearingAngleDeg,
 }: {
   lab: Labyrinth;
   currentPlayer: number;
@@ -1011,6 +1017,7 @@ function IsoHudMinimapCircle({
   diameter: number;
   /** Player dot fixed in center; map rotates so walk-forward is up (matches 3D camera basis). */
   playerCenteredRotate?: boolean;
+  bearingAngleDeg?: number | null;
 }) {
   const mapDiscPx = Math.min(diameter, Math.round(diameter * 0.98));
   return (
@@ -1039,6 +1046,7 @@ function IsoHudMinimapCircle({
         onOpenGrid={onOpenGrid}
         clipDiameter={mapDiscPx}
         playerCenteredRotate={playerCenteredRotate}
+        bearingAngleDeg={bearingAngleDeg ?? null}
       />
     </div>
   );
@@ -1070,6 +1078,7 @@ function MobileLandscapeMinimapOrbitWrap({
   setIsoMiniMapZoom,
   isoMiniMapPinchStartRef,
   onOpenGrid,
+  bearingAngleDeg,
 }: {
   mazeIsoViewRef: RefObject<MazeIsoViewImperativeHandle | null>;
   diameter: number;
@@ -1082,6 +1091,7 @@ function MobileLandscapeMinimapOrbitWrap({
   setIsoMiniMapZoom: Dispatch<SetStateAction<number>>;
   isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
   onOpenGrid: () => void;
+  bearingAngleDeg?: number | null;
 }) {
   const mapDiscPx = Math.min(diameter, Math.round(diameter * 0.98));
   const wrap = mapDiscPx + 2 * MINIMAP_ORBIT_RING_PX + 2 * MINIMAP_COMPASS_PAD_PX;
@@ -1103,17 +1113,29 @@ function MobileLandscapeMinimapOrbitWrap({
     { label: "W", ang: Math.PI },
   ] as const;
 
-  const ringDragRef = useRef<{ x: number; y: number } | null>(null);
+  /** Ring drag: map motion to orbit around map center — tangential → yaw (like turning the compass), radial → pitch. Raw screen dx/dy matched canvas and felt wrong on a circle (e.g. N/S drag at E/W became pitch). */
+  const ringDragRef = useRef<{ x: number; y: number; angle: number } | null>(null);
 
   const onRingPointerDown = useCallback(
     (e: ReactPointerEvent<SVGPathElement>) => {
       e.preventDefault();
       e.stopPropagation();
       mazeIsoViewRef.current?.activateRotate();
-      ringDragRef.current = { x: e.clientX, y: e.clientY };
+      const svg = e.currentTarget.ownerSVGElement as SVGSVGElement | null;
+      if (svg) {
+        const rect = svg.getBoundingClientRect();
+        const sx = rect.width / wrap;
+        const sy = rect.height / wrap;
+        const cxC = rect.left + cx * sx;
+        const cyC = rect.top + cy * sy;
+        const angle = Math.atan2(e.clientY - cyC, e.clientX - cxC);
+        ringDragRef.current = { x: e.clientX, y: e.clientY, angle };
+      } else {
+        ringDragRef.current = { x: e.clientX, y: e.clientY, angle: 0 };
+      }
       e.currentTarget.setPointerCapture(e.pointerId);
     },
-    [mazeIsoViewRef],
+    [mazeIsoViewRef, wrap, cx, cy],
   );
 
   const onRingPointerMove = useCallback(
@@ -1121,12 +1143,45 @@ function MobileLandscapeMinimapOrbitWrap({
       if (ringDragRef.current == null) return;
       e.preventDefault();
       const prev = ringDragRef.current;
-      const dx = (e.clientX - prev.x) * MINIMAP_ORBIT_POINTER_SENS;
-      const dy = (e.clientY - prev.y) * MINIMAP_ORBIT_POINTER_SENS;
-      ringDragRef.current = { x: e.clientX, y: e.clientY };
-      if (dx !== 0 || dy !== 0) mazeIsoViewRef.current?.orbitLookByPixelDelta(dx, dy);
+      const svg = e.currentTarget.ownerSVGElement as SVGSVGElement | null;
+      if (!svg) {
+        ringDragRef.current = { x: e.clientX, y: e.clientY, angle: prev.angle };
+        return;
+      }
+      const rect = svg.getBoundingClientRect();
+      const sx = rect.width / wrap;
+      const sy = rect.height / wrap;
+      const cxC = rect.left + cx * sx;
+      const cyC = rect.top + cy * sy;
+      const vx = e.clientX - cxC;
+      const vy = e.clientY - cyC;
+      const len = Math.hypot(vx, vy);
+      if (len < 6) {
+        ringDragRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          angle: Math.atan2(vy, vx),
+        };
+        return;
+      }
+      const nx = vx / len;
+      const ny = vy / len;
+      const newAng = Math.atan2(vy, vx);
+      let dA = newAng - prev.angle;
+      if (dA > Math.PI) dA -= 2 * Math.PI;
+      if (dA < -Math.PI) dA += 2 * Math.PI;
+      const ddx = e.clientX - prev.x;
+      const ddy = e.clientY - prev.y;
+      const rad = ddx * nx + ddy * ny;
+      const rMidPx = ((rDonutInner + rDonutOuter) / 2) * sx;
+      const tangPx = dA * rMidPx;
+      const sens = MINIMAP_ORBIT_POINTER_SENS;
+      if (tangPx !== 0 || rad !== 0) {
+        mazeIsoViewRef.current?.orbitLookByPixelDelta(tangPx * sens, rad * sens);
+      }
+      ringDragRef.current = { x: e.clientX, y: e.clientY, angle: newAng };
     },
-    [mazeIsoViewRef],
+    [mazeIsoViewRef, wrap, cx, cy, rDonutInner, rDonutOuter],
   );
 
   const onRingPointerEnd = useCallback((e: ReactPointerEvent<SVGPathElement>) => {
@@ -1148,7 +1203,7 @@ function MobileLandscapeMinimapOrbitWrap({
         height: wrap,
         flexShrink: 0,
       }}
-      title="Outer ring: map north · drag green band to orbit 3D · center follows you"
+      title="Green band: drag around the ring to turn the view (map yaw); drag toward/away from center for pitch · center follows you"
     >
       <div
         style={{
@@ -1174,6 +1229,7 @@ function MobileLandscapeMinimapOrbitWrap({
           isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
           onOpenGrid={onOpenGrid}
           playerCenteredRotate
+          bearingAngleDeg={bearingAngleDeg ?? null}
         />
       </div>
       <svg
@@ -1610,6 +1666,7 @@ function CircularIsoMinimapMoveHud({
   scrollToCurrentPlayerOnMap,
   focusDisabled,
   outerRef,
+  bearingAngleDeg,
 }: {
   diameter: number;
   showMinimap: boolean;
@@ -1634,6 +1691,7 @@ function CircularIsoMinimapMoveHud({
   scrollToCurrentPlayerOnMap: () => void;
   focusDisabled: boolean;
   outerRef?: Ref<HTMLDivElement>;
+  bearingAngleDeg?: number | null;
 }) {
   return (
     <div
@@ -1668,6 +1726,7 @@ function CircularIsoMinimapMoveHud({
             onOpenGrid={onOpenGrid}
             clipDiameter={diameter}
             playerCenteredRotate
+            bearingAngleDeg={bearingAngleDeg ?? null}
           />
         </div>
       ) : null}
@@ -5960,8 +6019,16 @@ export default function LabyrinthGame() {
     });
   }, []);
   const [isoCamRotateActive, setIsoCamRotateActive] = useState(false);
+  /** Continuous camera “into view” bearing for player-centered mini-maps (touch orbit vs cardinal-facing only). */
+  const [isoCameraBearingDeg, setIsoCameraBearingDeg] = useState<number | null>(null);
+  const onIsoCameraBearingDeg = useCallback((deg: number) => {
+    setIsoCameraBearingDeg(deg);
+  }, []);
   useEffect(() => {
     if (mazeMapView !== "iso") setIsoCamRotateActive(false);
+  }, [mazeMapView]);
+  useEffect(() => {
+    if (mazeMapView !== "iso") setIsoCameraBearingDeg(null);
   }, [mazeMapView]);
   const [isoNativeFsActive, setIsoNativeFsActive] = useState(false);
   const [isoImmersiveFallback, setIsoImmersiveFallback] = useState(false);
@@ -10180,6 +10247,7 @@ export default function LabyrinthGame() {
                 fogIntensityMap={fogIntensityMap}
                 fillViewport={mazeIsoFillViewport}
                 onTouchCameraForwardGrid={mazeMapView === "iso" ? onTouchCameraForwardGrid : undefined}
+                onIsoCameraBearingDeg={mazeMapView === "iso" ? onIsoCameraBearingDeg : undefined}
               />
               {catapultPicker && (
                 <div
@@ -10507,6 +10575,7 @@ export default function LabyrinthGame() {
                                 if (!isMobile) void leaveIsoImmersiveOnly();
                                 switchToGridAndFocusCurrentPlayer();
                               }}
+                              bearingAngleDeg={isoCameraBearingDeg}
                             />
                           ) : (
                             <IsoHudMinimapCircle
@@ -10523,6 +10592,7 @@ export default function LabyrinthGame() {
                                 if (!isMobile) void leaveIsoImmersiveOnly();
                                 switchToGridAndFocusCurrentPlayer();
                               }}
+                              bearingAngleDeg={isoCameraBearingDeg}
                             />
                           )
                         ) : null}
@@ -10682,6 +10752,7 @@ export default function LabyrinthGame() {
                               focusDisabled={
                                 winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)
                               }
+                              bearingAngleDeg={isoCameraBearingDeg}
                             />
                           )
                         ) : null}
@@ -11488,6 +11559,7 @@ export default function LabyrinthGame() {
                 setIsoMiniMapZoom={setIsoMiniMapZoom}
                 isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
                 onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                bearingAngleDeg={isoCameraBearingDeg}
               />
             </div>
           ) : null}
@@ -11567,6 +11639,7 @@ export default function LabyrinthGame() {
             focusDisabled={
               winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
             }
+            bearingAngleDeg={isoCameraBearingDeg}
           />
         </div>
       ) : null}
@@ -12111,6 +12184,7 @@ export default function LabyrinthGame() {
                               setIsoMiniMapZoom={setIsoMiniMapZoom}
                               isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
                               onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                              bearingAngleDeg={isoCameraBearingDeg}
                             />
                           ) : (
                             <div style={{ flex: 1, minWidth: 0 }} />
@@ -12160,6 +12234,7 @@ export default function LabyrinthGame() {
                           focusDisabled={
                             winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
                           }
+                          bearingAngleDeg={isoCameraBearingDeg}
                         />
                       )}
                     </div>
