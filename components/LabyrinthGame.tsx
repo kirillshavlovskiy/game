@@ -1139,12 +1139,17 @@ function MobileLandscapeMinimapOrbitWrap({
 
   /** Ring drag: map motion to orbit around map center — tangential → yaw (like turning the compass), radial → pitch. Raw screen dx/dy matched canvas and felt wrong on a circle (e.g. N/S drag at E/W became pitch). */
   const ringDragRef = useRef<{ x: number; y: number; angle: number } | null>(null);
+  /** Track whether the pointer moved enough to count as a drag (vs a tap). */
+  const ringDragMovedRef = useRef(false);
+  /** Screen-space angle of the initial tap for tap-to-turn direction. */
+  const ringTapAngleRef = useRef(0);
 
   const onRingPointerDown = useCallback(
     (e: ReactPointerEvent<SVGPathElement>) => {
       e.preventDefault();
       e.stopPropagation();
       mazeIsoViewRef.current?.activateRotate();
+      ringDragMovedRef.current = false;
       const svg = e.currentTarget.ownerSVGElement as SVGSVGElement | null;
       if (svg) {
         const rect = svg.getBoundingClientRect();
@@ -1154,8 +1159,10 @@ function MobileLandscapeMinimapOrbitWrap({
         const cyC = rect.top + cy * sy;
         const angle = Math.atan2(e.clientY - cyC, e.clientX - cxC);
         ringDragRef.current = { x: e.clientX, y: e.clientY, angle };
+        ringTapAngleRef.current = angle;
       } else {
         ringDragRef.current = { x: e.clientX, y: e.clientY, angle: 0 };
+        ringTapAngleRef.current = 0;
       }
       e.currentTarget.setPointerCapture(e.pointerId);
     },
@@ -1167,6 +1174,9 @@ function MobileLandscapeMinimapOrbitWrap({
       if (ringDragRef.current == null) return;
       e.preventDefault();
       const prev = ringDragRef.current;
+      if (!ringDragMovedRef.current && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) > 6) {
+        ringDragMovedRef.current = true;
+      }
       const svg = e.currentTarget.ownerSVGElement as SVGSVGElement | null;
       if (!svg) {
         ringDragRef.current = { x: e.clientX, y: e.clientY, angle: prev.angle };
@@ -1210,13 +1220,21 @@ function MobileLandscapeMinimapOrbitWrap({
   );
 
   const onRingPointerEnd = useCallback((e: ReactPointerEvent<SVGPathElement>) => {
+    const wasTap = ringDragRef.current != null && !ringDragMovedRef.current;
     ringDragRef.current = null;
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {
       /* ignore */
     }
-  }, []);
+    if (wasTap) {
+      const tapAng = ringTapAngleRef.current;
+      const rightHalf = tapAng > -Math.PI / 2 && tapAng < Math.PI / 2;
+      const px90 = (Math.PI / 2) / 0.005;
+      mazeIsoViewRef.current?.activateRotate();
+      mazeIsoViewRef.current?.orbitLookByPixelDelta(rightHalf ? px90 : -px90, 0);
+    }
+  }, [mazeIsoViewRef]);
 
   const donutD = minimapOrbitDonutPath(cx, cy, rDonutInner, rDonutOuter);
 
