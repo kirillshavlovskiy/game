@@ -12,6 +12,8 @@ Run from repo root (adjust paths):
 
 Then retarget node indices (often required after merge):
   node scripts/retarget-glb-animation-nodes.mjs dracula-merged.glb dracula.glb --ref Idle_6
+
+Skeleton (Meshy blue-eyed biped): scripts/blender_merge_skeleton_animation_glbs.py — same steps, base clip Idle_11.
 """
 
 from __future__ import annotations

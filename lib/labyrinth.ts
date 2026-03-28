@@ -227,8 +227,6 @@ export interface Monster {
   defense?: number;
   spawnX?: number;
   spawnY?: number;
-  /** Skeleton only: first hit removes shield, second kills */
-  hasShield?: boolean;
   /** Current HP in combat (all monsters; max from getMonsterMaxHp) */
   hp?: number;
   /** Dracula only: state machine */
@@ -258,9 +256,8 @@ export function getMonsterDamage(type: MonsterType): number {
 /** Max HP for most monsters. Each clean hit −1 HP unless rule says otherwise. */
 export const MONSTER_HP_MAX = 5;
 
-export function getMonsterMaxHp(type: MonsterType): number {
-  /** Skeleton: shield + shorter HP pool — post-shield fights end in a few solid hits. */
-  return type === "K" ? 3 : MONSTER_HP_MAX;
+export function getMonsterMaxHp(_type: MonsterType): number {
+  return MONSTER_HP_MAX;
 }
 
 /** Min/max damage for variable monster attacks. Returns [min, max] inclusive. */
@@ -342,6 +339,7 @@ export class Labyrinth {
   extraPaths: number;
   numPlayers: number;
   monsterDensity: number;
+  firstMonsterType: MonsterType;
   grid: string[][];
   players: Array<{
     x: number;
@@ -397,13 +395,15 @@ export class Labyrinth {
     height: number,
     extraPaths = 4,
     numPlayers = 1,
-    monsterDensity = 2
+    monsterDensity = 2,
+    firstMonsterType: MonsterType = "S"
   ) {
     this.width = width;
     this.height = height;
     this.extraPaths = extraPaths;
     this.numPlayers = numPlayers;
     this.monsterDensity = Math.min(4, Math.max(1, monsterDensity));
+    this.firstMonsterType = firstMonsterType;
     this.grid = [];
     const spawns = this._getCornerSpawns();
     this.players = Array.from({ length: numPlayers }, (_, i) => ({
@@ -719,23 +719,24 @@ export class Labyrinth {
     return area;
   }
 
-  /** Dracula east of (0,0) — first combat after moving right; prepended so it is monsters[0]. */
+  /**
+   * First monster east of (0,0) — first combat after moving right; prepended as `monsters[0]`.
+   * Type is set via `firstMonsterType` constructor param (exposed in game setup UI).
+   */
   private _placeStartNeighborDracula(): void {
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
+        const t = this.firstMonsterType;
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "V",
+          type: t,
           patrolArea,
           visionRadius: 3,
           spawnX: 1,
           spawnY: 0,
-          hp: getMonsterMaxHp("V"),
-          draculaState: "idle",
-          draculaCooldowns: { teleport: 0, attack: 0 },
-          targetPlayerIndex: null,
+          hp: getMonsterMaxHp(t),
         });
       }
     }
@@ -784,7 +785,6 @@ export class Labyrinth {
             visionRadius: mType === "V" ? DRACULA_CONFIG.vision : 3,
             spawnX: x,
             spawnY: y,
-            hasShield: mType === "K",
             hp: getMonsterMaxHp(mType),
           };
           if (mType === "V") {

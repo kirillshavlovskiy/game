@@ -54,7 +54,7 @@ async function glbExists(url: string): Promise<boolean> {
 export function Monster3dReferenceViewer() {
   const [monsterType, setMonsterType] = useState<MonsterType>("V");
   const [visualState, setVisualState] = useState<Monster3DSpriteState>("idle");
-  const [draculaAttackVariant, setDraculaAttackVariant] = useState<"spell" | "skill">("spell");
+  const [draculaAttackVariant, setDraculaAttackVariant] = useState<"spell" | "skill" | "light">("spell");
   const [tight, setTight] = useState(false);
   const [glbUrl, setGlbUrl] = useState<string | null>(null);
   const [checking, setChecking] = useState(true);
@@ -77,8 +77,14 @@ export function Monster3dReferenceViewer() {
     };
   }, [path]);
 
-  const draculaVariantProp =
-    monsterType === "V" && visualState === "attack" ? draculaAttackVariant : undefined;
+  const mergedAttackVariant =
+    (monsterType === "V" || monsterType === "K") && visualState === "attack" ? draculaAttackVariant : undefined;
+
+  /** Demo tiers for merged Meshy hurt clips (Dracula + skeleton) — matches combat when footer passes HP. */
+  const demoHurtHp =
+    (monsterType === "V" || monsterType === "K") && visualState === "hurt"
+      ? { hp: 6, maxHp: 9 }
+      : undefined;
 
   return (
     <section
@@ -92,10 +98,9 @@ export function Monster3dReferenceViewer() {
     >
       <h2 style={{ fontSize: "1.15rem", margin: "0 0 10px", color: "#b8f0c8" }}>Live 3D preview</h2>
       <p style={{ margin: "0 0 14px", fontSize: "0.88rem", color: "#a89cb0" }}>
-        One <code style={{ color: "#c4b8d4" }}>&lt;slug&gt;.glb</code> per type (Dracula = merged{" "}
-        <code style={{ color: "#c4b8d4" }}>dracula.glb</code>). Portrait state only switches <strong>animation clips</strong>{" "}
-        on the same loaded model — same as combat. Purple torus: file missing. No{" "}
-        <code>NEXT_PUBLIC_MONSTER_3D=1</code> required here.
+        One <code style={{ color: "#c4b8d4" }}>&lt;slug&gt;.glb</code> per type. <strong>Dracula</strong> and{" "}
+        <strong>skeleton</strong> use merged Meshy GLBs; portrait state switches clips on the same rig (as in combat).
+        Purple torus: file missing. No <code>NEXT_PUBLIC_MONSTER_3D=1</code> required here.
       </p>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 12, alignItems: "center" }}>
@@ -141,12 +146,12 @@ export function Monster3dReferenceViewer() {
             ))}
           </select>
         </label>
-        {monsterType === "V" && visualState === "attack" ? (
+        {(monsterType === "V" || monsterType === "K") && visualState === "attack" ? (
           <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.8rem", color: "#b8afc8" }}>
             Attack clip priority
             <select
               value={draculaAttackVariant}
-              onChange={(e) => setDraculaAttackVariant(e.target.value as "spell" | "skill")}
+              onChange={(e) => setDraculaAttackVariant(e.target.value as "spell" | "skill" | "light")}
               style={{
                 minWidth: 200,
                 padding: "6px 8px",
@@ -156,8 +161,12 @@ export function Monster3dReferenceViewer() {
                 border: "1px solid rgba(255,255,255,0.15)",
               }}
             >
-              <option value="spell">spell first (Charged_Spell_Cast_2 → …)</option>
-              <option value="skill">skill first (Skill_03 → …)</option>
+              <option value="spell">
+                {monsterType === "K" ? "spell first (combo → charged → slash…)" : "spell first (Charged_Spell_Cast_2 → …)"}
+              </option>
+              <option value="skill">
+                {monsterType === "K" ? "skill first (slash → skills…)" : "skill first (Skill_03 → …)"}
+              </option>
             </select>
           </label>
         ) : null}
@@ -204,12 +213,13 @@ export function Monster3dReferenceViewer() {
           <Suspense fallback={null}>
             {glbUrl ? (
               <Monster3dGltfSceneContent
-                key={`${glbUrl}-${tight}`}
+                key={`${glbUrl}-${tight}-${mergedAttackVariant ?? "na"}-${demoHurtHp ? "hurt" : "nh"}`}
                 url={glbUrl}
                 visualState={visualState}
                 tightFraming={tight}
                 monsterType={monsterType}
-                draculaAttackVariant={draculaVariantProp}
+                draculaAttackVariant={mergedAttackVariant}
+                draculaHurtHp={demoHurtHp}
               />
             ) : (
               <PlaceholderScene />
