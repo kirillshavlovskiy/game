@@ -76,6 +76,8 @@ type Props = {
 
 export type MazeIsoViewImperativeHandle = {
   activateRotate: () => void;
+  /** While rotate mode is active, extend the auto-exit timer (e.g. continuous minimap ring drag). */
+  bumpRotateSession: () => void;
   resetCameraView: () => void;
   /** Apply the same orbit deltas as dragging on the 3D canvas (e.g. mini-map ring in landscape). */
   orbitLookByPixelDelta: (dxPx: number, dyPx: number) => void;
@@ -1412,7 +1414,9 @@ function CameraController({
     }
 
     // Facing direction changed: ease camera behind the marker (smoothFollowDirRef does the heavy lifting).
-    if (facingChanged && !rotateMode) {
+    // Touch UI: facing is often driven from camera→pawn cardinals; clearing manual orbit here makes the
+    // minimap ring / orbit stop after a tiny nudge. Desktop keeps the old reset-on-turn behavior.
+    if (facingChanged && !rotateMode && !touchUi) {
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       autoDirRef.current = desiredDir;
@@ -1472,7 +1476,9 @@ function CameraController({
         toB.multiplyScalar(1 / hB);
         const bearingDeg = (Math.atan2(toB.z, toB.x) * 180) / Math.PI + 90;
         const prevB = lastEmittedBearingDegRef.current;
-        if (prevB == null || Math.abs(bearingDeg - prevB) > 0.2) {
+        const bearingThresh =
+          hasManualCameraRef.current || dragRef.current != null || rotateMode ? 0.04 : 0.12;
+        if (prevB == null || Math.abs(bearingDeg - prevB) > bearingThresh) {
           lastEmittedBearingDegRef.current = bearingDeg;
           onIsoCameraBearingDegRef.current(bearingDeg);
         }
@@ -2388,6 +2394,8 @@ const MazeIsoView = forwardRef(function MazeIsoView(
   const [ctrlHeld, setCtrlHeld] = useState(false);
   const [resetTick, setResetTick] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const btnRotateRef = useRef(false);
+  btnRotateRef.current = btnRotate;
   const rotateMode = btnRotate || ctrlHeld;
   const orbitLookApplierRef = useRef<((dxPx: number, dyPx: number) => void) | null>(null);
 
@@ -2414,16 +2422,23 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     enable();
   }, [touchUi]);
 
+  const bumpRotateSession = useCallback(() => {
+    if (!btnRotateRef.current) return;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setBtnRotate(false), ROTATE_TIMEOUT_MS);
+  }, []);
+
   useImperativeHandle(
     ref,
     () => ({
       activateRotate,
+      bumpRotateSession,
       resetCameraView,
       orbitLookByPixelDelta: (dxPx: number, dyPx: number) => {
         orbitLookApplierRef.current?.(dxPx, dyPx);
       },
     }),
-    [activateRotate, resetCameraView],
+    [activateRotate, bumpRotateSession, resetCameraView],
   );
 
   useEffect(() => {

@@ -309,12 +309,18 @@ const MOVE_KNOB_LOOK_RING_OUTER_PX = Math.max(12, Math.round(26 / 1.5));
 const MOVE_KNOB_REPEAT_MS_FAST = 352;
 /** Just past dead zone → slowest repeat. */
 const MOVE_KNOB_REPEAT_MS_SLOW = 400;
+/** After first step, wait this long before auto-repeat starts (hold = “delayed” repeat from center). */
+const MOVE_KNOB_HOLD_DELAY_MS = 420;
 /** Drag band between mini map disc and compass (easier touch target). */
-const MINIMAP_ORBIT_RING_PX = 22;
+const MINIMAP_ORBIT_RING_PX = 18;
 /** Space outside orbit for N/E/S/W labels and ticks (fixed = global map north). */
-const MINIMAP_COMPASS_PAD_PX = 14;
+const MINIMAP_COMPASS_PAD_PX = 13;
 /** Extra orbit sensitivity when dragging the mini-map ring (vs canvas drag). */
-const MINIMAP_ORBIT_POINTER_SENS = 2.15;
+const MINIMAP_ORBIT_POINTER_SENS = 4.1;
+/** Yaw on the ring uses tangential Δangle × radius; boost so small arcs still spin the view quickly. */
+const MINIMAP_ORBIT_TANGENTIAL_BOOST = 1.35;
+/** Minimum inner map disc when outer is locked to joystick diameter. */
+const MINIMAP_INNER_DISC_MIN_PX = 46;
 
 /** Mobile 3D (non-immersive): fixed WebGL layer; header / zoom strip / docks use higher z-index. */
 const MOBILE_ISO_CANVAS_Z = 90;
@@ -646,6 +652,8 @@ function IsoDockGridMiniMap({
   playerCenteredRotate = false,
   /** Touch 3D: when set, map rotation follows camera “into view” bearing (smooth orbit); else player facing only. */
   bearingAngleDeg,
+  /** Landscape orbit HUD: hide − / % / + and block wheel/pinch zoom on this instance only. */
+  hideZoomChrome = false,
 }: {
   lab: Labyrinth;
   currentPlayer: number;
@@ -660,6 +668,7 @@ function IsoDockGridMiniMap({
   clipDiameter?: number;
   playerCenteredRotate?: boolean;
   bearingAngleDeg?: number | null;
+  hideZoomChrome?: boolean;
 }) {
   const boxInner = clipDiameter != null ? clipDiameter - 14 : null;
   const miniCellBase =
@@ -832,17 +841,21 @@ function IsoDockGridMiniMap({
         }
       }}
       title="Switch to full 2D grid map"
-      onWheel={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const direction = -Math.sign(e.deltaY);
-        if (direction === 0) return;
-        setIsoMiniMapZoom((z) =>
-          Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z + direction * ISO_MINIMAP_ZOOM_STEP))
-        );
-      }}
+      onWheel={
+        hideZoomChrome
+          ? undefined
+          : (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const direction = -Math.sign(e.deltaY);
+              if (direction === 0) return;
+              setIsoMiniMapZoom((z) =>
+                Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z + direction * ISO_MINIMAP_ZOOM_STEP))
+              );
+            }
+      }
       onTouchStart={(e) => {
-        if (e.touches.length !== 2) return;
+        if (hideZoomChrome || e.touches.length !== 2) return;
         const [a, b] = [e.touches[0], e.touches[1]];
         if (!a || !b) return;
         isoMiniMapPinchStartRef.current = {
@@ -851,7 +864,7 @@ function IsoDockGridMiniMap({
         };
       }}
       onTouchMove={(e) => {
-        if (e.touches.length !== 2 || !isoMiniMapPinchStartRef.current) return;
+        if (hideZoomChrome || e.touches.length !== 2 || !isoMiniMapPinchStartRef.current) return;
         e.preventDefault();
         e.stopPropagation();
         const [a, b] = [e.touches[0], e.touches[1]];
@@ -863,10 +876,11 @@ function IsoDockGridMiniMap({
         setIsoMiniMapZoom(Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, nextZoom)));
       }}
       onTouchEnd={(e) => {
+        if (hideZoomChrome) return;
         if (e.touches.length < 2) isoMiniMapPinchStartRef.current = null;
       }}
       onTouchCancel={() => {
-        isoMiniMapPinchStartRef.current = null;
+        if (!hideZoomChrome) isoMiniMapPinchStartRef.current = null;
       }}
       style={{
         width: clipDiameter != null ? clipDiameter : "100%",
@@ -883,81 +897,83 @@ function IsoDockGridMiniMap({
         touchAction: "none",
       }}
     >
-      <div
-        style={{
-          position: "absolute",
-          top: 6,
-          right: 6,
-          zIndex: 3,
-          display: "flex",
-          alignItems: "center",
-          gap: 4,
-          padding: "2px 4px",
-          borderRadius: 4,
-          border: "1px solid rgba(98,98,120,0.65)",
-          background: "rgba(8,8,12,0.72)",
-          fontFamily: "monospace",
-        }}
-      >
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setIsoMiniMapZoom((z) =>
-              Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z - ISO_MINIMAP_ZOOM_STEP))
-            );
-          }}
-          title="Zoom out mini map"
+      {!hideZoomChrome ? (
+        <div
           style={{
-            width: 18,
-            height: 18,
+            position: "absolute",
+            top: 6,
+            right: 6,
+            zIndex: 3,
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "2px 4px",
             borderRadius: 4,
-            border: "1px solid #4d4d63",
-            background: "rgba(18,18,28,0.95)",
-            color: "#d2d8e4",
-            fontSize: "0.82rem",
-            lineHeight: 1,
-            cursor: "pointer",
+            border: "1px solid rgba(98,98,120,0.65)",
+            background: "rgba(8,8,12,0.72)",
+            fontFamily: "monospace",
           }}
         >
-          -
-        </button>
-        <span
-          style={{
-            minWidth: 36,
-            textAlign: "center",
-            color: "#b9c4d6",
-            fontSize: "0.64rem",
-          }}
-        >
-          {Math.round((isoMiniMapZoom / ISO_MINIMAP_ZOOM_BASELINE) * 100)}%
-        </span>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setIsoMiniMapZoom((z) =>
-              Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z + ISO_MINIMAP_ZOOM_STEP))
-            );
-          }}
-          title="Zoom in mini map"
-          style={{
-            width: 18,
-            height: 18,
-            borderRadius: 4,
-            border: "1px solid #4d4d63",
-            background: "rgba(18,18,28,0.95)",
-            color: "#d2d8e4",
-            fontSize: "0.82rem",
-            lineHeight: 1,
-            cursor: "pointer",
-          }}
-        >
-          +
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsoMiniMapZoom((z) =>
+                Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z - ISO_MINIMAP_ZOOM_STEP))
+              );
+            }}
+            title="Zoom out mini map"
+            style={{
+              width: 18,
+              height: 18,
+              borderRadius: 4,
+              border: "1px solid #4d4d63",
+              background: "rgba(18,18,28,0.95)",
+              color: "#d2d8e4",
+              fontSize: "0.82rem",
+              lineHeight: 1,
+              cursor: "pointer",
+            }}
+          >
+            -
+          </button>
+          <span
+            style={{
+              minWidth: 36,
+              textAlign: "center",
+              color: "#b9c4d6",
+              fontSize: "0.64rem",
+            }}
+          >
+            {Math.round((isoMiniMapZoom / ISO_MINIMAP_ZOOM_BASELINE) * 100)}%
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsoMiniMapZoom((z) =>
+                Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z + ISO_MINIMAP_ZOOM_STEP))
+              );
+            }}
+            title="Zoom in mini map"
+            style={{
+              width: 18,
+              height: 18,
+              borderRadius: 4,
+              border: "1px solid #4d4d63",
+              background: "rgba(18,18,28,0.95)",
+              color: "#d2d8e4",
+              fontSize: "0.82rem",
+              lineHeight: 1,
+              cursor: "pointer",
+            }}
+          >
+            +
+          </button>
+        </div>
+      ) : null}
       {playerCenteredRotate ? (
         <div
           style={{
@@ -1004,6 +1020,9 @@ function IsoHudMinimapCircle({
   diameter,
   playerCenteredRotate = false,
   bearingAngleDeg,
+  /** Parent already clips a circle (orbit HUD); use full diameter and no outer ring shrink. */
+  embedFlush = false,
+  hideZoomChrome = false,
 }: {
   lab: Labyrinth;
   currentPlayer: number;
@@ -1018,8 +1037,10 @@ function IsoHudMinimapCircle({
   /** Player dot fixed in center; map rotates so walk-forward is up (matches 3D camera basis). */
   playerCenteredRotate?: boolean;
   bearingAngleDeg?: number | null;
+  embedFlush?: boolean;
+  hideZoomChrome?: boolean;
 }) {
-  const mapDiscPx = Math.min(diameter, Math.round(diameter * 0.98));
+  const mapDiscPx = embedFlush ? diameter : Math.min(diameter, Math.round(diameter * 0.98));
   return (
     <div
       title="2D mini map — tap for full grid"
@@ -1030,8 +1051,8 @@ function IsoHudMinimapCircle({
         borderRadius: "50%",
         overflow: "hidden",
         boxSizing: "border-box",
-        border: "2px solid rgba(0,255,136,0.28)",
-        boxShadow: "0 6px 22px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)",
+        border: embedFlush ? "none" : "2px solid rgba(0,255,136,0.28)",
+        boxShadow: embedFlush ? "none" : "0 6px 22px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)",
       }}
     >
       <IsoDockGridMiniMap
@@ -1047,6 +1068,7 @@ function IsoHudMinimapCircle({
         clipDiameter={mapDiscPx}
         playerCenteredRotate={playerCenteredRotate}
         bearingAngleDeg={bearingAngleDeg ?? null}
+        hideZoomChrome={hideZoomChrome}
       />
     </div>
   );
@@ -1093,8 +1115,10 @@ function MobileLandscapeMinimapOrbitWrap({
   onOpenGrid: () => void;
   bearingAngleDeg?: number | null;
 }) {
-  const mapDiscPx = Math.min(diameter, Math.round(diameter * 0.98));
-  const wrap = mapDiscPx + 2 * MINIMAP_ORBIT_RING_PX + 2 * MINIMAP_COMPASS_PAD_PX;
+  /** Outer box matches joystick `diameter`; map + orbit + compass fit inside (no larger footprint). */
+  const wrap = diameter;
+  const rimTotal = 2 * MINIMAP_ORBIT_RING_PX + 2 * MINIMAP_COMPASS_PAD_PX;
+  const mapDiscPx = Math.max(MINIMAP_INNER_DISC_MIN_PX, Math.floor(wrap - rimTotal));
   const inset = (wrap - mapDiscPx) / 2;
   const cx = wrap / 2;
   const cy = wrap / 2;
@@ -1174,10 +1198,11 @@ function MobileLandscapeMinimapOrbitWrap({
       const ddy = e.clientY - prev.y;
       const rad = ddx * nx + ddy * ny;
       const rMidPx = ((rDonutInner + rDonutOuter) / 2) * sx;
-      const tangPx = dA * rMidPx;
+      const tangPx = dA * rMidPx * MINIMAP_ORBIT_TANGENTIAL_BOOST;
       const sens = MINIMAP_ORBIT_POINTER_SENS;
       if (tangPx !== 0 || rad !== 0) {
         mazeIsoViewRef.current?.orbitLookByPixelDelta(tangPx * sens, rad * sens);
+        mazeIsoViewRef.current?.bumpRotateSession();
       }
       ringDragRef.current = { x: e.clientX, y: e.clientY, angle: newAng };
     },
@@ -1218,7 +1243,7 @@ function MobileLandscapeMinimapOrbitWrap({
         }}
       >
         <IsoHudMinimapCircle
-          diameter={diameter}
+          diameter={mapDiscPx}
           lab={lab}
           currentPlayer={currentPlayer}
           playerFacing={playerFacing}
@@ -1230,6 +1255,8 @@ function MobileLandscapeMinimapOrbitWrap({
           onOpenGrid={onOpenGrid}
           playerCenteredRotate
           bearingAngleDeg={bearingAngleDeg ?? null}
+          embedFlush
+          hideZoomChrome
         />
       </div>
       <svg
@@ -1326,6 +1353,13 @@ function knobOffsetToRelativeCardinal(
     : { dx: relativeBackward.dx, dy: relativeBackward.dy };
 }
 
+/** Stable cardinal bucket for move repeat (one step per direction change; hold uses delayed repeat). */
+function moveCardinalKeyFromKnobOffset(ox: number, oy: number): string | null {
+  if (Math.hypot(ox, oy) < MOVE_KNOB_DEAD_PX) return null;
+  if (Math.abs(ox) >= Math.abs(oy)) return ox > 0 ? "R" : "L";
+  return oy < 0 ? "F" : "B";
+}
+
 /** Joystick ring: `standalone` for corner HUD; `overlay` on top of minimap in one disc. */
 function IsoHudJoystickMoveRing({
   diameter,
@@ -1380,12 +1414,18 @@ function IsoHudJoystickMoveRing({
   const dragActive = useRef(false);
   const ptrStartRef = useRef<{ x: number; y: number } | null>(null);
   const repeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const holdDelayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeMoveCardinalRef = useRef<string | null>(null);
   const lastLookEmittedRef = useRef<{ dx: number; dy: number } | null>(null);
 
   const clearRepeat = useCallback(() => {
     if (repeatRef.current != null) {
       clearInterval(repeatRef.current);
       repeatRef.current = null;
+    }
+    if (holdDelayTimeoutRef.current != null) {
+      clearTimeout(holdDelayTimeoutRef.current);
+      holdDelayTimeoutRef.current = null;
     }
   }, []);
 
@@ -1446,24 +1486,37 @@ function IsoHudJoystickMoveRing({
     ],
   );
 
-  const armStepRepeat = useCallback(
-    (ox: number, oy: number) => {
+  /** Hold past dead zone: wait, then repeat; interval speeds up slightly for 2–3 quick steps. */
+  const armAcceleratedRepeat = useCallback(
+    (_ox: number, _oy: number) => {
       clearRepeat();
-      const r = Math.hypot(ox, oy);
+      const r = Math.hypot(knobRef.current.x, knobRef.current.y);
       const moveSpanStart = joystickLookRingActive ? lookRingOuterPx : MOVE_KNOB_DEAD_PX;
       if (r <= moveSpanStart) return;
-      const span = Math.max(1e-6, knobMax - moveSpanStart);
-      const t = Math.min(1, (r - moveSpanStart) / span);
-      const eased = t * t;
-      const ms = Math.round(
-        MOVE_KNOB_REPEAT_MS_FAST +
-          (MOVE_KNOB_REPEAT_MS_SLOW - MOVE_KNOB_REPEAT_MS_FAST) * (1 - eased),
-      );
-      repeatRef.current = setInterval(() => {
+
+      holdDelayTimeoutRef.current = setTimeout(() => {
+        holdDelayTimeoutRef.current = null;
+        let periodMs = MOVE_KNOB_REPEAT_MS_SLOW;
+        let ticks = 0;
+        const armInterval = () => {
+          if (repeatRef.current != null) {
+            clearInterval(repeatRef.current);
+            repeatRef.current = null;
+          }
+          repeatRef.current = setInterval(() => {
+            tryMoveFromKnob(knobRef.current.x, knobRef.current.y);
+            ticks++;
+            if (ticks % 2 === 0 && periodMs > MOVE_KNOB_REPEAT_MS_FAST) {
+              periodMs = Math.max(MOVE_KNOB_REPEAT_MS_FAST, periodMs - 52);
+              armInterval();
+            }
+          }, periodMs);
+        };
         tryMoveFromKnob(knobRef.current.x, knobRef.current.y);
-      }, ms);
+        armInterval();
+      }, MOVE_KNOB_HOLD_DELAY_MS);
     },
-    [clearRepeat, joystickLookRingActive, knobMax, lookRingOuterPx, tryMoveFromKnob],
+    [clearRepeat, joystickLookRingActive, lookRingOuterPx, tryMoveFromKnob],
   );
 
   const onJoystickPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -1474,6 +1527,7 @@ function IsoHudJoystickMoveRing({
     ptrStartRef.current = { x: e.clientX, y: e.clientY };
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     clearRepeat();
+    activeMoveCardinalRef.current = null;
     lastLookEmittedRef.current = null;
   };
 
@@ -1496,21 +1550,37 @@ function IsoHudJoystickMoveRing({
     setKnob({ x: ox, y: oy });
 
     if (!joystickLookRingActive) {
-      tryMoveFromKnob(ox, oy);
-      armStepRepeat(ox, oy);
+      const key = moveCardinalKeyFromKnobOffset(ox, oy);
+      if (key == null) {
+        clearRepeat();
+        activeMoveCardinalRef.current = null;
+        return;
+      }
+      if (key !== activeMoveCardinalRef.current) {
+        activeMoveCardinalRef.current = key;
+        tryMoveFromKnob(ox, oy);
+        armAcceleratedRepeat(ox, oy);
+      }
       return;
     }
     if (mClamped < MOVE_KNOB_DEAD_PX) {
       clearRepeat();
+      activeMoveCardinalRef.current = null;
       return;
     }
     if (mClamped <= lookRingOuterPx) {
       clearRepeat();
+      activeMoveCardinalRef.current = null;
       emitLookFromKnob(ox, oy);
       return;
     }
-    tryMoveFromKnob(ox, oy);
-    armStepRepeat(ox, oy);
+    const key = moveCardinalKeyFromKnobOffset(ox, oy);
+    if (key == null) return;
+    if (key !== activeMoveCardinalRef.current) {
+      activeMoveCardinalRef.current = key;
+      tryMoveFromKnob(ox, oy);
+      armAcceleratedRepeat(ox, oy);
+    }
   };
 
   const endJoystickPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -1524,6 +1594,7 @@ function IsoHudJoystickMoveRing({
     dragActive.current = false;
     ptrStartRef.current = null;
     clearRepeat();
+    activeMoveCardinalRef.current = null;
     lastLookEmittedRef.current = null;
     knobRef.current = { x: 0, y: 0 };
     setKnob({ x: 0, y: 0 });
@@ -7567,7 +7638,10 @@ export default function LabyrinthGame() {
               </button>
             </div>
           )}
-          {pendingCombatOffer && lab && !teleportPicker && (
+          {pendingCombatOffer &&
+            lab &&
+            !teleportPicker &&
+            !isoImmersiveUi && (
             <div
               style={{
                 display: "flex",
@@ -7598,7 +7672,7 @@ export default function LabyrinthGame() {
                   onClick={declinePendingCombat}
                   style={{ ...buttonStyle, fontSize: "0.72rem", padding: "6px 10px", background: "#2a2830", borderColor: "#666", color: "#ccc" }}
                 >
-                  {pendingCombatOffer.source === "player" ? "Back" : "Flee"}
+                  {pendingCombatOffer.source === "player" ? "Step back" : "It slips away"}
                 </button>
               )}
             </div>
@@ -11695,7 +11769,9 @@ export default function LabyrinthGame() {
       {isMobile &&
         pendingCombatOffer &&
         lab &&
-        !(isoImmersiveUi && mazeMapView === "iso") && (
+        !isoImmersiveUi &&
+        mazeMapView === "grid" &&
+        !landscapeCompactPlayHud && (
         <div
           role="dialog"
           aria-label="Combat encounter"
@@ -11738,7 +11814,7 @@ export default function LabyrinthGame() {
               onClick={declinePendingCombat}
               style={{ ...buttonStyle, background: "#2a2830", borderColor: "#666", color: "#ccc", fontSize: "0.78rem", padding: "8px 12px" }}
             >
-              {pendingCombatOffer.source === "player" ? "Step back" : "Flee"}
+              {pendingCombatOffer.source === "player" ? "Step back" : "It slips away"}
             </button>
           )}
         </div>
