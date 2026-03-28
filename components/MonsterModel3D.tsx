@@ -1,12 +1,21 @@
 "use client";
 
-import React, { Component, Suspense, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from "react";
-import { Canvas, invalidate } from "@react-three/fiber";
+import React, {
+  Component,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
+import { Canvas, invalidate, useThree } from "@react-three/fiber";
 import { Center, useAnimations, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { MonsterType } from "@/lib/labyrinth";
 import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
-import { glbSlugFromPathOrUrl, resolveMonsterAnimationClipName } from "@/lib/monsterModels3d";
+import { glbSlugFromPathOrUrl, resolveMonsterAnimationClipName, resolvePlayerAnimationClipName } from "@/lib/monsterModels3d";
 
 export interface MonsterModel3DProps {
   gltfPath: string;
@@ -29,7 +38,7 @@ export interface MonsterModel3DProps {
    */
   onOneShotAnimationFinished?: () => void;
   /** Merged `dracula.glb`: spell vs skill clip order when `visualState` is `attack` or `angry`. */
-  draculaAttackVariant?: "spell" | "skill";
+  draculaAttackVariant?: "spell" | "skill" | "light";
   /** Dracula + `hurt`: HP after the strike (with max) selects light / medium / heavy hit clips. */
   draculaHurtHp?: { hp: number; maxHp: number } | null;
   /** Player-loss banner: loop `Skill_01` on `angry` until the user continues. */
@@ -70,22 +79,24 @@ function GltfSubject({
   draculaHurtHp,
   draculaLoopAngrySkill01 = false,
   onOneShotAnimationFinished,
+  isPlayerModel = false,
 }: {
   url: string;
   visualState: Monster3DSpriteState;
   tightFraming: boolean;
   monsterType?: MonsterType | null;
-  draculaAttackVariant?: "spell" | "skill";
+  draculaAttackVariant?: "spell" | "skill" | "light";
   draculaHurtHp?: { hp: number; maxHp: number } | null;
   draculaLoopAngrySkill01?: boolean;
   onOneShotAnimationFinished?: () => void;
+  isPlayerModel?: boolean;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const { scene, animations } = useGLTF(url);
   const { actions, names, mixer } = useAnimations(animations, groupRef);
-  /** Parent often recreates closures; including them in the play effect restarts clips and can stack `finished` / RAF callbacks. */
   const onFinishedRef = useRef(onOneShotAnimationFinished);
   onFinishedRef.current = onOneShotAnimationFinished;
+  const prevVisualStateRef = useRef<Monster3DSpriteState>(visualState);
 
   useEffect(() => {
     useGLTF.preload(url);
@@ -95,19 +106,40 @@ function GltfSubject({
   const hurtMaxHp = draculaHurtHp?.maxHp;
 
   useEffect(() => {
-    /** Hard stop so a clamped `falling_down` pose cannot stay blended when switching to `idle` / calm clips. */
-    mixer.stopAllAction();
+    const prevState = prevVisualStateRef.current;
+    prevVisualStateRef.current = visualState;
+
+    /**
+     * Connected sequences: the outgoing clip's final clamped pose must blend
+     * into the incoming clip's first frame so the model doesn't jump through
+     * bind/T-pose between them.
+     *   knockdown → recover   (lying down → Arise starts from the floor)
+     *   knockdown → defeated  (lying down → Dead, stays clamped on the ground)
+     *   hurt      → recover   (stagger → recovery stance)
+     *   recover   → idle      (Arise ends partially standing → idle completes the stand-up)
+     */
+    const crossFade =
+      (prevState === "knockdown" && (visualState === "recover" || visualState === "defeated")) ||
+      (prevState === "hurt" && visualState === "recover") ||
+      (prevState === "recover" && (visualState === "idle" || visualState === "neutral"));
+    const fadeDuration = crossFade ? 0.4 : 0.18;
+
+    if (!crossFade) {
+      mixer.stopAllAction();
+    }
 
     const glbSlug = glbSlugFromPathOrUrl(url);
     const hurtCtx =
       hurtHp != null && hurtMaxHp != null ? { hp: hurtHp, maxHp: hurtMaxHp } : draculaHurtHp ?? null;
-    const pick = resolveMonsterAnimationClipName(visualState, names, {
-      monsterType,
-      glbSlug,
-      draculaAttackVariant,
-      draculaHurtHp: hurtCtx,
-      draculaAngryLockSkill01: draculaLoopAngrySkill01 && visualState === "angry",
-    });
+    const pick = isPlayerModel
+      ? resolvePlayerAnimationClipName(visualState, names, draculaAttackVariant)
+      : resolveMonsterAnimationClipName(visualState, names, {
+          monsterType,
+          glbSlug,
+          draculaAttackVariant,
+          draculaHurtHp: hurtCtx,
+          draculaAngryLockSkill01: draculaLoopAngrySkill01 && visualState === "angry",
+        });
     const loops = shouldLoopVisualState(visualState, !!draculaLoopAngrySkill01);
     let actForListener: THREE.AnimationAction | null = null;
     let didNotify = false;
@@ -138,9 +170,13 @@ function GltfSubject({
           mixer.addEventListener("finished", onMixerFinished);
         }
       }
-      act.fadeIn(0.18).play();
+      if (crossFade) {
+        for (const a of Object.values(actions)) {
+          if (a && a !== act) a.fadeOut(fadeDuration);
+        }
+      }
+      act.fadeIn(fadeDuration).play();
     }
-    // Do not auto-fire completion when no clip matched: that instantly chained hurt→recover→ready with no real animation.
 
     invalidate();
     return () => {
@@ -152,23 +188,55 @@ function GltfSubject({
         a?.fadeOut(0.12);
       }
     };
-    // Primitives only: parent often passes a fresh `{ hp, maxHp }` object each render — object identity must not restart clips.
-  }, [actions, names, mixer, url, visualState, monsterType, draculaAttackVariant, hurtHp, hurtMaxHp, draculaLoopAngrySkill01]);
+  }, [actions, names, mixer, url, visualState, monsterType, draculaAttackVariant, hurtHp, hurtMaxHp, draculaLoopAngrySkill01, isPlayerModel]);
 
   useEffect(() => {
     invalidate();
   }, [url, tightFraming]);
 
-  /** Merged Dracula clips (falls, lunges) travel in world space — keep him smaller in frame than other GLBs. */
-  const scale = (tightFraming ? 1.14 : 1) * (monsterType === "V" ? 0.9 : 1);
+  /** Merged Meshy rigs (Dracula + skeleton): same scale in combat so framing matches. */
+  const scale = (tightFraming ? 1.14 : 1) * (isPlayerModel ? 0.9 : (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" ? 0.9 : 1));
 
   return (
     <Center>
-      <group ref={groupRef} scale={scale}>
+      <group ref={groupRef} scale={scale} rotation={isPlayerModel ? [0, Math.PI, 0] : undefined}>
         <primitive object={scene} />
       </group>
     </Center>
   );
+}
+
+/**
+ * Fixed camera for merged Meshy rigs — all skeleton/dracula animation clips have their
+ * root X/Z locked so the model never drifts. Camera stays completely static; no per-state
+ * offsets, no movement between clips.
+ */
+function MeshyCombatCameraFraming({
+  enabled,
+  baseZ,
+  baseY,
+  baseFov,
+}: {
+  enabled: boolean;
+  visualState: Monster3DSpriteState;
+  baseZ: number;
+  baseY: number;
+  baseFov: number;
+}) {
+  const { camera } = useThree();
+  const appliedRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (!enabled || appliedRef.current) return;
+    appliedRef.current = true;
+    const cam = camera as THREE.PerspectiveCamera;
+    cam.position.set(0, baseY, baseZ);
+    cam.fov = baseFov;
+    cam.updateProjectionMatrix();
+    invalidate();
+  }, [camera, enabled, baseZ, baseY, baseFov]);
+
+  return null;
 }
 
 function Scene({
@@ -180,18 +248,31 @@ function Scene({
   draculaHurtHp,
   draculaLoopAngrySkill01,
   onOneShotAnimationFinished,
+  meshyCameraBases,
+  isPlayerModel = false,
 }: {
   url: string;
   visualState: Monster3DSpriteState;
   tightFraming: boolean;
   monsterType?: MonsterType | null;
-  draculaAttackVariant?: "spell" | "skill";
+  draculaAttackVariant?: "spell" | "skill" | "light";
   draculaHurtHp?: { hp: number; maxHp: number } | null;
   draculaLoopAngrySkill01?: boolean;
   onOneShotAnimationFinished?: () => void;
+  meshyCameraBases?: { baseZ: number; baseY: number; baseFov: number } | null;
+  isPlayerModel?: boolean;
 }) {
   return (
     <>
+      {meshyCameraBases ? (
+        <MeshyCombatCameraFraming
+          enabled={isPlayerModel || monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S"}
+          visualState={visualState}
+          baseZ={meshyCameraBases.baseZ}
+          baseY={meshyCameraBases.baseY}
+          baseFov={meshyCameraBases.baseFov}
+        />
+      ) : null}
       <ambientLight intensity={0.38} />
       <directionalLight position={[3.2, 5.5, 2.8]} intensity={1.05} />
       <directionalLight position={[-2.5, 2.5, 4]} intensity={0.35} />
@@ -204,6 +285,7 @@ function Scene({
         draculaHurtHp={draculaHurtHp}
         draculaLoopAngrySkill01={draculaLoopAngrySkill01}
         onOneShotAnimationFinished={onOneShotAnimationFinished}
+        isPlayerModel={isPlayerModel}
       />
     </>
   );
@@ -219,15 +301,17 @@ export function Monster3dGltfSceneContent({
   draculaHurtHp,
   draculaLoopAngrySkill01,
   onOneShotAnimationFinished,
+  meshyCameraBases = null,
 }: {
   url: string;
   visualState: Monster3DSpriteState;
   tightFraming?: boolean;
   monsterType?: MonsterType | null;
-  draculaAttackVariant?: "spell" | "skill";
+  draculaAttackVariant?: "spell" | "skill" | "light";
   draculaHurtHp?: { hp: number; maxHp: number } | null;
   draculaLoopAngrySkill01?: boolean;
   onOneShotAnimationFinished?: () => void;
+  meshyCameraBases?: { baseZ: number; baseY: number; baseFov: number } | null;
 }) {
   return (
     <Scene
@@ -239,6 +323,7 @@ export function Monster3dGltfSceneContent({
       draculaHurtHp={draculaHurtHp}
       draculaLoopAngrySkill01={draculaLoopAngrySkill01}
       onOneShotAnimationFinished={onOneShotAnimationFinished}
+      meshyCameraBases={meshyCameraBases}
     />
   );
 }
@@ -259,24 +344,26 @@ export function MonsterModel3D({
   draculaLoopAngrySkill01,
 }: MonsterModel3DProps) {
   const isDracula = monsterType === "V";
+  const isSkeleton = monsterType === "K";
+  const isZombie = monsterType === "Z";
+  const mergedMeshyCombat = isDracula || isSkeleton || isZombie;
   const cameraZBase = referenceViewerStyle ? (tightFraming ? 2.2 : 2.85) : tightFraming ? 2.12 : 2.82;
   const cameraYBase = referenceViewerStyle ? (tightFraming ? 0.95 : 1.05) : tightFraming ? 0.98 : 1.06;
-  /** Extra pullback so knockdown / attack root motion stays in front of the lens (not past `near`). */
-  const draculaCameraZExtra = isDracula ? 0.62 : 0;
-  const draculaCameraYExtra = isDracula ? -0.06 : 0;
-  const cameraZ = cameraZBase + draculaCameraZExtra;
-  const cameraY = cameraYBase + draculaCameraYExtra;
-  const fov = referenceViewerStyle ? (isDracula ? 40 : 38) : 36;
+  const mergedMeshyCameraZExtra = mergedMeshyCombat ? 0.62 : 0;
+  const mergedMeshyCameraYExtra = mergedMeshyCombat ? -0.06 : 0;
+  const cameraZ = cameraZBase + mergedMeshyCameraZExtra;
+  const cameraY = cameraYBase + mergedMeshyCameraYExtra;
+  const fov = referenceViewerStyle ? (mergedMeshyCombat ? 40 : 38) : 36;
+  const meshyCameraBases = mergedMeshyCombat ? { baseZ: cameraZ, baseY: cameraY, baseFov: fov } : null;
 
-  /** Keep showing the last loaded GLB until the next URL has been fetched (e.g. switching monster type in dev tools). */
-  const [committedPath, setCommittedPath] = useState(gltfPath);
-  const [committedVisualState, setCommittedVisualState] = useState(visualState);
+  /**
+   * Keep the previous GLB on screen while a **new URL** is being fetched. `visualState` always
+   * passes straight through so clip changes on the *same* GLB never restart via committed-path churn.
+   */
+  const [committedUrl, setCommittedUrl] = useState(gltfPath);
 
   useEffect(() => {
-    if (gltfPath === committedPath) {
-      setCommittedVisualState((v) => (v === visualState ? v : visualState));
-      return;
-    }
+    if (gltfPath === committedUrl) return;
     let cancelled = false;
     const ac = new AbortController();
     const run = async () => {
@@ -288,19 +375,16 @@ export function MonsterModel3D({
       } catch (err: unknown) {
         if (cancelled || (err instanceof DOMException && err.name === "AbortError")) return;
       }
-      if (!cancelled) {
-        setCommittedPath(gltfPath);
-        setCommittedVisualState(visualState);
-      }
+      if (!cancelled) setCommittedUrl(gltfPath);
     };
     void run();
     return () => {
       cancelled = true;
       ac.abort();
     };
-  }, [gltfPath, visualState, committedPath]);
+  }, [gltfPath, committedUrl]);
 
-  const canvasLayoutKey = `${tightFraming ? "tight" : "wide"}-${referenceViewerStyle ? "ref" : "mod"}${isDracula ? "-v" : ""}`;
+  const canvasLayoutKey = `${tightFraming ? "tight" : "wide"}-${referenceViewerStyle ? "ref" : "mod"}${isDracula ? "-v" : ""}${isSkeleton ? "-k" : ""}${isZombie ? "-z" : ""}`;
   const errorBoundaryKey = `${monsterType ?? "?"}-${canvasLayoutKey}`;
 
   // Skeletal clips need a continuous frame loop; `demand` only redraws on `invalidate()` and stutters.
@@ -326,14 +410,92 @@ export function MonsterModel3D({
       >
         <Suspense fallback={null}>
           <Scene
-            url={committedPath}
-            visualState={committedVisualState}
+            url={committedUrl}
+            visualState={visualState}
             tightFraming={tightFraming}
             monsterType={monsterType}
             draculaAttackVariant={draculaAttackVariant}
             draculaHurtHp={draculaHurtHp}
             draculaLoopAngrySkill01={draculaLoopAngrySkill01}
             onOneShotAnimationFinished={onOneShotAnimationFinished}
+            meshyCameraBases={meshyCameraBases}
+          />
+        </Suspense>
+      </Canvas>
+    </ModelErrorBoundary>
+  );
+}
+
+export interface PlayerModel3DProps {
+  gltfPath: string;
+  fallback: ReactNode;
+  width: number;
+  height: number;
+  visualState: Monster3DSpriteState;
+  attackVariant?: "spell" | "skill" | "light";
+  onOneShotAnimationFinished?: () => void;
+}
+
+export function PlayerModel3D({
+  gltfPath,
+  fallback,
+  width,
+  height,
+  visualState,
+  attackVariant,
+  onOneShotAnimationFinished,
+}: PlayerModel3DProps) {
+  const cameraZ = 3.44;
+  const cameraY = 1.0;
+  const fov = 40;
+  const meshyCameraBases = { baseZ: cameraZ, baseY: cameraY, baseFov: fov };
+
+  const [committedUrl, setCommittedUrl] = useState(gltfPath);
+
+  useEffect(() => {
+    if (gltfPath === committedUrl) return;
+    let cancelled = false;
+    const ac = new AbortController();
+    const run = async () => {
+      try {
+        const r = await fetch(gltfPath, { signal: ac.signal });
+        if (!r.ok) throw new Error(String(r.status));
+        await r.arrayBuffer();
+        await Promise.resolve(useGLTF.preload(gltfPath) as PromiseLike<unknown> | undefined);
+      } catch (err: unknown) {
+        if (cancelled || (err instanceof DOMException && err.name === "AbortError")) return;
+      }
+      if (!cancelled) setCommittedUrl(gltfPath);
+    };
+    void run();
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
+  }, [gltfPath, committedUrl]);
+
+  const canvasLayoutKey = `player-${width}-${height}`;
+
+  return (
+    <ModelErrorBoundary key={canvasLayoutKey} fallback={fallback}>
+      <Canvas
+        key={canvasLayoutKey}
+        style={{ width, height, display: "block", verticalAlign: "top" }}
+        frameloop="always"
+        dpr={[1, 2]}
+        gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
+        camera={{ position: [0, cameraY, cameraZ], fov, near: 0.1, far: 80 }}
+        onCreated={() => invalidate()}
+      >
+        <Suspense fallback={null}>
+          <Scene
+            url={committedUrl}
+            visualState={visualState}
+            tightFraming={false}
+            isPlayerModel
+            draculaAttackVariant={attackVariant}
+            onOneShotAnimationFinished={onOneShotAnimationFinished}
+            meshyCameraBases={meshyCameraBases}
           />
         </Suspense>
       </Canvas>

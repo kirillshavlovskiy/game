@@ -103,7 +103,7 @@ export function getSurpriseDefenseModifier(state: MonsterSurpriseState): number 
 }
 
 export function getMonsterDefense(type: MonsterType): number {
-  return type === "V" ? 5 : type === "Z" || type === "K" ? 4 : type === "L" ? 6 : 3; // Lava: high base; surprise still shifts effective DEF
+  return type === "V" || type === "K" ? 5 : type === "Z" || type === "S" ? 4 : type === "L" ? 6 : 3;
 }
 
 function getMonsterDamage(type: MonsterType): number {
@@ -123,14 +123,12 @@ export function getMonsterReward(monsterType: MonsterType): MonsterReward {
 }
 
 /** Combat hints for each monster type */
-export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
+export function getMonsterHint(type: MonsterType): string {
   switch (type) {
     case "G":
       return "👻 Ghost: Dice 6 = instant win! 50% evade on other rolls — if it evades you lose 1 HP (shield can block).";
     case "K":
-      return hasShield
-        ? "💀 Skeleton: First hit breaks shield (no HP loss) — then clean hits only hurt the bones; you take 1 HP on a miss (+Attack/Angry) unless shield blocks. Glances can chip it too."
-        : "💀 Skeleton: No shield — defense never below 2 (surprise still shifts it up). Clean hits hurt only the monster; on a miss you take 1 HP (+Attack/Angry) unless shield blocks.";
+      return "💀 Skeleton: High defense (5). Dice 6 = instant win! Miss: glancing chip by die; you take 1 HP (+Attack/Angry) unless shield blocks.";
     case "Z": {
       const zm = getMonsterMaxHp("Z");
       const half = Math.max(1, Math.floor(zm / 2));
@@ -139,7 +137,7 @@ export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
     case "V":
       return "🧛 Dracula: High defense (5). Defeat: +1 on movement dice (map, max 6). Combat: d6 + holy sword/cross only. Miss: 1 HP (+Attack/Angry) unless shield blocks.";
     case "S":
-      return "🕷 Spider: Def 3. Win for +1 jump. Miss: you take 1 HP (+Attack/Angry) unless shield blocks.";
+      return "🕷 Spider: Defense (4). Dice 6 = instant win! Die 1–3 = spider attacks you (heavy/medium/light). Die 4 = spider takes a hit. Miss: you take 1 HP unless shield blocks.";
     case "L":
       return "🔥 Lava Elemental: High defense (6). Dice 6 = instant win! Miss: glancing chip on it by die; you take 2 HP (+Attack/Angry) unless shield blocks.";
     default:
@@ -151,7 +149,7 @@ export function resolveCombat(
   playerRoll: number,
   attackBonus: number,
   monsterType: MonsterType,
-  skeletonHasShield?: boolean,
+  _skeletonHasShield?: boolean,
   surpriseModifier = 0,
   rawD6?: number,
   surpriseState?: MonsterSurpriseState
@@ -187,27 +185,9 @@ export function resolveCombat(
     };
   }
 
-  // Skeleton: with shield, base defense 0 so any modest roll can break it; without shield, bones DEF 2 (not full 4) so hits are common.
-  // Floor effective DEF at 2 when exposed: idle surprise (−1) would otherwise give 1 → every d6 ≥1 hits and the player never takes miss damage.
-  const skeletonArmorDefense =
-    monsterType === "K" ? (skeletonHasShield ? 0 : 2) : monsterDefense;
-  const rawDefense = Math.max(0, skeletonArmorDefense + surpriseModifier);
-  const effectiveDefense =
-    monsterType === "K" && !skeletonHasShield ? Math.max(2, rawDefense) : rawDefense;
+  const effectiveDefense = Math.max(0, monsterDefense + surpriseModifier);
   const attackTotal = playerRoll + attackBonus;
   const hit = attackTotal >= effectiveDefense;
-
-  if (monsterType === "K" && skeletonHasShield && hit) {
-    return {
-      won: false,
-      damage: 0,
-      playerRoll,
-      monsterDefense: effectiveDefense,
-      attackTotal,
-      monsterEffect: "skeleton_shield",
-      glancingDamage: 0,
-    };
-  }
 
   const won = hit;
   const dieForGlance = rawD6 !== undefined ? rawD6 : playerRoll;

@@ -227,8 +227,6 @@ export interface Monster {
   defense?: number;
   spawnX?: number;
   spawnY?: number;
-  /** Skeleton only: first hit removes shield, second kills */
-  hasShield?: boolean;
   /** Current HP in combat (all monsters; max from getMonsterMaxHp) */
   hp?: number;
   /** Dracula only: state machine */
@@ -258,9 +256,8 @@ export function getMonsterDamage(type: MonsterType): number {
 /** Max HP for most monsters. Each clean hit −1 HP unless rule says otherwise. */
 export const MONSTER_HP_MAX = 5;
 
-export function getMonsterMaxHp(type: MonsterType): number {
-  /** Skeleton: shield + shorter HP pool — post-shield fights end in a few solid hits. */
-  return type === "K" ? 3 : MONSTER_HP_MAX;
+export function getMonsterMaxHp(_type: MonsterType): number {
+  return MONSTER_HP_MAX;
 }
 
 /** Min/max damage for variable monster attacks. Returns [min, max] inclusive. */
@@ -342,6 +339,7 @@ export class Labyrinth {
   extraPaths: number;
   numPlayers: number;
   monsterDensity: number;
+  firstMonsterType: MonsterType;
   grid: string[][];
   players: Array<{
     x: number;
@@ -397,13 +395,15 @@ export class Labyrinth {
     height: number,
     extraPaths = 4,
     numPlayers = 1,
-    monsterDensity = 2
+    monsterDensity = 2,
+    firstMonsterType: MonsterType = "S"
   ) {
     this.width = width;
     this.height = height;
     this.extraPaths = extraPaths;
     this.numPlayers = numPlayers;
     this.monsterDensity = Math.min(4, Math.max(1, monsterDensity));
+    this.firstMonsterType = firstMonsterType;
     this.grid = [];
     const spawns = this._getCornerSpawns();
     this.players = Array.from({ length: numPlayers }, (_, i) => ({
@@ -720,74 +720,30 @@ export class Labyrinth {
   }
 
   /**
-   * Skeleton east of (0,0) — first combat after moving right (shield on).
-   * Only on Hard (3) and Extreme (4); Easy/Normal omit this encounter.
+   * First monster east of (0,0) — first combat after moving right; prepended as `monsters[0]`.
+   * Type is set via `firstMonsterType` constructor param (exposed in game setup UI).
    */
-  private _placeStartNeighborSkeleton(): void {
-    if (this.monsterDensity < 3) return;
+  private _placeStartNeighborDracula(): void {
     if (this.width > 1 && isWalkable(this.grid[0][1])) {
       const patrolArea = this._getPatrolArea(1, 0, 28);
       if (patrolArea.length >= 2) {
+        const t = this.firstMonsterType;
         this.monsters.unshift({
           x: 1,
           y: 0,
-          type: "K",
+          type: t,
           patrolArea,
           visionRadius: 3,
           spawnX: 1,
           spawnY: 0,
-          hasShield: true,
-          hp: getMonsterMaxHp("K"),
+          hp: getMonsterMaxHp(t),
         });
       }
     }
   }
 
-  /**
-   * Place Dracula a few tiles away from start (0,0), so the player sees a short hunt phase
-   * before first encounter instead of immediate spawn-adjacent contact.
-   */
-  private _placeStartNeighborDracula(): void {
-    const occupied = (x: number, y: number) => this.monsters.some((m) => m.x === x && m.y === y);
-    const minDist = 4;
-    const maxDist = 8;
-    const candidates: [number, number, number][] = [];
-    for (let y = 0; y < this.height; y++) {
-      for (let x = 0; x < this.width; x++) {
-        if (!isWalkable(this.grid[y][x])) continue;
-        if (occupied(x, y)) continue;
-        if (x === 0 && y === 0) continue;
-        const d = Math.abs(x) + Math.abs(y);
-        if (d < minDist || d > maxDist) continue;
-        const patrolArea = this._getPatrolArea(x, y, 28);
-        if (patrolArea.length < 2) continue;
-        candidates.push([x, y, d]);
-      }
-    }
-    if (candidates.length === 0) return;
-    candidates.sort((a, b) => a[2] - b[2]);
-    // Pick one of the closest few valid cells to keep a predictable "early but not instant" hunt.
-    const pickPool = candidates.slice(0, Math.min(6, candidates.length));
-    const [x, y] = pickPool[Math.floor(Math.random() * pickPool.length)]!;
-    const patrolArea = this._getPatrolArea(x, y, 28);
-    this.monsters.unshift({
-      x,
-      y,
-      type: "V",
-      patrolArea,
-      visionRadius: DRACULA_CONFIG.vision,
-      spawnX: x,
-      spawnY: y,
-      hasShield: false,
-      hp: getMonsterMaxHp("V"),
-      draculaState: "idle",
-      draculaCooldowns: { teleport: 0, attack: 0 },
-      targetPlayerIndex: null,
-    });
-  }
-  
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor skeleton is unshifted in generate/loadGrid)
+    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor Dracula is unshifted in generate/loadGrid)
     const intersections: [number, number][] = [];
     const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
@@ -829,7 +785,6 @@ export class Labyrinth {
             visionRadius: mType === "V" ? DRACULA_CONFIG.vision : 3,
             spawnX: x,
             spawnY: y,
-            hasShield: mType === "K",
             hp: getMonsterMaxHp(mType),
           };
           if (mType === "V") {
@@ -937,6 +892,8 @@ export class Labyrinth {
     const indices = activePlayerIndex !== undefined ? [activePlayerIndex] : Array.from({ length: this.players.length }, (_, i) => i);
     for (let mi = 0; mi < this.monsters.length; mi++) {
       const m = this.monsters[mi];
+      const aliveHp = m.hp ?? getMonsterMaxHp(m.type);
+      if (aliveHp <= 0) continue;
       for (const i of indices) {
         if (this.eliminatedPlayers.has(i)) continue;
         const p = this.players[i];
@@ -1049,7 +1006,6 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
 
-    this._placeStartNeighborSkeleton();
     this._placeStartNeighborDracula();
   }
 
@@ -1099,7 +1055,6 @@ export class Labyrinth {
     this.visitedCells = new Set();
     for (const [sx, sy] of spawns) this.recordVisited(sx ?? 0, sy ?? 0);
     this._addMonsters([]);
-    this._placeStartNeighborSkeleton();
     this._placeStartNeighborDracula();
     // Add hidden cells and spider webs from path cells for AI-loaded mazes
     const pathCells: [number, number][] = [];
