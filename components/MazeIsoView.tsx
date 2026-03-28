@@ -83,11 +83,14 @@ export type MazeIsoViewImperativeHandle = {
   orbitLookByPixelDelta: (dxPx: number, dyPx: number) => void;
 };
 
-/** Each grid cell = 3x3 world units. */
-const CS = 3;
-/** Wall blocks fill the full cell ? adjacent walls form solid continuous walls. */
+/**
+ * World size of one grid step. Path cells are one CS wide between wall centers, so raising CS widens
+ * corridors in world space and reduces side walls eating the frustum when the camera sits behind the pawn.
+ */
+const CS = 3.55;
+/** Wall blocks fill the full cell — adjacent walls form solid continuous walls. */
 const WALL_SIZE = CS;
-const WALL_HEIGHT = 3.2;
+const WALL_HEIGHT = 3.25;
 const WALL_TOP_COLOR = "#3a3a4c";
 const FLOOR_Y = 0;
 const ROTATE_TIMEOUT_MS = 3000;
@@ -1066,10 +1069,15 @@ function CatapultTrajectory3D({
 /* ------------------------------------------------------------------ */
 /*  Camera controller: smooth follow, pan default, rotate on demand    */
 /* ------------------------------------------------------------------ */
-/** Camera height above the look-at target (lower, closer to ground). */
-const CAM_HEIGHT = 5.1;
-/** Camera distance behind the player (slightly farther so lower camera still sees corridor depth). */
-const CAM_BEHIND = 5.2;
+/** Camera height above the floor while auto-following (slightly high so side walls clear the marker in 1-wide halls). */
+const CAM_HEIGHT = 5.42;
+/**
+ * Camera sits this far behind the pawn along facing. Tied to CS (~0.9 cell) so it stays “on your shoulder”
+ * instead of deep in the previous cell where back faces can swallow the view next to a wall.
+ */
+const CAM_BEHIND = CS * 0.9;
+/** Orbit / follow target Y at the pawn (not floor) so framing favors the marker against a wall ahead. */
+const CAM_LOOK_AT_Y = 0.52;
 /** How fast the camera follows position (0-1 per frame). */
 const CAM_POS_LERP = 0.2;
 /** How fast the camera rotates to face behind the player (0-1 per frame). */
@@ -1165,14 +1173,17 @@ function CameraController({
 
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera) {
-      const baseFov = THREE.MathUtils.clamp(92 - zoom * 16, 58, 95);
+      let baseFov = THREE.MathUtils.clamp(92 - zoom * 16, 58, 95);
+      if (touchUi && !teleportLikeFraming) {
+        baseFov = THREE.MathUtils.clamp(baseFov + 5, 58, 99);
+      }
       // Magic portal + slingshot: same raised wide view as teleport targeting.
       camera.fov = teleportLikeFraming
         ? THREE.MathUtils.clamp(baseFov + 18, 72, 108)
         : baseFov;
       camera.updateProjectionMatrix();
     }
-  }, [camera, zoom, teleportLikeFraming]);
+  }, [camera, zoom, teleportLikeFraming, touchUi]);
 
   const prevCatapultRef = useRef(false);
   useEffect(() => {
@@ -1324,7 +1335,7 @@ function CameraController({
     const len = Math.hypot(desiredDir.dx, desiredDir.dy) || 1;
     const px = playerX * CS;
     const pz = playerY * CS;
-    const desiredTarget = new THREE.Vector3(px, 0, pz);
+    const desiredTarget = new THREE.Vector3(px, CAM_LOOK_AT_Y, pz);
     const followDist = teleportLikeFraming ? CAM_BEHIND * 2 : CAM_BEHIND;
     const followHeight = teleportLikeFraming ? CAM_HEIGHT * 1.7 : CAM_HEIGHT;
 
@@ -1489,7 +1500,7 @@ function CameraController({
   return (
     <OrbitControls
       ref={controlsRef}
-      target={[playerX * CS, 0, playerY * CS]}
+      target={[playerX * CS, CAM_LOOK_AT_Y, playerY * CS]}
       enableDamping={false}
       enableRotate={false}
       enablePan={!touchUi}
