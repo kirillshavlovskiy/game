@@ -2,7 +2,16 @@ import LabyrinthGame from "@/components/LabyrinthGame";
 
 export default function Home() {
   return (
-    <div style={{ minHeight: "100vh", background: "#0f0f14" }}>
+    <div
+      className="labyrinth-page-root"
+      style={{
+        width: "100%",
+        maxWidth: "100%",
+        minHeight: "100dvh",
+        background: "#0f0f14",
+        overflowX: "hidden",
+      }}
+    >
       <LabyrinthGame />
     </div>
   );

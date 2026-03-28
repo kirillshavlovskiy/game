@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import "@fontsource/creepster";
 import { CrazyGamesSdk } from "@/components/CrazyGamesSdk";
@@ -8,6 +8,20 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Dice Of The Damned",
   description: "Dice Of The Damned - 3D dice maze game",
+  /** iOS: Share → Add to Home Screen opens in standalone mode (no Safari tabs). See `app/manifest.ts`. */
+  appleWebApp: {
+    capable: true,
+    title: "Dice Of The Damned",
+    statusBarStyle: "black-translucent",
+  },
+};
+
+/** Safe areas + best-effort edge-to-edge on notched phones; pairs with `100dvh` / `-webkit-fill-available` in CSS. */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#0a0a0f",
 };
 
 /** Inline so `url()` resolves from the HTML document (portal subpaths). Linked CSS would resolve from `/_next/static/`. */

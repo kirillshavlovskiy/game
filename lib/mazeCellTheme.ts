@@ -36,6 +36,8 @@ export const MAZE_STAIN_TEXTURES: readonly string[] = MAZE_STAIN_TEXTURE_PATHS.m
 
 /** Wall diffuse — repeating `url()` on `.cell.wall` (no per-cell gradient stack). */
 export const MAZE_WALL_TEXTURE = mazeAssetPath("textures/maze/Stone/Horror_Stone_02-256x256.png");
+/** Isometric 2.5D view: left/right faces of wall blocks (`MazeIsoView`). */
+export const MAZE_ISO_WALL_SIDE_TEXTURE = mazeAssetPath("textures/maze/Brick/Horror_Brick_04-256x256.png");
 
 /** Minimal lab slice for corridor lighting (N/S vs E/W neighbors). */
 export type MazeLightLabSlice = {
