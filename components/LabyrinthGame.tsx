@@ -165,7 +165,7 @@ import { applyDraculaTeleport, applyDraculaAttack } from "@/lib/draculaAI";
 
 /** Deep-enough clone for Dracula scheduled actions — keeps round/counters in sync with other lab updates. */
 function cloneLabSnapshotForDracula(prev: Labyrinth): Labyrinth {
-  const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+  const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
   next.grid = prev.grid.map((r) => [...r]);
   next.players = prev.players.map((p) => ({ ...p }));
   next.goalX = prev.goalX;
@@ -2625,7 +2625,6 @@ export default function LabyrinthGame() {
   const [error, setError] = useState("");
   const [mazeSize, setMazeSize] = useState(25);
   const [difficulty, setDifficulty] = useState(2);
-  const [firstMonsterType, setFirstMonsterType] = useState<import("@/lib/labyrinth").MonsterType>("V");
   const [numPlayers, setNumPlayers] = useState(3);
   const [rolling, setRolling] = useState(false);
   const [bonusAdded, setBonusAdded] = useState<number | null>(null);
@@ -2818,11 +2817,7 @@ export default function LabyrinthGame() {
     Array.from({ length: 3 }, (_, i) => `Player ${i + 1}`)
   );
   const [playerAvatars, setPlayerAvatars] = useState<string[]>(() =>
-    Array.from({ length: 10 }, (_, i) =>
-      i < HORROR_HERO_PORTRAITS.length
-        ? HORROR_HERO_PORTRAITS[i]!.path
-        : PLAYER_AVATARS[i % PLAYER_AVATARS.length]
-    )
+    Array.from({ length: 10 }, (_, i) => PLAYER_AVATARS[i % PLAYER_AVATARS.length])
   );
   const [playerArmour, setPlayerArmour] = useState<string[]>(() =>
     Array.from({ length: 10 }, (_, i) => ARMOUR_OPTIONS[i % ARMOUR_OPTIONS.length]!.path)
@@ -2837,7 +2832,6 @@ export default function LabyrinthGame() {
   const combatStateRef = useRef(combatState);
   const combatResultRef = useRef(combatResult);
   const combatSurpriseRef = useRef<MonsterSurpriseState>("hunt");
-  const combatRollResolveInProgressRef = useRef(false);
   const combatHasRolledRef = useRef(false);
   /** After setLab: true = still fighting same monster, show roll UI + snapshot instead of result/Continue */
   const combatContinuesAfterRollRef = useRef(false);
@@ -2948,6 +2942,25 @@ export default function LabyrinthGame() {
       if (timeoutId !== undefined) window.clearTimeout(timeoutId);
     };
   }, [gameStarted]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "w" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+      }
+    };
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (lab) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [lab]);
 
   /** Pinch-to-zoom on map (iOS-style gestures); wheel+ctrl for trackpad pinch. Same behavior portrait/landscape — not tied to `isLandscapeCompact`. Re-binds when a maze exists (ref is absent on first mount before Start / while generating). */
   useEffect(() => {
@@ -3594,7 +3607,7 @@ export default function LabyrinthGame() {
     const n = Math.min(Math.max(1, numPlayers), 9);
     const size = getDimensions();
     const extraPaths = Math.max(4, n * 2);
-    const l = new Labyrinth(size, size, extraPaths, n, difficulty, firstMonsterType);
+    const l = new Labyrinth(size, size, extraPaths, n, difficulty);
     l.generate();
     if (teleportTimerRef.current) {
       clearTimeout(teleportTimerRef.current);
@@ -3668,7 +3681,7 @@ export default function LabyrinthGame() {
     ) {
       setShowDiceModal(true);
     }
-  }, [getDimensions, numPlayers, difficulty, firstMonsterType]);
+  }, [getDimensions, numPlayers, difficulty]);
 
   const generateWithAI = useCallback(async () => {
     const n = Math.min(Math.max(1, numPlayers), 9);
@@ -3709,7 +3722,7 @@ export default function LabyrinthGame() {
       const size = getDimensions();
       const w = data.width ?? size;
       const h = data.height ?? size;
-      const l = new Labyrinth(w, h, 0, n, difficulty, firstMonsterType);
+      const l = new Labyrinth(w, h, 0, n, difficulty);
       if (data.grid && l.loadGrid(data.grid)) {
         if (teleportTimerRef.current) {
           clearTimeout(teleportTimerRef.current);
@@ -3771,7 +3784,7 @@ export default function LabyrinthGame() {
       );
       newGame();
     }
-  }, [getDimensions, numPlayers, newGame, difficulty, firstMonsterType]);
+  }, [getDimensions, numPlayers, newGame, difficulty]);
 
   const handleCombatRollComplete = useCallback((value: number) => {
     combatDicePhysicsInFlightRef.current = false;
@@ -3782,18 +3795,13 @@ export default function LabyrinthGame() {
       return;
     }
     combatLog("--- ROLL COMPLETE ---", { dice: value, monsterType: combat.monsterType, monsterIdx: combat.monsterIndex });
+    /** Must use labRef — this callback is []-memoized; `lab` from closure is stale and would keep skeleton.hasShield stuck true forever. */
     const labNow = labRef.current;
     if (!labNow) {
       combatLog("handleCombatRollComplete: no lab ref, ignoring");
       setRolling(false);
       return;
     }
-    if (combatRollResolveInProgressRef.current) {
-      combatLog("handleCombatRollComplete: duplicate onRollComplete ignored");
-      return;
-    }
-    combatRollResolveInProgressRef.current = true;
-    try {
     const p = labNow.players[combat.playerIndex];
     const holyStrike = combatHolyStrikeBonusRef.current;
     combatHolyStrikeBonusRef.current = 0;
@@ -3898,27 +3906,24 @@ export default function LabyrinthGame() {
         result.damage > 0 &&
         !shieldWouldAbsorb &&
         playerHpBeforeRoll - result.damage > 0;
-      const missDmgPre = Math.max(0, result.damage ?? 0);
-      let monsterHpAfterStrike = monsterHp;
-      if (result.won) {
-        if (result.instantWin) monsterHpAfterStrike = 0;
-        else {
-          const loss = Math.max(1, result.monsterHpLoss ?? 1);
-          monsterHpAfterStrike = Math.max(0, monsterHp - loss);
-        }
-      } else if (gdam > 0) {
-        monsterHpAfterStrike = Math.max(0, monsterHp - gdam);
-      }
-      const monsterSlainThisRoll =
-        monsterHp > 0 && monsterHpAfterStrike <= 0 && (result.won || gdam > 0);
+      /** If true, this roll must not end the encounter (mirror of setLab branches). Used when POST runs before ref is visible. */
       const resolveSaysEncounterContinues =
-        !monsterSlainThisRoll &&
-        (result.monsterEffect === "skeleton_shield" ||
-          glancingMonsterSurvives ||
-          wonMonsterSurvivesPartial ||
-          ghostContinues ||
-          shieldWouldAbsorb ||
-          playerHitSurvives);
+        result.monsterEffect === "skeleton_shield" ||
+        glancingMonsterSurvives ||
+        wonMonsterSurvivesPartial ||
+        ghostContinues ||
+        shieldWouldAbsorb ||
+        playerHitSurvives;
+
+      const monsterHpAfterStrike = (() => {
+        if (result.instantWin) return 0;
+        if (result.won && result.monsterHpLoss != null) return Math.max(0, monsterHp - result.monsterHpLoss);
+        if (result.won) return Math.max(0, monsterHp - 1);
+        if (gdam > 0) return Math.max(0, monsterHp - gdam);
+        return monsterHp;
+      })();
+      const missDmgPre = !result.won && !shieldWouldAbsorb ? Math.max(0, result.damage ?? 0) : 0;
+      const monsterSlainThisRoll = monsterHpAfterStrike <= 0;
 
       combatLog("applyPost branch flags", {
         skeletonShield: result.monsterEffect === "skeleton_shield",
@@ -4101,7 +4106,7 @@ export default function LabyrinthGame() {
           pendingPlayerDamageHighlightIndexRef.current = null;
       setLab((prev) => {
         if (!prev || winnerRef.current !== null) return prev;
-        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((r) => [...r]);
         next.players = prev.players.map((p) => ({
           ...p,
@@ -4167,7 +4172,7 @@ export default function LabyrinthGame() {
           const maxHpG = getMonsterMaxHp(combat.monsterType);
           const curHp = m.hp ?? maxHpG;
           const nh = curHp - (result.glancingDamage ?? 0);
-          m.hp = Math.max(0, Math.round(nh));
+          m.hp = Math.max(0, nh);
           combatLog("BRANCH: glancing damage", { curHp, glancingDamage: result.glancingDamage, newHp: m.hp, glanceKilled: nh <= 0 });
           if (nh <= 0) glanceKilled = true;
           else combatContinuesAfterRollRef.current = true;
@@ -4180,9 +4185,6 @@ export default function LabyrinthGame() {
           const loss =
             result.instantWin ? curStrike : Math.max(1, result.monsterHpLoss ?? 1);
           m.hp = result.instantWin ? 0 : Math.max(0, curStrike - loss);
-          if (typeof m.hp === "number" && Number.isFinite(m.hp)) {
-            m.hp = Math.max(0, Math.round(m.hp));
-          }
           combatLog("BRANCH: clean hit", { monsterType: combat.monsterType, curStrike, hpLost: loss, newHp: m.hp, instantWin: result.instantWin, combatContinues: m.hp > 0 });
           if (m.hp > 0) {
             combatContinuesAfterRollRef.current = true;
@@ -4190,15 +4192,11 @@ export default function LabyrinthGame() {
           }
         }
 
-        const hpForDefeat =
-          m && typeof m.hp === "number" && Number.isFinite(m.hp) ? Math.max(0, m.hp) : null;
         const monsterDefeated =
+          (glanceKilled || (result.won && m && (m.hp ?? 0) <= 0)) &&
           monsterIdx >= 0 &&
           monsterIdx < next.monsters.length &&
-          !!m &&
-          hpForDefeat !== null &&
-          hpForDefeat <= 0 &&
-          (glanceKilled || result.won);
+          !!m;
 
         if (monsterDefeated && m) {
           const maxHp = getMonsterMaxHp(combat.monsterType);
@@ -4325,19 +4323,10 @@ export default function LabyrinthGame() {
         return next;
       });
       });
-      setCombatStrikeHpHold(null);
       runAfterLabCommit();
     };
 
       if (staggerLabCommitMs > 0) {
-        combatPostLabFromStaggerRef.current = true;
-        setCombatStrikeHpHold({
-          monsterHp: Math.min(maxHpM, Math.max(0, mon?.hp ?? maxHpM)),
-          monsterMaxHp: maxHpM,
-          playerHp: playerHpBeforeRoll,
-          playerIndex: combat.playerIndex,
-        });
-        setRolling(false);
         setCombatFooterSnapshot({
           playerRoll: result.playerRoll,
           attackTotal: result.attackTotal,
@@ -4347,21 +4336,11 @@ export default function LabyrinthGame() {
           ...(draculaAttackSegment ? { draculaAttackSegment } : {}),
           ...draculaPlayerHitHurt3dFooterExtra(combat.monsterType, strikePortrait, monsterHpAfterStrike, maxHpM),
         });
-        setCombatRecoveryPhase("hurt");
-        lastCombatRecoveryClipFinishMs.current = 0;
-        combatHasRolledRef.current = false;
-        const stancePre = rollCombatSurprise();
-        combatSurpriseRef.current = stancePre;
-        setCombatMonsterStance(stancePre);
-        if (strikeLabCommitTimerRef.current != null) clearTimeout(strikeLabCommitTimerRef.current);
-        strikeLabCommitTimerRef.current = window.setTimeout(() => {
-          strikeLabCommitTimerRef.current = null;
-          flushCombatLab();
-        }, staggerLabCommitMs);
-        return;
+        combatPostLabFromStaggerRef.current = true;
+        setTimeout(flushCombatLab, staggerLabCommitMs);
+      } else {
+        flushCombatLab();
       }
-
-      flushCombatLab();
     }
 
     applyCombatPostResolveRef.current = applyPost;
@@ -4410,7 +4389,7 @@ export default function LabyrinthGame() {
     setLab((prev) => {
       if (!prev || winnerRef.current !== null) return prev;
       const pi = combat.playerIndex;
-      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
       next.grid = prev.grid.map((r) => [...r]);
       next.players = prev.players.map((pl) => ({
         ...pl,
@@ -4623,7 +4602,7 @@ export default function LabyrinthGame() {
       flushSync(() => {
       setLab((prev) => {
         if (!prev || winnerRef.current !== null) return prev;
-        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((row) => [...row]);
         next.players = prev.players.map((pl) => ({
           ...pl,
@@ -4723,7 +4702,7 @@ export default function LabyrinthGame() {
       totalValue = Math.max(1, totalValue - 1);
       setLab((prev) => {
         if (!prev) return prev;
-        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((r) => [...r]);
         next.players = prev.players.map((pl, i) => ({
           ...pl,
@@ -4748,7 +4727,7 @@ export default function LabyrinthGame() {
       setDiceBonusApplied(true);
       setLab((prev) => {
         if (!prev) return prev;
-        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((r) => [...r]);
         next.players = prev.players.map((pl, i) => ({
           ...pl,
@@ -4839,28 +4818,23 @@ export default function LabyrinthGame() {
     combatHasRolledRef.current = true;
     setCombatAutoHintVisible(false);
     setRolling(true);
-    combatDicePhysicsInFlightRef.current = true;
     const runRoll = () => {
-      const rollResult = combatDiceRef.current?.roll();
-      if (rollResult) {
-        rollResult
-          .catch(() => setRolling(false))
-          .finally(() => {
-            combatDicePhysicsInFlightRef.current = false;
-          });
-      } else {
-        combatDicePhysicsInFlightRef.current = false;
-        const v = Math.floor(Math.random() * 6) + 1;
-        handleCombatRollComplete(v);
-      }
+    const rollResult = combatDiceRef.current?.roll();
+    if (rollResult) {
+      rollResult.catch(() => setRolling(false));
+    } else {
+      const v = Math.floor(Math.random() * 6) + 1;
+      handleCombatRollComplete(v);
+    }
     };
+    /** Lower viewport is height 0 until rolling; dice mounts in upper slot — wait for layout so Dice3D / WebGL has a real box. */
     requestAnimationFrame(() => requestAnimationFrame(runRoll));
-  }, [rolling, combatStrikeHpHold, handleCombatRollComplete]);
+  }, [rolling, handleCombatRollComplete]);
 
   const handleRunAway = useCallback(() => {
     if (gamePausedRef.current) return;
     const combat = combatStateRef.current;
-    if (!combat || rolling || combatStrikeHpHold != null) return;
+    if (!combat || rolling) return;
     const labNow = labRef.current;
     if (!labNow || winnerRef.current !== null) return;
     const pi = combat.playerIndex;
@@ -4930,7 +4904,7 @@ export default function LabyrinthGame() {
     flushSync(() => {
     setLab((prev) => {
       if (!prev || winnerRef.current !== null) return prev;
-      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
       next.grid = prev.grid.map((r) => [...r]);
       next.players = prev.players.map((p) => ({ ...p }));
       next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
@@ -5025,7 +4999,7 @@ export default function LabyrinthGame() {
       }
       if (Math.random() < 0.35) {
         const ev = drawEvent();
-        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((r) => [...r]);
         next.players = prev.players.map((p) => ({ ...p }));
         next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
@@ -5049,7 +5023,7 @@ export default function LabyrinthGame() {
         applyEvent(next, ev, 0, { skipMonsterMove });
         return next;
       }
-      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
       next.grid = prev.grid.map((r) => [...r]);
       next.players = prev.players.map((p) => ({ ...p }));
       next.monsters = prev.monsters.map((m) => ({ ...m, patrolArea: [...m.patrolArea] }));
@@ -5107,7 +5081,7 @@ export default function LabyrinthGame() {
     const inCombat = !!combatStateRef.current;
     if (!cp || (cp.bombs ?? 0) <= 0) return;
     if (!inCombat && movesLeftRef.current <= 0) return;
-    const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity, lab.firstMonsterType);
+    const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
     next.grid = lab.grid.map((r) => [...r]);
     next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
     next.hiddenCells = new Map(lab.hiddenCells);
@@ -5156,7 +5130,7 @@ export default function LabyrinthGame() {
         const totalDiamonds = lab.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
         if (peekRevealBatchSize(lab, totalDiamonds) <= 0) return;
       }
-      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity, lab.firstMonsterType);
+      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
       next.grid = lab.grid.map((r) => [...r]);
       next.players = lab.players.map((p) => ({
         ...p,
@@ -5349,7 +5323,7 @@ export default function LabyrinthGame() {
     setDiceBonusApplied(null);
       setJumpAdded(null);
       if (isWebCell) setWebSlowed(true);
-      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity, lab.firstMonsterType);
+      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
       next.grid = lab.grid.map((r) => [...r]);
       next.players = lab.players.map((p) => ({
         ...p,
@@ -5731,7 +5705,7 @@ export default function LabyrinthGame() {
         if (combatResultRef.current) return prev;
         if (combatContinuesAfterRollRef.current) return prev;
         if (teleportPickerRef.current || catapultPickerRef.current || passThroughMagicRef.current) return prev;
-        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+        const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
         next.grid = prev.grid.map((r) => [...r]);
         next.players = prev.players.map((p) => ({
           ...p,
@@ -6113,7 +6087,7 @@ export default function LabyrinthGame() {
       if (gamePausedRef.current) return;
       if (!lab || !catapultPicker || !catapultMode) return;
       const { playerIndex, from } = catapultPicker;
-      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity, lab.firstMonsterType);
+      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
       next.grid = lab.grid.map((r) => [...r]);
       next.players = lab.players.map((p) => ({ ...p, jumps: p.jumps ?? 0, diamonds: p.diamonds ?? 0, shield: p.shield ?? 0, bombs: p.bombs ?? 0 }));
       next.hiddenCells = new Map(lab.hiddenCells);
@@ -6226,7 +6200,7 @@ export default function LabyrinthGame() {
       const { playerIndex, from, sourceType } = picker;
       const isOption = picker.options.some(([ox, oy]) => ox === destX && oy === destY);
       if (!isOption) return;
-      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity, lab.firstMonsterType);
+      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity);
       next.grid = lab.grid.map((r) => [...r]);
       next.players = lab.players.map((pl) => ({ ...pl, jumps: pl.jumps ?? 0, diamonds: pl.diamonds ?? 0, shield: pl.shield ?? 0, bombs: pl.bombs ?? 0 }));
       next.hiddenCells = new Map(lab.hiddenCells);
@@ -6461,7 +6435,7 @@ export default function LabyrinthGame() {
     }
     setLab((prev) => {
       if (!prev || winnerRef.current !== null) return prev;
-      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
+      const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity);
       next.grid = prev.grid.map((r) => [...r]);
       next.players = prev.players.map((p) => ({ ...p }));
       next.goalX = prev.goalX;
@@ -6814,20 +6788,6 @@ export default function LabyrinthGame() {
               </select>
             </div>
             <div style={startModalRowBase}>
-              <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>First monster</label>
-              <select
-                value={firstMonsterType}
-                onChange={(e) => setFirstMonsterType(e.target.value as import("@/lib/labyrinth").MonsterType)}
-                style={{ ...startModalSelectStyle, ...(isMobile ? { width: "100%", minHeight: 44 } : {}) }}
-              >
-                {(["V", "K", "Z", "S", "G", "L"] as const).map((t) => (
-                  <option key={t} value={t}>
-                    {t === "V" ? "🧛 Dracula" : t === "K" ? "💀 Skeleton" : t === "Z" ? "🧟 Zombie" : t === "S" ? "🕷 Spider" : t === "G" ? "👻 Ghost" : "🔥 Lava Elemental"}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div style={startModalRowBase}>
               <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>Number of players</label>
               <input
                 type="number"
@@ -6847,9 +6807,7 @@ export default function LabyrinthGame() {
                 marginBottom: 0,
               }}
             >
-              <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>
-                Player names & avatars <span style={{ opacity: 0.75, fontWeight: 500 }}>(horror hunters + emoji)</span>
-              </label>
+              <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>Player names & avatars</label>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
                   <div
@@ -6871,56 +6829,6 @@ export default function LabyrinthGame() {
                         maxWidth: isMobile ? "100%" : AVATAR_PICKER_WRAP_MAX_W,
                       }}
                     >
-                      {HORROR_HERO_PORTRAITS.map((h) => (
-                        <button
-                          key={h.path}
-                          type="button"
-                          title={h.title}
-                          className="start-menu-avatar-btn"
-                          onClick={() => {
-                            setPlayerAvatars((prev) => {
-                              const next =
-                                prev.length >= numPlayers
-                                  ? [...prev]
-                                  : [
-                                      ...prev,
-                                      ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
-                                        PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length]
-                                      ),
-                                    ];
-                              next[i] = h.path;
-                              return next;
-                            });
-                          }}
-                          style={{
-                            width: AVATAR_PICKER_BTN_PX,
-                            height: AVATAR_PICKER_BTN_PX,
-                            padding: 0,
-                            lineHeight: 1,
-                            border:
-                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
-                                ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
-                                : `1px solid ${START_MENU_BORDER_MUTE}`,
-                            borderRadius: 6,
-                            background:
-                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
-                                ? START_MENU_SELECTED_FILL
-                                : START_MENU_CTRL_BG,
-                            cursor: "pointer",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            overflow: "hidden",
-                          }}
-                        >
-                          <img
-                            src={h.path}
-                            alt=""
-                            draggable={false}
-                            style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
-                          />
-                        </button>
-                      ))}
                       {PLAYER_AVATARS.map((av) => (
                         <button
                           key={av}
@@ -7204,13 +7112,13 @@ export default function LabyrinthGame() {
   const isoPlayRootViewportFill =
     mazeMapView === "iso" && (mobileIsoEdgeToEdge || (isoImmersiveUi && isMobile));
 
-  /** Unified combat scene: dice + roll/run live in the face-off row; hide duplicate lower dice strip. */
+  /** Phone landscape: dice + roll/run live in the face-off row; hide duplicate lower dice strip. */
   const useCombatLandscapeFaceoff =
-    combatState !== null && combatResult === null;
-  /** Unified combat scene after combat: keep versus row; center outcome + bonus over sprites (no portrait stack / scroll). */
-  const combatLandscapePostFight = combatResult !== null;
+    isLandscapeCompact && combatState !== null && combatResult === null;
+  /** Phone landscape after combat: keep versus row; center outcome + bonus over sprites (no portrait stack / scroll). */
+  const combatLandscapePostFight = isLandscapeCompact && combatResult !== null;
   const showCombatLandscapeVersus =
-    combatState !== null || combatResult !== null;
+    isLandscapeCompact && (combatState !== null || combatResult !== null);
   /** Full monster hint for dismissible ℹ popover (all layouts). */
   const combatMonsterHintFullText =
     lab && combatState && !combatResult
@@ -8959,13 +8867,25 @@ export default function LabyrinthGame() {
               const showCombatDefeatSkull = !!combatResult?.playerDefeated && !combatState;
               /** Mobile column is narrow: bias framing left so wide sprites (e.g. Dracula) read centered in the modal. */
               const combatMonsterImgObjectPosition = isMobile ? "left center" : "center bottom";
-              const combatPortraitCellMinH = isLandscapeCompact ? COMBAT_LANDSCAPE_SPRITE_PX : 220;
+              const versusRowSpritePx = isLandscapeCompact ? COMBAT_LANDSCAPE_SPRITE_PX : COMBAT_FACEOFF_SPRITE_PX;
+              const combatPortraitCellMinH = showCombatLandscapeVersus
+                ? isDracula3dCombatPortrait
+                  ? Math.max(versusRowSpritePx + 80, 280)
+                  : versusRowSpritePx
+                : isDracula3dCombatPortrait
+                  ? Math.max(360, 340)
+                  : 220;
+              const hide3dPlayerColumn = !!monsterGltfPath;
               const combatVersusGridStyleEffective: React.CSSProperties = {
                 ...combatModalVersusGridStyle,
+                ...(hide3dPlayerColumn
+                  ? { gridTemplateColumns: "0px 0px minmax(0, 1fr)", columnGap: 0 }
+                  : {}),
                 ...(isLandscapeCompact
                   ? {
-                      gridTemplateRows:
-                        "minmax(10px, auto) minmax(0, auto) minmax(156px, 200px) auto minmax(6px, auto)",
+                      gridTemplateRows: isDracula3dCombatPortrait
+                        ? "minmax(10px, auto) minmax(0, auto) minmax(260px, min(400px, 54vh)) auto minmax(6px, auto)"
+                        : "minmax(10px, auto) minmax(0, auto) minmax(156px, 200px) auto minmax(6px, auto)",
                       rowGap: 6,
                     }
                   : {}),
@@ -9153,9 +9073,9 @@ export default function LabyrinthGame() {
                     textAlign: "center",
                     paddingTop: isLandscapeCompact ? 0 : 2,
                     overflow: "visible",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "stretch",
+                    display: isLandscapeCompact ? "flex" : undefined,
+                    flexDirection: isLandscapeCompact ? "column" : undefined,
+                    alignItems: isLandscapeCompact ? "stretch" : undefined,
                   }}
                 >
                   <h2
@@ -9826,14 +9746,14 @@ export default function LabyrinthGame() {
                   <div style={combatVersusGridStyleEffective}>
                     <div
                       style={{
-                        display: "flex",
+                        display: hide3dPlayerColumn ? "none" : "flex",
                         alignItems: "center",
                         justifyContent: "center",
                         minHeight: 26,
                         textAlign: "center",
                       }}
                     >
-                      {!combatState && (combatResult as { won?: boolean } | null)?.won ? (
+                      {!combatState && combatResult?.won ? (
                         <span
                           style={{
                             fontSize: "0.72rem",
@@ -9851,7 +9771,7 @@ export default function LabyrinthGame() {
                         >
                           🏆 Winner
                         </span>
-                      ) : !combatState && (combatResult as { playerDefeated?: boolean } | null)?.playerDefeated ? (
+                      ) : !combatState && combatResult?.playerDefeated ? (
                         <span
                           style={{
                             fontSize: "0.72rem",
@@ -9872,7 +9792,7 @@ export default function LabyrinthGame() {
                         </span>
                       ) : null}
                     </div>
-                    <div />
+                    <div style={hide3dPlayerColumn ? { display: "none" } : undefined} />
                     <div
                       style={{
                         display: "flex",
@@ -9882,7 +9802,7 @@ export default function LabyrinthGame() {
                         textAlign: "center",
                       }}
                     >
-                      {!combatState && (combatResult as { won?: boolean } | null)?.won ? (
+                      {!combatState && combatResult?.won ? (
                         <span
                           style={{
                             fontSize: "0.72rem",
@@ -9901,7 +9821,7 @@ export default function LabyrinthGame() {
                         >
                           Defeated
                         </span>
-                      ) : !combatState && (combatResult as { playerDefeated?: boolean } | null)?.playerDefeated ? (
+                      ) : !combatState && combatResult?.playerDefeated ? (
                         <span
                           style={{
                             fontSize: "0.72rem",
@@ -9933,11 +9853,12 @@ export default function LabyrinthGame() {
                         minWidth: 0,
                         alignSelf: "center",
                         paddingBottom: 4,
+                        display: hide3dPlayerColumn ? "none" : undefined,
                       }}
                     >
                       {playerNames[headerPi] ?? `Player ${headerPi + 1}`}
                     </span>
-                    <div aria-hidden style={{ minWidth: 28 }} />
+                    <div aria-hidden style={{ minWidth: 28, display: hide3dPlayerColumn ? "none" : undefined }} />
                     <span
                       style={{
                         fontSize: "0.8rem",
@@ -9956,7 +9877,7 @@ export default function LabyrinthGame() {
 
                     <div
                       style={{
-                        display: "flex",
+                        display: hide3dPlayerColumn ? "none" : "flex",
                         alignItems: "center",
                         justifyContent: "center",
                         minHeight: combatPortraitCellMinH,
@@ -9976,17 +9897,10 @@ export default function LabyrinthGame() {
                           transition: "transform 0.35s cubic-bezier(0.34, 1.45, 0.64, 1)",
                         }}
                       >
-                        {showCombatDefeatSkull ? "💀" : (
-                          <PlayerAvatarFace
-                            value={playerAvatars[headerPi] ?? PLAYER_AVATARS[headerPi % PLAYER_AVATARS.length]}
-                            sizePx={combatPlayerAvatarPx}
-                            radiusPx={10}
-                            emojiFont="clamp(5rem, 11vw, 6.75rem)"
-                          />
-                        )}
+                        {showCombatDefeatSkull ? "💀" : playerAvatars[headerPi] ?? PLAYER_AVATARS[headerPi % PLAYER_AVATARS.length]}
                       </span>
                     </div>
-                    <div aria-hidden style={{ minWidth: 28 }} />
+                    <div aria-hidden style={{ minWidth: 28, display: hide3dPlayerColumn ? "none" : undefined }} />
                     <div
                       style={{
                         position: "relative",
@@ -10552,19 +10466,19 @@ export default function LabyrinthGame() {
                 </div>
               );
             })()}
-            <div style={{ height: 2, flexShrink: 0, minHeight: 2 }} />
+            <div style={{ height: 4, flexShrink: 0, minHeight: 4 }} />
             <div
               style={{
                 ...combatResultSectionStyle,
                 flex: "0 0 auto",
                 justifyContent: "flex-start",
-                gap: 2,
+                gap: 4,
                 width: "100%",
-                minHeight: 0,
+                minHeight: combatLandscapePostFight ? 0 : combatResultSlotHeightPx,
                 maxHeight: combatLandscapePostFight
                   ? "none"
                   : combatState
-                    ? `min(320px, calc(100dvh - 200px))`
+                    ? `min(420px, calc(100dvh - 140px))`
                     : "none",
                 overflowY: combatLandscapePostFight ? "visible" : "auto",
                 WebkitOverflowScrolling: "touch",
@@ -10802,20 +10716,6 @@ export default function LabyrinthGame() {
               </select>
             </div>
             <div style={modalRowStyle}>
-              <label>First monster:</label>
-              <select
-                value={firstMonsterType}
-                onChange={(e) => setFirstMonsterType(e.target.value as import("@/lib/labyrinth").MonsterType)}
-                style={selectStyle}
-              >
-                {(["V", "K", "Z", "S", "G", "L"] as const).map((t) => (
-                  <option key={t} value={t}>
-                    {t === "V" ? "🧛 Dracula" : t === "K" ? "💀 Skeleton" : t === "Z" ? "🧟 Zombie" : t === "S" ? "🕷 Spider" : t === "G" ? "👻 Ghost" : "🔥 Lava Elemental"}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div style={modalRowStyle}>
               <label>Players:</label>
               <input
                 type="number"
@@ -10827,60 +10727,11 @@ export default function LabyrinthGame() {
               />
             </div>
             <div style={{ ...modalRowStyle, flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-              <label>Player names & avatars (horror hunters + emoji):</label>
+              <label>Player names & avatars:</label>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flexShrink: 0, maxWidth: AVATAR_PICKER_WRAP_MAX_W }}>
-                      {HORROR_HERO_PORTRAITS.map((h) => (
-                        <button
-                          key={h.path}
-                          type="button"
-                          title={h.title}
-                          onClick={() => {
-                            setPlayerAvatars((prev) => {
-                              const next =
-                                prev.length >= numPlayers
-                                  ? [...prev]
-                                  : [
-                                      ...prev,
-                                      ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
-                                        PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length]
-                                      ),
-                                    ];
-                              next[i] = h.path;
-                              return next;
-                            });
-                          }}
-                          style={{
-                            width: AVATAR_PICKER_BTN_PX,
-                            height: AVATAR_PICKER_BTN_PX,
-                            padding: 0,
-                            lineHeight: 1,
-                            border:
-                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
-                                ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}`
-                                : "1px solid #444",
-                            borderRadius: 6,
-                            background:
-                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
-                                ? "rgba(0,255,136,0.2)"
-                                : "#1a1a24",
-                            cursor: "pointer",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            overflow: "hidden",
-                          }}
-                        >
-                          <img
-                            src={h.path}
-                            alt=""
-                            draggable={false}
-                            style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
-                          />
-                        </button>
-                      ))}
                       {PLAYER_AVATARS.map((av) => (
                         <button
                           key={av}
@@ -11900,7 +11751,7 @@ export default function LabyrinthGame() {
                       ...(isTeleportRise ? { zIndex: 20, position: "relative" as const } : {}),
                     }}
                   >
-                    <PlayerAvatarFace value={avatar} sizePx={40} emojiFont="1.95rem" />
+                    {avatar}
                   </div>
                 );
                 const dirHintStyle: React.CSSProperties = {
@@ -13943,7 +13794,7 @@ const combatModalStyle: React.CSSProperties = {
   maxWidth: "100%",
   maxHeight: "calc(100dvh - 16px)",
   overflowX: "hidden",
-  overflowY: "hidden",
+  overflowY: "auto",
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
@@ -13964,7 +13815,7 @@ const combatModalTitleStyle: React.CSSProperties = {
 const combatModalVersusGridStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "minmax(0, 1fr) 28px minmax(0, 1fr)",
-  gridTemplateRows: "minmax(20px, auto) minmax(18px, auto) minmax(180px, 220px) auto minmax(10px, auto)",
+  gridTemplateRows: "minmax(20px, auto) minmax(18px, auto) minmax(180px, auto) auto minmax(10px, auto)",
   alignItems: "stretch",
   alignContent: "start",
   columnGap: 6,
@@ -13982,7 +13833,7 @@ const combatModalVersusGridStyle: React.CSSProperties = {
 /** Landscape combat: face-off column + dice between portraits + HP + roll/run row */
 const combatLandscapeFaceoffWrapStyle: React.CSSProperties = {
   width: "100%",
-  maxWidth: "min(920px, 100%)",
+  maxWidth: "min(720px, 100%)",
   marginLeft: "auto",
   marginRight: "auto",
   padding: "0 4px",
