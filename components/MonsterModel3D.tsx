@@ -125,7 +125,7 @@ function GltfSubject({
     const fadeDuration = crossFade ? 0.4 : 0.18;
 
     if (!crossFade) {
-      mixer.stopAllAction();
+    mixer.stopAllAction();
     }
 
     const glbSlug = glbSlugFromPathOrUrl(url);
@@ -134,12 +134,12 @@ function GltfSubject({
     const pick = isPlayerModel
       ? resolvePlayerAnimationClipName(visualState, names, draculaAttackVariant)
       : resolveMonsterAnimationClipName(visualState, names, {
-          monsterType,
-          glbSlug,
-          draculaAttackVariant,
-          draculaHurtHp: hurtCtx,
-          draculaAngryLockSkill01: draculaLoopAngrySkill01 && visualState === "angry",
-        });
+      monsterType,
+      glbSlug,
+      draculaAttackVariant,
+      draculaHurtHp: hurtCtx,
+      draculaAngryLockSkill01: draculaLoopAngrySkill01 && visualState === "angry",
+    });
     const loops = shouldLoopVisualState(visualState, !!draculaLoopAngrySkill01);
     let actForListener: THREE.AnimationAction | null = null;
     let didNotify = false;
