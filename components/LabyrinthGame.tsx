@@ -2590,6 +2590,10 @@ export default function LabyrinthGame() {
   } | null>(null);
   /** Landscape skills panel: raw d6 (1–6) from the last resolved strike roll this fight */
   const [lastCombatStrikeDiceFace, setLastCombatStrikeDiceFace] = useState<number | null>(null);
+  /** ISO-only in-scene combat feedback (click-to-roll + animation pulses). */
+  const [isoCombatRollFace, setIsoCombatRollFace] = useState<number | null>(null);
+  const [isoCombatPulseVersion, setIsoCombatPulseVersion] = useState(0);
+  const isoCombatPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Monster sprite phase after taking damage: hurt → recover → ready (before next roll) */
   const [combatRecoveryPhase, setCombatRecoveryPhase] = useState<"hurt" | "recover" | "ready">("ready");
   /** Temporary combat toast — `seq` invalidates older timeouts when a new toast is shown */
@@ -3073,6 +3077,13 @@ export default function LabyrinthGame() {
   useEffect(() => {
     combatLog("combatStateRef sync", combatState ? `OPEN (player ${combatState.playerIndex} vs monster ${combatState.monsterIndex})` : "CLOSED");
   }, [combatState]);
+  useEffect(() => {
+    if (combatState || combatResult) return;
+    setIsoCombatRollFace(null);
+  }, [combatState, combatResult]);
+  useEffect(() => () => {
+    if (isoCombatPulseTimerRef.current) clearTimeout(isoCombatPulseTimerRef.current);
+  }, []);
   useEffect(() => {
     if (!headerMenuOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -3619,6 +3630,12 @@ export default function LabyrinthGame() {
       rewardType: result.reward?.type,
     });
     setLastCombatStrikeDiceFace(value);
+    setIsoCombatRollFace(value);
+    if (isoCombatPulseTimerRef.current) clearTimeout(isoCombatPulseTimerRef.current);
+    // First show roll result, then pulse player/monster attack animations in-scene.
+    isoCombatPulseTimerRef.current = setTimeout(() => {
+      setIsoCombatPulseVersion((v) => v + 1);
+    }, 120);
 
     function applyPost(resolveResult: CombatResult) {
       combatStrikeIsRerollRef.current = false;
@@ -7855,7 +7872,7 @@ export default function LabyrinthGame() {
             ...(combatOverlayVisible ? { overflow: "visible" as const } : {}),
           }}
         >
-      {lab && combatOverlayVisible && (
+      {lab && combatOverlayVisible && mazeMapView === "grid" && (
         <div
             style={{
             ...combatModalOverlayStyle,
@@ -10337,6 +10354,24 @@ export default function LabyrinthGame() {
                 focusVersion={currentPlayer}
                 miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
                 fogIntensityMap={fogIntensityMap}
+                combatActive={mazeMapView === "iso" && !!combatState}
+                combatRolling={rolling}
+                combatRollFace={isoCombatRollFace}
+                combatPulseVersion={isoCombatPulseVersion}
+                combatMonster={
+                  combatState && lab.monsters[combatState.monsterIndex]
+                    ? {
+                        x: lab.monsters[combatState.monsterIndex]!.x,
+                        y: lab.monsters[combatState.monsterIndex]!.y,
+                        type: lab.monsters[combatState.monsterIndex]!.type,
+                      }
+                    : null
+                }
+                onCombatRollRequest={
+                  mazeMapView === "iso" && !!combatState
+                    ? handleCombatRollClick
+                    : undefined
+                }
                 fillViewport={mazeIsoFillViewport}
                 onTouchCameraForwardGrid={mazeMapView === "iso" ? onTouchCameraForwardGrid : undefined}
                 onIsoCameraBearingDeg={mazeMapView === "iso" ? onIsoCameraBearingDeg : undefined}
