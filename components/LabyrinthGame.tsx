@@ -8801,13 +8801,21 @@ export default function LabyrinthGame() {
               const showCombatDefeatSkull = !!combatResult?.playerDefeated && !combatState;
               /** Mobile column is narrow: bias framing left so wide sprites (e.g. Dracula) read centered in the modal. */
               const combatMonsterImgObjectPosition = isMobile ? "left center" : "center bottom";
-              const combatPortraitCellMinH = isLandscapeCompact ? COMBAT_LANDSCAPE_SPRITE_PX : 220;
+              const versusRowSpritePx = isLandscapeCompact ? COMBAT_LANDSCAPE_SPRITE_PX : COMBAT_FACEOFF_SPRITE_PX;
+              const combatPortraitCellMinH = showCombatLandscapeVersus
+                ? isDracula3dCombatPortrait
+                  ? Math.max(versusRowSpritePx + 80, 280)
+                  : versusRowSpritePx
+                : isDracula3dCombatPortrait
+                  ? Math.max(360, 340)
+                  : 220;
               const combatVersusGridStyleEffective: React.CSSProperties = {
                 ...combatModalVersusGridStyle,
                 ...(isLandscapeCompact
                   ? {
-                      gridTemplateRows:
-                        "minmax(10px, auto) minmax(0, auto) minmax(156px, 200px) auto minmax(6px, auto)",
+                      gridTemplateRows: isDracula3dCombatPortrait
+                        ? "minmax(10px, auto) minmax(0, auto) minmax(260px, min(400px, 54vh)) auto minmax(6px, auto)"
+                        : "minmax(10px, auto) minmax(0, auto) minmax(156px, 200px) auto minmax(6px, auto)",
                       rowGap: 6,
                     }
                   : {}),
@@ -10387,19 +10395,19 @@ export default function LabyrinthGame() {
                 </div>
               );
             })()}
-            <div style={{ height: 2, flexShrink: 0, minHeight: 2 }} />
+            <div style={{ height: 4, flexShrink: 0, minHeight: 4 }} />
             <div
               style={{
                 ...combatResultSectionStyle,
                 flex: "0 0 auto",
                 justifyContent: "flex-start",
-                gap: 2,
+                gap: 4,
                 width: "100%",
-                minHeight: 0,
+                minHeight: combatLandscapePostFight ? 0 : combatResultSlotHeightPx,
                 maxHeight: combatLandscapePostFight
                   ? "none"
                   : combatState
-                    ? `min(320px, calc(100dvh - 200px))`
+                    ? `min(420px, calc(100dvh - 140px))`
                     : "none",
                 overflowY: combatLandscapePostFight ? "visible" : "auto",
                 WebkitOverflowScrolling: "touch",
