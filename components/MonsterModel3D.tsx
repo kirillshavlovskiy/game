@@ -10,8 +10,8 @@ import React, {
   type ErrorInfo,
   type ReactNode,
 } from "react";
-import { Canvas, invalidate, useThree } from "@react-three/fiber";
-import { Center, useAnimations, useGLTF } from "@react-three/drei";
+import { Canvas, invalidate, useThree, useFrame } from "@react-three/fiber";
+import { Center, OrbitControls, useAnimations, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { MonsterType } from "@/lib/labyrinth";
 import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
@@ -203,6 +203,85 @@ function GltfSubject({
         <primitive object={scene} />
       </group>
     </Center>
+  );
+}
+
+/** Same as GltfSubject but positioned at an explicit X offset (for shared combat scene). */
+function PositionedGltfSubject(props: Parameters<typeof GltfSubject>[0] & { positionX?: number; weaponUrl?: string | null }) {
+  const { positionX = 0, weaponUrl, ...rest } = props;
+  const groupRef = useRef<THREE.Group>(null);
+  const { scene, animations } = useGLTF(rest.url);
+  const innerRef = useRef<THREE.Group>(null);
+  const { actions, names, mixer } = useAnimations(animations, innerRef);
+  const onFinishedRef = useRef(rest.onOneShotAnimationFinished);
+  onFinishedRef.current = rest.onOneShotAnimationFinished;
+  const prevVisualStateRef = useRef<Monster3DSpriteState>(rest.visualState);
+
+  useEffect(() => { useGLTF.preload(rest.url); }, [rest.url]);
+
+  const hurtHp = rest.draculaHurtHp?.hp;
+  const hurtMaxHp = rest.draculaHurtHp?.maxHp;
+
+  useEffect(() => {
+    const prevState = prevVisualStateRef.current;
+    prevVisualStateRef.current = rest.visualState;
+    const crossFade =
+      (prevState === "knockdown" && (rest.visualState === "recover" || rest.visualState === "defeated")) ||
+      (prevState === "hurt" && rest.visualState === "recover") ||
+      (prevState === "recover" && (rest.visualState === "idle" || rest.visualState === "neutral"));
+    const fadeDuration = crossFade ? 0.4 : 0.18;
+    if (!crossFade) mixer.stopAllAction();
+
+    const glbSlug = glbSlugFromPathOrUrl(rest.url);
+    const hurtCtx = hurtHp != null && hurtMaxHp != null ? { hp: hurtHp, maxHp: hurtMaxHp } : rest.draculaHurtHp ?? null;
+    const pick = rest.isPlayerModel
+      ? resolvePlayerAnimationClipName(rest.visualState, names, rest.draculaAttackVariant)
+      : resolveMonsterAnimationClipName(rest.visualState, names, {
+          monsterType: rest.monsterType,
+          glbSlug,
+          draculaAttackVariant: rest.draculaAttackVariant,
+          draculaHurtHp: hurtCtx,
+          draculaAngryLockSkill01: rest.draculaLoopAngrySkill01 && rest.visualState === "angry",
+        });
+    const loops = shouldLoopVisualState(rest.visualState, !!rest.draculaLoopAngrySkill01);
+    let actForListener: THREE.AnimationAction | null = null;
+    let didNotify = false;
+    const notifyOnce = () => { if (didNotify) return; didNotify = true; onFinishedRef.current?.(); };
+    const onFin = (e: THREE.AnimationMixerEventMap["finished"]) => {
+      if (e.action !== actForListener) return;
+      mixer.removeEventListener("finished", onFin);
+      actForListener = null;
+      notifyOnce();
+    };
+    if (pick && actions[pick]) {
+      const act = actions[pick]!;
+      act.reset();
+      if (loops) { act.setLoop(THREE.LoopRepeat, Infinity); act.clampWhenFinished = false; }
+      else { act.setLoop(THREE.LoopOnce, 1); act.clampWhenFinished = true; if (onFinishedRef.current) { actForListener = act; mixer.addEventListener("finished", onFin); } }
+      if (crossFade) { for (const a of Object.values(actions)) { if (a && a !== act) a.fadeOut(fadeDuration); } }
+      act.fadeIn(fadeDuration).play();
+    }
+    invalidate();
+    return () => { if (actForListener) { mixer.removeEventListener("finished", onFin); actForListener = null; } for (const a of Object.values(actions)) { a?.fadeOut(0.12); } };
+  }, [actions, names, mixer, rest.url, rest.visualState, rest.monsterType, rest.draculaAttackVariant, hurtHp, hurtMaxHp, rest.draculaLoopAngrySkill01, rest.isPlayerModel]);
+
+  const scale = (rest.tightFraming ? 1.14 : 1) * (rest.isPlayerModel ? 0.9 : (rest.monsterType === "V" || rest.monsterType === "K" || rest.monsterType === "Z" || rest.monsterType === "S" ? 0.9 : 1));
+
+  const yRotation = rest.isPlayerModel ? Math.PI / 2 : -Math.PI / 2;
+
+  return (
+    <>
+      <group ref={groupRef} position={[positionX, 0, 0]}>
+        <Center>
+          <group ref={innerRef} scale={scale} rotation={[0, yRotation, 0]}>
+            <primitive object={scene} />
+          </group>
+        </Center>
+      </group>
+      {rest.isPlayerModel && weaponUrl ? (
+        <BoneAttachedWeapon parentScene={scene} url={weaponUrl} />
+      ) : null}
+    </>
   );
 }
 
@@ -419,6 +498,268 @@ export function MonsterModel3D({
             draculaLoopAngrySkill01={draculaLoopAngrySkill01}
             onOneShotAnimationFinished={onOneShotAnimationFinished}
             meshyCameraBases={meshyCameraBases}
+          />
+        </Suspense>
+      </Canvas>
+    </ModelErrorBoundary>
+  );
+}
+
+/** Static (non-animated) GLB prop positioned near the player — weapons / armour pieces. */
+function StaticGltfProp({ url, position, scale: s = 0.5, rotationY = 0 }: { url: string; position: [number, number, number]; scale?: number; rotationY?: number }) {
+  const { scene } = useGLTF(url);
+  useEffect(() => { useGLTF.preload(url); }, [url]);
+  const cloned = React.useMemo(() => scene.clone(true), [scene]);
+  return (
+    <group position={position}>
+      <primitive object={cloned} scale={s} rotation={[0, rotationY, 0]} />
+    </group>
+  );
+}
+
+/** Common hand-bone names across Mixamo / Meshy rigs (right hand preferred for weapons). */
+const HAND_BONE_CANDIDATES = [
+  "mixamorigRightHand",
+  "RightHand",
+  "rightHand",
+  "Right_Hand",
+  "hand_R",
+  "Hand_R",
+  "mixamorigRightForeArm",
+  "RightForeArm",
+  "mixamorigLeftHand",
+  "LeftHand",
+] as const;
+
+function findHandBone(root: THREE.Object3D): THREE.Bone | null {
+  for (const name of HAND_BONE_CANDIDATES) {
+    const found = root.getObjectByName(name);
+    if (found && (found as THREE.Bone).isBone) return found as THREE.Bone;
+  }
+  let fallback: THREE.Bone | null = null;
+  root.traverse((child) => {
+    if (!fallback && (child as THREE.Bone).isBone && /hand|wrist/i.test(child.name)) {
+      fallback = child as THREE.Bone;
+    }
+  });
+  return fallback;
+}
+
+function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D; url: string }) {
+  const { scene: weaponScene } = useGLTF(url);
+  const weaponClone = React.useMemo(() => weaponScene.clone(true), [weaponScene]);
+  const attachedRef = useRef<{ bone: THREE.Bone; container: THREE.Group } | null>(null);
+  const orientedRef = useRef(false);
+
+  useEffect(() => { useGLTF.preload(url); }, [url]);
+
+  useEffect(() => {
+    const bone = findHandBone(parentScene);
+    if (!bone) {
+      if (process.env.NODE_ENV !== "production") console.warn("[BoneAttachedWeapon] no hand bone found");
+      return;
+    }
+
+    const box = new THREE.Box3().setFromObject(weaponClone);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+
+    const boneWs = new THREE.Vector3();
+    bone.getWorldScale(boneWs);
+    const avgWs = (boneWs.x + boneWs.y + boneWs.z) / 3;
+    const desiredWorldLen = 0.45;
+    const localScale = desiredWorldLen / (maxDim * Math.max(avgWs, 0.001));
+
+    const container = new THREE.Group();
+    container.name = "__weapon__";
+
+    const scaleGrp = new THREE.Group();
+    scaleGrp.scale.setScalar(localScale);
+
+    const offsetGrp = new THREE.Group();
+    const handleY = box.min.y + size.y * 0.15;
+    offsetGrp.position.set(-center.x, -handleY, -center.z);
+
+    offsetGrp.add(weaponClone);
+    scaleGrp.add(offsetGrp);
+    container.add(scaleGrp);
+    bone.add(container);
+
+    attachedRef.current = { bone, container };
+    orientedRef.current = false;
+
+    if (process.env.NODE_ENV !== "production") {
+      const bones: string[] = [];
+      parentScene.traverse((c) => { if ((c as THREE.Bone).isBone) bones.push(c.name); });
+      console.log("[BoneAttachedWeapon] bones:", bones.join(", "));
+      console.log("[BoneAttachedWeapon] picked:", bone.name, "parent:", bone.parent?.name);
+      console.log("[BoneAttachedWeapon] weaponSize:", size.toArray().map(v => +v.toFixed(3)), "localScale:", +localScale.toFixed(4));
+    }
+
+    return () => {
+      bone.remove(container);
+      attachedRef.current = null;
+      orientedRef.current = false;
+    };
+  }, [parentScene, weaponClone, url]);
+
+  useFrame(() => {
+    const att = attachedRef.current;
+    if (!att || orientedRef.current) return;
+    const { bone, container } = att;
+
+    bone.updateWorldMatrix(true, false);
+    const boneQ = new THREE.Quaternion();
+    bone.getWorldQuaternion(boneQ);
+
+    const armDirWorld = new THREE.Vector3(0, 1, 0).applyQuaternion(boneQ);
+
+    const worldUp = new THREE.Vector3(0, 1, 0);
+    const dot = worldUp.dot(armDirWorld);
+    const bladeDirWorld = new THREE.Vector3()
+      .copy(worldUp)
+      .addScaledVector(armDirWorld, -dot);
+    if (bladeDirWorld.lengthSq() < 0.001) bladeDirWorld.set(0, 0, 1);
+    bladeDirWorld.normalize();
+
+    const boneQInv = boneQ.clone().invert();
+    const bladeDirLocal = bladeDirWorld.applyQuaternion(boneQInv);
+
+    container.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      bladeDirLocal,
+    );
+
+    orientedRef.current = true;
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[BoneAttachedWeapon] oriented — armDirWorld:", armDirWorld.toArray().map(v => +v.toFixed(3)),
+        "bladeDirWorld:", bladeDirWorld.toArray().map(v => +v.toFixed(3)),
+        "bladeDirLocal:", bladeDirLocal.toArray().map(v => +v.toFixed(3)));
+    }
+  });
+
+  return null;
+}
+
+export interface CombatScene3DProps {
+  monsterGltfPath: string;
+  playerGltfPath: string;
+  /** Optional weapon/armour GLB rendered as a static prop near the player. Empty string = none. */
+  armourGltfPath?: string | null;
+  monsterVisualState: Monster3DSpriteState;
+  playerVisualState: Monster3DSpriteState;
+  monsterType?: MonsterType | null;
+  draculaAttackVariant?: "spell" | "skill" | "light";
+  playerAttackVariant?: "spell" | "skill" | "light";
+  draculaHurtHp?: { hp: number; maxHp: number } | null;
+  draculaLoopAngrySkill01?: boolean;
+  onOneShotAnimationFinished?: () => void;
+  width: number;
+  height: number;
+  fallback: ReactNode;
+}
+
+export function CombatScene3D({
+  monsterGltfPath,
+  playerGltfPath,
+  armourGltfPath,
+  monsterVisualState,
+  playerVisualState,
+  monsterType = null,
+  draculaAttackVariant,
+  playerAttackVariant,
+  draculaHurtHp,
+  draculaLoopAngrySkill01,
+  onOneShotAnimationFinished,
+  width,
+  height,
+  fallback,
+}: CombatScene3DProps) {
+  const isMergedMeshy = monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S";
+  const cameraZ = 5.2;
+  const cameraY = 1.0;
+  const fov = 40;
+  const meshyCameraBases = { baseZ: cameraZ, baseY: cameraY, baseFov: fov };
+
+  const [mUrl, setMUrl] = useState(monsterGltfPath);
+  const [pUrl, setPUrl] = useState(playerGltfPath);
+
+  useEffect(() => {
+    if (monsterGltfPath === mUrl) return;
+    let c = false;
+    const ac = new AbortController();
+    (async () => {
+      try { const r = await fetch(monsterGltfPath, { signal: ac.signal }); if (!r.ok) throw 0; await r.arrayBuffer(); await Promise.resolve(useGLTF.preload(monsterGltfPath) as PromiseLike<unknown> | undefined); } catch { if (c) return; }
+      if (!c) setMUrl(monsterGltfPath);
+    })();
+    return () => { c = true; ac.abort(); };
+  }, [monsterGltfPath, mUrl]);
+
+  useEffect(() => {
+    if (playerGltfPath === pUrl) return;
+    let c = false;
+    const ac = new AbortController();
+    (async () => {
+      try { const r = await fetch(playerGltfPath, { signal: ac.signal }); if (!r.ok) throw 0; await r.arrayBuffer(); await Promise.resolve(useGLTF.preload(playerGltfPath) as PromiseLike<unknown> | undefined); } catch { if (c) return; }
+      if (!c) setPUrl(playerGltfPath);
+    })();
+    return () => { c = true; ac.abort(); };
+  }, [playerGltfPath, pUrl]);
+
+  const canvasKey = `combat-${monsterType ?? "?"}-${width}`;
+
+  return (
+    <ModelErrorBoundary key={canvasKey} fallback={fallback}>
+      <Canvas
+        key={canvasKey}
+        style={{ width: "100%", maxWidth: width, height, display: "block", verticalAlign: "top" }}
+        frameloop="always"
+        dpr={[1, 2]}
+        gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
+        camera={{ position: [0, cameraY, cameraZ], fov, near: 0.1, far: 80 }}
+        onCreated={() => invalidate()}
+      >
+        <Suspense fallback={null}>
+          <MeshyCombatCameraFraming
+            enabled={isMergedMeshy}
+            visualState={monsterVisualState}
+            baseZ={meshyCameraBases.baseZ}
+            baseY={meshyCameraBases.baseY}
+            baseFov={meshyCameraBases.baseFov}
+          />
+          <OrbitControls
+            enablePan={false}
+            enableZoom={true}
+            enableRotate={true}
+            minDistance={2}
+            maxDistance={10}
+            minPolarAngle={Math.PI / 6}
+            maxPolarAngle={Math.PI / 2}
+            target={[0, 0.8, 0]}
+          />
+          <ambientLight intensity={0.38} />
+          <directionalLight position={[3.2, 5.5, 2.8]} intensity={1.05} />
+          <directionalLight position={[-2.5, 2.5, 4]} intensity={0.35} />
+          <PositionedGltfSubject
+            url={pUrl}
+            visualState={playerVisualState}
+            tightFraming={false}
+            isPlayerModel
+            draculaAttackVariant={playerAttackVariant}
+            positionX={-1.0}
+            weaponUrl={armourGltfPath}
+          />
+          <PositionedGltfSubject
+            url={mUrl}
+            visualState={monsterVisualState}
+            tightFraming={false}
+            monsterType={monsterType}
+            draculaAttackVariant={draculaAttackVariant}
+            draculaHurtHp={draculaHurtHp}
+            draculaLoopAngrySkill01={draculaLoopAngrySkill01}
+            onOneShotAnimationFinished={onOneShotAnimationFinished}
+            positionX={1.0}
           />
         </Suspense>
       </Canvas>

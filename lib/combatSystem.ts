@@ -7,6 +7,8 @@ import { type MonsterType, getMonsterMaxHp, type StoredArtifactKind } from "./la
 
 export type MonsterSurpriseState = "idle" | "hunt" | "attack" | "angry";
 
+export type StrikeTarget = "head" | "body" | "legs";
+
 export interface CombatResult {
   won: boolean;
   damage: number;
@@ -145,6 +147,24 @@ export function getMonsterHint(type: MonsterType): string {
   }
 }
 
+/**
+ * Strike-target modifiers.
+ *   Head: high risk / high reward — harder to land, more damage when it does.
+ *   Body: balanced — current behavior (no modifier).
+ *   Legs: safe — easier to hit, less damage.
+ */
+function getStrikeTargetModifiers(target: StrikeTarget | undefined) {
+  switch (target) {
+    case "head":
+      return { atkBonus: 2, defBonus: 2, hpMultiplier: 2, extraMissDmg: 1 };
+    case "legs":
+      return { atkBonus: 1, defBonus: -1, hpMultiplier: 1, extraMissDmg: -0.5 };
+    case "body":
+    default:
+      return { atkBonus: 0, defBonus: 0, hpMultiplier: 1, extraMissDmg: 0 };
+  }
+}
+
 export function resolveCombat(
   playerRoll: number,
   attackBonus: number,
@@ -152,13 +172,13 @@ export function resolveCombat(
   _skeletonHasShield?: boolean,
   surpriseModifier = 0,
   rawD6?: number,
-  surpriseState?: MonsterSurpriseState
+  surpriseState?: MonsterSurpriseState,
+  strikeTarget?: StrikeTarget
 ): CombatResult {
   const monsterDefense = getMonsterDefense(monsterType);
   const monsterDamage = getMonsterDamage(monsterType);
   const physicalDie = rawD6 ?? playerRoll;
 
-  // Dice 6 = ultimate win, no matter what (bypasses ghost evade, defense, etc.) — instant kill
   if (physicalDie === 6) {
     return {
       won: true,
@@ -172,7 +192,6 @@ export function resolveCombat(
     };
   }
 
-  // Ghost: 50% chance attack misses
   if (monsterType === "G" && Math.random() < 0.5) {
     return {
       won: false,
@@ -185,18 +204,17 @@ export function resolveCombat(
     };
   }
 
-  const effectiveDefense = Math.max(0, monsterDefense + surpriseModifier);
-  const attackTotal = playerRoll + attackBonus;
+  const strikeMod = getStrikeTargetModifiers(strikeTarget);
+  const effectiveDefense = Math.max(0, monsterDefense + surpriseModifier + strikeMod.defBonus);
+  const attackTotal = playerRoll + attackBonus + strikeMod.atkBonus;
   const hit = attackTotal >= effectiveDefense;
 
   const won = hit;
   const dieForGlance = rawD6 !== undefined ? rawD6 : playerRoll;
-  // On a miss: glancing damage = (die-1) to die HP. Dice 5 → 4–5, dice 4 → 3–4, etc.
   const glanceMin = Math.max(0, dieForGlance - 1);
   const glanceMax = dieForGlance;
   const glancingDamage = won ? 0 : (glanceMin >= 1 ? glanceMin + Math.floor(Math.random() * (glanceMax - glanceMin + 1)) : 0);
 
-  // Zombie: 6 = instant win above; 5 = heavy; 3–4 = half max HP; 1–2 = 1 HP.
   let monsterHpLoss: number | undefined;
   if (won && monsterType === "Z" && physicalDie >= 1 && physicalDie <= 5) {
     const zMax = getMonsterMaxHp("Z");
@@ -205,11 +223,14 @@ export function resolveCombat(
     else if (physicalDie >= 3 && physicalDie <= 4) monsterHpLoss = halfLife;
     else monsterHpLoss = 1;
   }
+  if (won && monsterHpLoss == null && strikeMod.hpMultiplier > 1) {
+    monsterHpLoss = strikeMod.hpMultiplier;
+  }
 
-  // Attack/angry mode: monster counter-attacks, player takes extra damage on miss
   const isAggressive = surpriseState === "attack" || surpriseState === "angry";
   const counterBonus = !won && isAggressive ? (surpriseState === "angry" ? 2 : 1) : 0;
-  const playerDamage = won ? 0 : monsterDamage + counterBonus;
+  const baseMissDmg = monsterDamage + counterBonus;
+  const playerDamage = won ? 0 : Math.max(0, Math.round(baseMissDmg + strikeMod.extraMissDmg));
 
   return {
     won,
