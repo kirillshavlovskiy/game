@@ -3632,7 +3632,6 @@ export default function LabyrinthGame() {
     setLastCombatStrikeDiceFace(value);
     setIsoCombatRollFace(value);
     if (isoCombatPulseTimerRef.current) clearTimeout(isoCombatPulseTimerRef.current);
-    // First show roll result, then pulse player/monster attack animations in-scene.
     isoCombatPulseTimerRef.current = setTimeout(() => {
       setIsoCombatPulseVersion((v) => v + 1);
     }, 120);
@@ -7872,7 +7871,7 @@ export default function LabyrinthGame() {
             ...(combatOverlayVisible ? { overflow: "visible" as const } : {}),
           }}
         >
-      {lab && combatOverlayVisible && mazeMapView === "grid" && (
+      {lab && combatOverlayVisible && (
         <div
             style={{
             ...combatModalOverlayStyle,
