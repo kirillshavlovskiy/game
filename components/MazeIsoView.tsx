@@ -19,7 +19,12 @@ import * as THREE from "three";
 import { MAZE_FLOOR_TEXTURE, MAZE_ISO_WALL_SIDE_TEXTURE } from "@/lib/mazeCellTheme";
 import { WALL, type DraculaState, type MonsterType } from "@/lib/labyrinth";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
-import { getMonsterGltfPathForReference, resolveMonsterAnimationClipName } from "@/lib/monsterModels3d";
+import {
+  getMonsterGltfPathForReference,
+  PLAYER_3D_GLB,
+  resolveMonsterAnimationClipName,
+  resolvePlayerAnimationClipName,
+} from "@/lib/monsterModels3d";
 
 type MiniMonster = { x: number; y: number; type?: string; draculaState?: DraculaState };
 
@@ -72,6 +77,13 @@ type Props = {
    * `IsoDockGridMiniMap`’s `atan2(dy,dx)+90`. Lets the mini-map rotate with orbit, not only cardinal facing snaps.
    */
   onIsoCameraBearingDeg?: (deg: number) => void;
+  /** In-maze combat flow: click 3D view to roll, then play attack pulses in-scene. */
+  combatActive?: boolean;
+  combatRolling?: boolean;
+  combatRollFace?: number | null;
+  combatPulseVersion?: number;
+  combatMonster?: { x: number; y: number; type?: string } | null;
+  onCombatRollRequest?: () => void;
 };
 
 export type MazeIsoViewImperativeHandle = {
@@ -210,25 +222,144 @@ function WallBlocks({
 /* ------------------------------------------------------------------ */
 /*  Player avatar on the ground                                        */
 /* ------------------------------------------------------------------ */
-function PlayerMarker({
-  playerX, playerY, facingDx, facingDy,
+function PlayerAvatar3D({
+  visualState,
+  actionVersion = 0,
 }: {
-  playerX: number; playerY: number; facingDx: number; facingDy: number;
+  visualState: "idle" | "hunt" | "attack";
+  actionVersion?: number;
+}) {
+  const rootRef = useRef<THREE.Group>(null);
+  const rightHandNodeRef = useRef<THREE.Object3D | null>(null);
+  const { scene, animations } = useGLTF(PLAYER_3D_GLB);
+  const clonedScene = useMemo(() => SkeletonUtils.clone(scene), [scene]);
+  const { actions, names } = useAnimations(animations, rootRef);
+
+  useEffect(() => {
+    let rightHand: THREE.Object3D | null = null;
+    clonedScene.traverse((obj) => {
+      if (!rightHand && /(hand|wrist).*(right|\.r|\br\b)|\br_hand\b|hand_r|right_hand/i.test(obj.name)) {
+        rightHand = obj;
+      }
+      if (obj instanceof THREE.Light) {
+        obj.visible = false;
+        return;
+      }
+      if (obj instanceof THREE.Mesh) {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+      }
+    });
+    rightHandNodeRef.current = rightHand;
+  }, [clonedScene]);
+
+  useEffect(() => {
+    const clip = resolvePlayerAnimationClipName(visualState, names);
+    for (const action of Object.values(actions)) {
+      action?.fadeOut(0.12);
+    }
+    if (!clip) return;
+    const action = actions[clip];
+    if (!action) return;
+    action.reset();
+    if (visualState === "attack") {
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = false;
+    } else {
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.clampWhenFinished = false;
+    }
+    action.fadeIn(0.16).play();
+    return () => { action.fadeOut(0.12); };
+  }, [actions, names, visualState, actionVersion]);
+
+  return (
+    <group ref={rootRef} scale={0.9} rotation={[0, Math.PI / 2, 0]}>
+      <primitive object={clonedScene} />
+      {rightHandNodeRef.current ? (
+        <primitive object={rightHandNodeRef.current}>
+          {/* Placeholder hand armor piece (gauntlet + bracer) until final asset is chosen. */}
+          <group position={[0.015, -0.01, 0.035]} rotation={[0.1, 0.25, -0.12]}>
+            <mesh castShadow receiveShadow>
+              <boxGeometry args={[0.065, 0.08, 0.07]} />
+              <meshStandardMaterial color="#6f7684" metalness={0.5} roughness={0.45} />
+            </mesh>
+            <mesh position={[0, -0.04, -0.028]} rotation={[0.1, 0, 0]} castShadow receiveShadow>
+              <cylinderGeometry args={[0.028, 0.03, 0.07, 8]} />
+              <meshStandardMaterial color="#525866" metalness={0.46} roughness={0.52} />
+            </mesh>
+          </group>
+        </primitive>
+      ) : null}
+    </group>
+  );
+}
+
+function PlayerMarker({
+  playerX, playerY, facingDx, facingDy, combatPulse = 0,
+}: {
+  playerX: number; playerY: number; facingDx: number; facingDy: number; combatPulse?: number;
 }) {
   const groupRef = useRef<THREE.Group>(null);
-  const targetPos = useRef(new THREE.Vector3(playerX * CS, 0.4, playerY * CS));
+  const modelAnchorRef = useRef<THREE.Group>(null);
+  const targetPos = useRef(new THREE.Vector3(playerX * CS, FLOOR_Y + 0.02, playerY * CS));
+  const targetYawRef = useRef(0);
   const didInitPosRef = useRef(false);
+  const groundLiftRef = useRef(0);
+  const groundBox = useMemo(() => new THREE.Box3(), []);
+  const [visualState, setVisualState] = useState<"idle" | "hunt" | "attack">("idle");
+  const visualStateRef = useRef<"idle" | "hunt" | "attack">("idle");
+  const [actionVersion, setActionVersion] = useState(0);
+  const queuedCombatPulseRef = useRef(false);
+  const combatAttackUntilRef = useRef(0);
+  const prevCombatPulseRef = useRef(combatPulse);
 
-  useEffect(() => { targetPos.current.set(playerX * CS, 0.4, playerY * CS); }, [playerX, playerY]);
+  useEffect(() => { targetPos.current.set(playerX * CS, FLOOR_Y + 0.02, playerY * CS); }, [playerX, playerY]);
+  useEffect(() => {
+    const hasFacing = Math.abs(facingDx) + Math.abs(facingDy) > 0;
+    if (!hasFacing) return;
+    targetYawRef.current = -Math.atan2(facingDy, facingDx);
+  }, [facingDx, facingDy]);
+  useEffect(() => {
+    if (combatPulse <= 0) return;
+    if (combatPulse === prevCombatPulseRef.current) return;
+    prevCombatPulseRef.current = combatPulse;
+    queuedCombatPulseRef.current = true;
+  }, [combatPulse]);
 
   useFrame(() => {
     if (!groupRef.current) return;
     if (!didInitPosRef.current) {
       groupRef.current.position.copy(targetPos.current);
+      groupRef.current.rotation.y = targetYawRef.current;
       didInitPosRef.current = true;
     }
     groupRef.current.position.lerp(targetPos.current, 0.08);
-    groupRef.current.rotation.y = -Math.atan2(facingDy, facingDx);
+    // Smooth shortest-path turn to avoid 90-degree snap.
+    const delta = THREE.MathUtils.euclideanModulo(targetYawRef.current - groupRef.current.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
+    groupRef.current.rotation.y += delta * 0.14;
+    const transit = groupRef.current.position.distanceTo(targetPos.current);
+    const tNow = performance.now() * 0.001;
+    if (queuedCombatPulseRef.current) {
+      queuedCombatPulseRef.current = false;
+      combatAttackUntilRef.current = tNow + 0.62;
+      setActionVersion((v) => v + 1);
+    }
+    const attacking = tNow < combatAttackUntilRef.current;
+    const next: "idle" | "hunt" | "attack" = attacking ? "attack" : (transit > 0.06 ? "hunt" : "idle");
+    if (next !== visualStateRef.current) {
+      visualStateRef.current = next;
+      setVisualState(next);
+    }
+    const modelAnchor = modelAnchorRef.current;
+    if (modelAnchor) {
+      groundBox.setFromObject(modelAnchor);
+      const desiredMinY = FLOOR_Y + 0.015;
+      const neededLift = Math.max(0, desiredMinY - groundBox.min.y);
+      // Keep feet on floor if clip root offsets dip below the maze plane.
+      groundLiftRef.current = Math.max(groundLiftRef.current * 0.9, neededLift);
+      modelAnchor.position.y = groundLiftRef.current;
+    }
   });
 
   return (
@@ -241,14 +372,24 @@ function PlayerMarker({
         distance={CS * 4.2}
         decay={1.85}
       />
-      <mesh castShadow receiveShadow>
-        <cylinderGeometry args={[0.45, 0.45, 0.8, 16]} />
-        <meshStandardMaterial color="#00ff88" emissive="#00ff44" emissiveIntensity={0.6} />
-      </mesh>
-      <mesh position={[0.55, 0, 0]} rotation={[0, 0, -Math.PI / 2]} castShadow>
-        <coneGeometry args={[0.2, 0.5, 8]} />
-        <meshStandardMaterial color="#0a0a0f" />
-      </mesh>
+      <group ref={modelAnchorRef}>
+        <Suspense
+          fallback={(
+            <>
+              <mesh castShadow receiveShadow>
+                <cylinderGeometry args={[0.45, 0.45, 0.8, 16]} />
+                <meshStandardMaterial color="#00ff88" emissive="#00ff44" emissiveIntensity={0.6} />
+              </mesh>
+              <mesh position={[0.55, 0, 0]} rotation={[0, 0, -Math.PI / 2]} castShadow>
+                <coneGeometry args={[0.2, 0.5, 8]} />
+                <meshStandardMaterial color="#0a0a0f" />
+              </mesh>
+            </>
+          )}
+        >
+          <PlayerAvatar3D visualState={visualState} actionVersion={actionVersion} />
+        </Suspense>
+      </group>
     </group>
   );
 }
@@ -1079,15 +1220,15 @@ const CAM_BEHIND = CS * 0.9;
 /** Orbit / follow target Y at the pawn (not floor) so framing favors the marker against a wall ahead. */
 const CAM_LOOK_AT_Y = 0.52;
 /**
- * Slingshot aim: camera lifts well above the board (scales with map span) while staying slightly back
- * along facing so trajectory and landing stay readable — not the low “walking” follow height.
+ * Slingshot aim: stay just above wall tops with a small extra lift on large maps (not satellite height).
  */
-const CATAPULT_CAM_HEIGHT_BASE = 5.35;
-const CATAPULT_CAM_HEIGHT_PER_CELL = 0.56;
-const CATAPULT_CAM_BACK_BASE = 1.65;
+const CATAPULT_CAM_ABOVE_WALL = 1.12;
+const CATAPULT_CAM_EXTRA_PER_CELL = 0.036;
+const CATAPULT_CAM_EXTRA_MAX = 2.65;
+const CATAPULT_CAM_BACK_BASE = 1.72;
 /** Extra pull-back along facing, capped so huge maps do not move the rig too far horizontally. */
-const CATAPULT_CAM_BACK_EXTRA_MAX = 1.88;
-const CATAPULT_CAM_BACK_PER_CELL = 0.065;
+const CATAPULT_CAM_BACK_EXTRA_MAX = 1.95;
+const CATAPULT_CAM_BACK_PER_CELL = 0.068;
 /** Look-at near the launch tile floor so the grid and arc read as a plan view. */
 const CATAPULT_LOOK_AT_Y = 0.14;
 /** How fast the camera follows position (0-1 per frame). */
@@ -1192,15 +1333,13 @@ function CameraController({
       if (touchUi && !teleportMode && !catapultMode) {
         baseFov = THREE.MathUtils.clamp(baseFov + 5, 58, 99);
       }
-      // Teleport: wide FOV. Slingshot: even wider so the raised overview shows arc + landing.
+      // Teleport: wide FOV. Slingshot: modest extra (camera sits near wall height, not far above).
       let fovBoost = 0;
       if (teleportMode || catapultMode) {
-        fovBoost = 18 + (catapultMode ? 8 : 0);
+        fovBoost = 18 + (catapultMode ? 4 : 0);
       }
       camera.fov =
-        fovBoost > 0
-          ? THREE.MathUtils.clamp(baseFov + fovBoost, 72, catapultMode ? 114 : 108)
-          : baseFov;
+        fovBoost > 0 ? THREE.MathUtils.clamp(baseFov + fovBoost, 72, 108) : baseFov;
       camera.updateProjectionMatrix();
     }
   }, [camera, zoom, touchUi, teleportMode, catapultMode]);
@@ -1362,7 +1501,9 @@ function CameraController({
     let followDist: number;
     let followHeight: number;
     if (catapultMode) {
-      followHeight = CS * (CATAPULT_CAM_HEIGHT_BASE + mapSpan * CATAPULT_CAM_HEIGHT_PER_CELL);
+      const wallTop = FLOOR_Y + WALL_HEIGHT;
+      const spanExtra = Math.min(CATAPULT_CAM_EXTRA_MAX, mapSpan * CS * CATAPULT_CAM_EXTRA_PER_CELL);
+      followHeight = wallTop + CATAPULT_CAM_ABOVE_WALL + spanExtra;
       followDist =
         CS *
         (CATAPULT_CAM_BACK_BASE +
@@ -1648,9 +1789,12 @@ function TeleportTargetMarkers({
   );
 }
 
-/** Yellow slingshot cue on the launch tile (2D catapult accent). */
+/** Yellow slingshot cue on the launch tile: floor rings + vertical START pillar. */
 function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number }) {
   const ringRef = useRef<THREE.Mesh>(null);
+  const pillarTop = FLOOR_Y + WALL_HEIGHT + CS * 0.95;
+  const pillarH = pillarTop - FLOOR_Y - 0.06;
+  const pillarMidY = FLOOR_Y + 0.06 + pillarH * 0.5;
   useFrame(({ clock }) => {
     const m = ringRef.current;
     if (!m) return;
@@ -1659,8 +1803,8 @@ function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number })
     m.scale.setScalar(s);
   });
   return (
-    <group position={[cellX * CS, FLOOR_Y + 0.08, cellY * CS]}>
-      <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]} renderOrder={910}>
+    <group position={[cellX * CS, 0, cellY * CS]}>
+      <mesh ref={ringRef} position={[0, FLOOR_Y + 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={910}>
         <ringGeometry args={[0.42, 0.62, 32]} />
         <meshBasicMaterial
           color="#ffcc00"
@@ -1670,7 +1814,7 @@ function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number })
           opacity={0.92}
         />
       </mesh>
-      <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={909}>
+      <mesh position={[0, FLOOR_Y + 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={909}>
         <ringGeometry args={[0.55, 0.78, 32]} />
         <meshBasicMaterial
           color="#ffaa22"
@@ -1680,16 +1824,109 @@ function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number })
           opacity={0.35}
         />
       </mesh>
-      <Billboard position={[0, 2.15, 0]}>
+      <mesh position={[0, pillarMidY, 0]} renderOrder={908}>
+        <cylinderGeometry args={[0.07, 0.09, pillarH, 10]} />
+        <meshStandardMaterial
+          color="#ffcc44"
+          emissive="#ffaa00"
+          emissiveIntensity={0.55}
+          transparent
+          opacity={0.82}
+          depthWrite={false}
+        />
+      </mesh>
+      <Billboard position={[0, pillarTop + 0.35, 0]}>
         <Text
-          fontSize={0.32}
-          color="#ffcc66"
-          outlineWidth={0.03}
-          outlineColor="#1a1206"
+          fontSize={0.38}
+          color="#fff0aa"
+          outlineWidth={0.035}
+          outlineColor="#2a1a00"
           anchorX="center"
           anchorY="bottom"
         >
-          Slingshot — pull to aim
+          START
+        </Text>
+      </Billboard>
+      <Billboard position={[0, pillarTop - 0.15, 0]}>
+        <Text
+          fontSize={0.22}
+          color="#ffcc88"
+          outlineWidth={0.022}
+          outlineColor="#1a1206"
+          anchorX="center"
+          anchorY="top"
+        >
+          {`(${cellX}, ${cellY}) · pull on 3D`}
+        </Text>
+      </Billboard>
+    </group>
+  );
+}
+
+/**
+ * Glowing point above the labyrinth: sits over map center until you aim, then over the arc’s end cell
+ * so strike direction reads against a fixed sky reference.
+ */
+function SlingshotStrikeSkyMarker({
+  mapWidth,
+  mapHeight,
+  arcEndCell,
+}: {
+  mapWidth: number;
+  mapHeight: number;
+  arcEndCell: [number, number] | null;
+}) {
+  const orbRef = useRef<THREE.Mesh>(null);
+  const skyY = FLOOR_Y + WALL_HEIGHT + CS * 3.35;
+  const midGx = (mapWidth - 1) / 2;
+  const midGz = (mapHeight - 1) / 2;
+  const tx = arcEndCell != null ? arcEndCell[0] * CS : midGx * CS;
+  const tz = arcEndCell != null ? arcEndCell[1] * CS : midGz * CS;
+  const colBottom = FLOOR_Y + 0.1;
+  const colH = skyY - colBottom - 0.2;
+  const hasAim = arcEndCell != null;
+  useFrame(({ clock }) => {
+    const m = orbRef.current;
+    if (!m) return;
+    const t = clock.getElapsedTime();
+    const p = 0.92 + Math.sin(t * 3.1) * 0.08;
+    m.scale.setScalar(p);
+  });
+  return (
+    <group>
+      <mesh position={[tx, colBottom + colH * 0.5, tz]} renderOrder={907}>
+        <cylinderGeometry args={[0.05, 0.06, Math.max(0.15, colH), 8]} />
+        <meshStandardMaterial
+          color={hasAim ? "#ff9944" : "#88aacc"}
+          emissive={hasAim ? "#ff6622" : "#4466aa"}
+          emissiveIntensity={0.35}
+          transparent
+          opacity={0.45}
+          depthWrite={false}
+        />
+      </mesh>
+      <mesh ref={orbRef} position={[tx, skyY, tz]} renderOrder={911}>
+        <sphereGeometry args={[0.32, 20, 20]} />
+        <meshStandardMaterial
+          color={hasAim ? "#ffcc66" : "#aaccff"}
+          emissive={hasAim ? "#ffaa33" : "#6699ff"}
+          emissiveIntensity={1.15}
+          transparent
+          opacity={0.95}
+          depthWrite={false}
+        />
+      </mesh>
+      <Billboard position={[tx, skyY + 0.62, tz]}>
+        <Text
+          fontSize={hasAim ? 0.3 : 0.26}
+          color={hasAim ? "#ffe8aa" : "#cce0ff"}
+          outlineWidth={0.028}
+          outlineColor="#0a0a12"
+          anchorX="center"
+          anchorY="bottom"
+          maxWidth={3.2}
+        >
+          {hasAim ? "Approx. strike" : "Above maze — aim toward here"}
         </Text>
       </Billboard>
     </group>
@@ -1729,6 +1966,14 @@ const MONSTER_SPRITE_MAP: Record<string, string> = {
 };
 
 const DRACULA_GLB_PATH = getMonsterGltfPathForReference("V");
+const MONSTER_GLB_SLUG: Record<MonsterType, string> = {
+  V: "dracula",
+  Z: "zombie",
+  S: "spider",
+  G: "ghost",
+  K: "skeleton",
+  L: "lava",
+};
 
 function DraculaModel3D({
   visualState,
@@ -1888,13 +2133,14 @@ function DraculaModel3D({
 }
 
 function DraculaInMaze({
-  x, y, playerX, playerY, draculaState,
+  x, y, playerX, playerY, draculaState, combatPulse = 0,
 }: {
   x: number;
   y: number;
   playerX: number;
   playerY: number;
   draculaState?: DraculaState;
+  combatPulse?: number;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const [visualState, setVisualState] = useState<"idle" | "hunt" | "attack">("idle");
@@ -1903,6 +2149,8 @@ function DraculaInMaze({
   const attackUntilRef = useRef(0);
   const attackStartRef = useRef(0);
   const [actionVersion, setActionVersion] = useState(0);
+  const queuedCombatPulseRef = useRef(false);
+  const prevCombatPulseRef = useRef(combatPulse);
   const smoothPosRef = useRef(new THREE.Vector3(x * CS, 0.02, y * CS));
   const targetPosRef = useRef(new THREE.Vector3(x * CS, 0.02, y * CS));
   const seed = useMemo(() => ((x * 73856093) ^ (y * 19349663)) & 1023, [x, y]);
@@ -1910,11 +2158,23 @@ function DraculaInMaze({
   useEffect(() => {
     targetPosRef.current.set(x * CS, 0.02, y * CS);
   }, [x, y]);
+  useEffect(() => {
+    if (combatPulse <= 0) return;
+    if (combatPulse === prevCombatPulseRef.current) return;
+    prevCombatPulseRef.current = combatPulse;
+    queuedCombatPulseRef.current = true;
+  }, [combatPulse]);
 
   useFrame(({ clock }) => {
     const g = groupRef.current;
     if (!g) return;
     const t = clock.getElapsedTime();
+    if (queuedCombatPulseRef.current) {
+      queuedCombatPulseRef.current = false;
+      attackStartRef.current = t;
+      attackUntilRef.current = Math.max(attackUntilRef.current, t + 0.62);
+      setActionVersion((v) => v + 1);
+    }
     const wx = smoothPosRef.current.x / CS;
     const wy = smoothPosRef.current.z / CS;
     const dx = playerX - wx;
@@ -1974,6 +2234,200 @@ function DraculaInMaze({
   );
 }
 
+function MonsterModel3DInMaze({
+  type,
+  visualState,
+  actionVersion = 0,
+}: {
+  type: MonsterType;
+  visualState: "idle" | "hunt" | "attack";
+  actionVersion?: number;
+}) {
+  const rootRef = useRef<THREE.Group>(null);
+  const glbPath = useMemo(() => getMonsterGltfPathForReference(type), [type]);
+  const { scene, animations } = useGLTF(glbPath);
+  const clonedScene = useMemo(() => SkeletonUtils.clone(scene), [scene]);
+  const { actions, names } = useAnimations(animations, rootRef);
+
+  useEffect(() => {
+    clonedScene.traverse((obj) => {
+      if (obj instanceof THREE.Light) {
+        obj.visible = false;
+        return;
+      }
+      if (obj instanceof THREE.Mesh) {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshPhysicalMaterial) {
+            m.roughness = Math.max(0.6, m.roughness ?? 0.75);
+            m.metalness = Math.min(0.25, m.metalness ?? 0.12);
+            m.envMapIntensity = 0.45;
+            m.emissiveIntensity = Math.min(0.1, m.emissiveIntensity ?? 0);
+            m.needsUpdate = true;
+          } else if (m instanceof THREE.MeshBasicMaterial) {
+            const lit = new THREE.MeshStandardMaterial({
+              map: m.map ?? null,
+              color: m.color,
+              transparent: m.transparent,
+              opacity: m.opacity,
+              alphaTest: m.alphaTest,
+              side: m.side,
+              roughness: 0.82,
+              metalness: 0.08,
+            });
+            obj.material = lit;
+          }
+        }
+      }
+    });
+  }, [clonedScene]);
+
+  useEffect(() => {
+    const clip = resolveMonsterAnimationClipName(visualState, names, {
+      monsterType: type,
+      glbSlug: MONSTER_GLB_SLUG[type],
+    });
+    for (const action of Object.values(actions)) {
+      action?.fadeOut(0.12);
+    }
+    if (!clip) return;
+    const action = actions[clip];
+    if (!action) return;
+    action.reset();
+    if (visualState === "attack") {
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = false;
+      action.fadeIn(0.08).play();
+    } else {
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.clampWhenFinished = false;
+      action.fadeIn(0.15).play();
+    }
+    return () => { action.fadeOut(0.12); };
+  }, [actions, names, type, visualState, actionVersion]);
+
+  const scale =
+    type === "S" ? 0.78
+      : type === "G" ? 0.9
+        : type === "L" ? 0.88
+          : 0.82;
+
+  return (
+    <group ref={rootRef} scale={scale}>
+      <primitive object={clonedScene} />
+    </group>
+  );
+}
+
+function MonsterInMaze({
+  x, y, playerX, playerY, type, combatPulse = 0,
+}: {
+  x: number;
+  y: number;
+  playerX: number;
+  playerY: number;
+  type: MonsterType;
+  combatPulse?: number;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  const modelRef = useRef<THREE.Group>(null);
+  const [visualState, setVisualState] = useState<"idle" | "hunt" | "attack">("idle");
+  const visualStateRef = useRef<"idle" | "hunt" | "attack">("idle");
+  const [actionVersion, setActionVersion] = useState(0);
+  const smoothPosRef = useRef(new THREE.Vector3(x * CS, 0.02, y * CS));
+  const targetPosRef = useRef(new THREE.Vector3(x * CS, 0.02, y * CS));
+  const nearPlayerRef = useRef(false);
+  const attackUntilRef = useRef(0);
+  const queuedCombatPulseRef = useRef(false);
+  const prevCombatPulseRef = useRef(combatPulse);
+  const groundLiftRef = useRef(0);
+  const groundBox = useMemo(() => new THREE.Box3(), []);
+  const seed = useMemo(() => ((x * 83492791) ^ (y * 29765743)) & 1023, [x, y]);
+
+  useEffect(() => {
+    targetPosRef.current.set(x * CS, 0.02, y * CS);
+  }, [x, y]);
+  useEffect(() => {
+    if (combatPulse <= 0) return;
+    if (combatPulse === prevCombatPulseRef.current) return;
+    prevCombatPulseRef.current = combatPulse;
+    queuedCombatPulseRef.current = true;
+  }, [combatPulse]);
+
+  useFrame(({ clock }) => {
+    const g = groupRef.current;
+    if (!g) return;
+    const t = clock.getElapsedTime();
+    if (queuedCombatPulseRef.current) {
+      queuedCombatPulseRef.current = false;
+      attackUntilRef.current = Math.max(attackUntilRef.current, t + 0.52);
+      setActionVersion((v) => v + 1);
+    }
+    const wx = smoothPosRef.current.x / CS;
+    const wy = smoothPosRef.current.z / CS;
+    const dx = playerX - wx;
+    const dy = playerY - wy;
+    const dist = Math.hypot(dx, dy);
+    const nearPlayer = dist <= 1.2;
+    if (nearPlayer && !nearPlayerRef.current) {
+      nearPlayerRef.current = true;
+      attackUntilRef.current = t + 0.52;
+      setActionVersion((v) => v + 1);
+    } else if (!nearPlayer) {
+      nearPlayerRef.current = false;
+    }
+    const transitDist = smoothPosRef.current.distanceTo(targetPosRef.current);
+    const movingAcrossTiles = transitDist > 0.05;
+    const reacting = t < attackUntilRef.current;
+    const next: "idle" | "hunt" | "attack" = reacting ? "attack" : (movingAcrossTiles ? "hunt" : "idle");
+    if (next !== visualStateRef.current) {
+      visualStateRef.current = next;
+      setVisualState(next);
+    }
+
+    const moveLerp = next === "hunt" || next === "attack" ? 0.1 : 0.06;
+    smoothPosRef.current.lerp(targetPosRef.current, moveLerp);
+    const isGhost = type === "G";
+    const bob = isGhost
+      ? Math.sin(t * 1.9 + seed) * 0.08
+      : Math.max(0, Math.sin(t * 1.9 + seed)) * 0.012;
+    const baseY = isGhost ? 0.25 : 0.06;
+    g.position.set(
+      smoothPosRef.current.x,
+      baseY + bob,
+      smoothPosRef.current.z
+    );
+    const model = modelRef.current;
+    if (model) {
+      if (!isGhost) {
+        groundBox.setFromObject(model);
+        const desiredMinY = FLOOR_Y + 0.015;
+        const neededLift = Math.max(0, desiredMinY - groundBox.min.y);
+        // Keep feet above floor even if animation clips dip root/bones down.
+        groundLiftRef.current = Math.max(groundLiftRef.current * 0.9, neededLift);
+        model.position.y = groundLiftRef.current;
+      } else {
+        groundLiftRef.current = 0;
+        model.position.y = 0;
+      }
+    }
+    const yaw = Math.atan2(dx, dy);
+    g.rotation.y = THREE.MathUtils.lerp(g.rotation.y, yaw, 0.08);
+  });
+
+  return (
+    <group ref={groupRef}>
+      <group ref={modelRef}>
+        <Suspense fallback={<MonsterBillboard x={x} y={y} type={type} />}>
+          <MonsterModel3DInMaze type={type} visualState={visualState} actionVersion={actionVersion} />
+        </Suspense>
+      </group>
+    </group>
+  );
+}
+
 function MonsterBillboard({ x, y, type }: { x: number; y: number; type: string }) {
   const meshRef = useRef<THREE.Mesh>(null);
   const spritePath = MONSTER_SPRITE_MAP[type] || MONSTER_SPRITE_MAP.Z;
@@ -2005,14 +2459,24 @@ function Monsters3D({
   monsters,
   playerX,
   playerY,
+  combatMonster,
+  combatPulseVersion = 0,
 }: {
   monsters: MiniMonster[];
   playerX: number;
   playerY: number;
+  combatMonster?: { x: number; y: number; type?: string } | null;
+  combatPulseVersion?: number;
 }) {
   return (
     <>
-      {monsters.map((m, i) => (
+      {monsters.map((m, i) => {
+        const isCombatTarget =
+          !!combatMonster &&
+          m.x === combatMonster.x &&
+          m.y === combatMonster.y &&
+          (combatMonster.type == null || m.type == null || combatMonster.type === m.type);
+        return (
         (m.type as MonsterType | undefined) === "V"
           ? (
             <DraculaInMaze
@@ -2022,10 +2486,21 @@ function Monsters3D({
               playerX={playerX}
               playerY={playerY}
               draculaState={m.draculaState}
+              combatPulse={isCombatTarget ? combatPulseVersion : 0}
             />
           )
-          : <MonsterBillboard key={`m3d-${i}`} x={m.x} y={m.y} type={m.type ?? "Z"} />
-      ))}
+          : (
+            <MonsterInMaze
+              key={`m3d-${i}-${m.type ?? "Z"}`}
+              x={m.x}
+              y={m.y}
+              playerX={playerX}
+              playerY={playerY}
+              type={(m.type as MonsterType | undefined) ?? "Z"}
+              combatPulse={isCombatTarget ? combatPulseVersion : 0}
+            />
+          )
+      )})}
     </>
   );
 }
@@ -2034,7 +2509,7 @@ function MazeScene({
   grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
   zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, catapultMode, catapultArcPoints,
   catapultTrajectoryStrength, catapultFrom, magicPortalPreviewOptions, teleportSourceType,
-  focusVersion, miniMonsters, fogIntensityMap,
+  focusVersion, miniMonsters, fogIntensityMap, combatPulseVersion, combatMonster,
   touchUi = false,
   onTouchCameraForwardGrid,
   onIsoCameraBearingDeg,
@@ -2050,6 +2525,8 @@ function MazeScene({
   catapultFrom?: [number, number] | null;
   magicPortalPreviewOptions?: [number, number][] | null;
   teleportSourceType?: "magic" | "gem" | "artifact" | null;
+  combatPulseVersion?: number;
+  combatMonster?: { x: number; y: number; type?: string } | null;
   onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
   orbitLookApplierRef: MutableRefObject<((dxPx: number, dyPx: number) => void) | null>;
 }) {
@@ -2096,9 +2573,21 @@ function MazeScene({
       <HorrorCornerRelics grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
       <WallBlocks grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
       {miniMonsters && miniMonsters.length > 0 && (
-        <Monsters3D monsters={miniMonsters} playerX={playerX} playerY={playerY} />
+        <Monsters3D
+          monsters={miniMonsters}
+          playerX={playerX}
+          playerY={playerY}
+          combatMonster={combatMonster}
+          combatPulseVersion={combatPulseVersion}
+        />
       )}
-      <PlayerMarker playerX={playerX} playerY={playerY} facingDx={facingDx} facingDy={facingDy} />
+      <PlayerMarker
+        playerX={playerX}
+        playerY={playerY}
+        facingDx={facingDx}
+        facingDy={facingDy}
+        combatPulse={combatPulseVersion}
+      />
       {magicPortalPreviewOptions &&
         magicPortalPreviewOptions.length > 0 &&
         !teleportMode && (
@@ -2107,7 +2596,20 @@ function MazeScene({
             <TeleportTargetMarkers options={magicPortalPreviewOptions} accent="magic" previewOnly />
           </>
         )}
-      {catapultFrom && <SlingshotSourceHint cellX={catapultFrom[0]} cellY={catapultFrom[1]} />}
+      {catapultFrom && (
+        <>
+          <SlingshotSourceHint cellX={catapultFrom[0]} cellY={catapultFrom[1]} />
+          <SlingshotStrikeSkyMarker
+            mapWidth={mapWidth}
+            mapHeight={mapHeight}
+            arcEndCell={
+              catapultArcPoints && catapultArcPoints.length > 0
+                ? catapultArcPoints[catapultArcPoints.length - 1]!
+                : null
+            }
+          />
+        </>
+      )}
       {catapultArcPoints && catapultArcPoints.length >= 2 && (
         <CatapultTrajectory3D
           arcPoints={catapultArcPoints}
@@ -2434,6 +2936,12 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     focusVersion,
     miniMonsters,
     fogIntensityMap,
+    combatActive = false,
+    combatRolling = false,
+    combatRollFace = null,
+    combatPulseVersion = 0,
+    combatMonster = null,
+    onCombatRollRequest,
     fillViewport = false,
     touchUi = false,
     hideOverlayViewButtons = false,
@@ -2605,6 +3113,11 @@ const MazeIsoView = forwardRef(function MazeIsoView(
         gl={{ antialias: true, alpha: false }}
         dpr={[1, 1.4]}
         onCreated={({ gl }) => { gl.setClearColor("#06060a"); }}
+        onPointerDown={(e) => {
+          if (!combatActive || !onCombatRollRequest) return;
+          if ((e.nativeEvent as PointerEvent).button !== 0) return;
+          onCombatRollRequest();
+        }}
       >
         <MazeScene
           grid={grid} mapWidth={mapWidth} mapHeight={mapHeight}
@@ -2625,12 +3138,44 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           focusVersion={focusVersion}
           miniMonsters={miniMonsters}
           fogIntensityMap={fogIntensityMap}
+          combatPulseVersion={combatPulseVersion}
+          combatMonster={combatMonster}
           touchUi={touchUi}
           onTouchCameraForwardGrid={onTouchCameraForwardGrid}
           onIsoCameraBearingDeg={onIsoCameraBearingDeg}
           orbitLookApplierRef={orbitLookApplierRef}
         />
       </Canvas>
+      {combatActive && (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            bottom: 14,
+            transform: "translateX(-50%)",
+            zIndex: 11,
+            pointerEvents: "none",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 4,
+            background: "rgba(6,8,14,0.74)",
+            border: "1px solid rgba(143,216,255,0.42)",
+            borderRadius: 10,
+            padding: "6px 10px",
+            boxShadow: "0 8px 22px rgba(0,0,0,0.35)",
+          }}
+        >
+          <div style={{ fontSize: "0.74rem", color: "#bde9ff", fontWeight: 700 }}>
+            {combatRolling ? "Rolling..." : "Click 3D view to roll strike"}
+          </div>
+          {combatRollFace != null && (
+            <div style={{ fontSize: "0.8rem", color: "#ffdca8" }}>
+              d6 result: <strong>{combatRollFace}</strong>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 });

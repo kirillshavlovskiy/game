@@ -235,6 +235,8 @@ export interface Monster {
   draculaStateTimer?: number;
   draculaCooldowns?: { teleport: number; attack: number };
   targetPlayerIndex?: number | null;
+  /** Skeleton only: starts with shield; destroyed on first successful hit (skeleton_shield effect). */
+  hasShield?: boolean;
 }
 
 export function isMonsterType(type: string): type is MonsterType {

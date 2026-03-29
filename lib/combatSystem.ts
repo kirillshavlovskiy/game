@@ -125,12 +125,14 @@ export function getMonsterReward(monsterType: MonsterType): MonsterReward {
 }
 
 /** Combat hints for each monster type */
-export function getMonsterHint(type: MonsterType): string {
+export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
   switch (type) {
     case "G":
       return "👻 Ghost: Dice 6 = instant win! 50% evade on other rolls — if it evades you lose 1 HP (shield can block).";
     case "K":
-      return "💀 Skeleton: High defense (5). Dice 6 = instant win! Miss: glancing chip by die; you take 1 HP (+Attack/Angry) unless shield blocks.";
+      return hasShield === false
+        ? "💀 Skeleton: Shield broken — one more hit to defeat!"
+        : "💀 Skeleton: High defense (5). Dice 6 = instant win! Miss: glancing chip by die; you take 1 HP (+Attack/Angry) unless shield blocks.";
     case "Z": {
       const zm = getMonsterMaxHp("Z");
       const half = Math.max(1, Math.floor(zm / 2));
