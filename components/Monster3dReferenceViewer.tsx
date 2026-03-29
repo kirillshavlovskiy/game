@@ -78,11 +78,11 @@ export function Monster3dReferenceViewer() {
   }, [path]);
 
   const mergedAttackVariant =
-    (monsterType === "V" || monsterType === "K") && visualState === "attack" ? draculaAttackVariant : undefined;
+    (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L") && visualState === "attack" ? draculaAttackVariant : undefined;
 
-  /** Demo tiers for merged Meshy hurt clips (Dracula + skeleton) — matches combat when footer passes HP. */
+  /** Demo tiers for merged Meshy hurt clips — matches combat when footer passes HP. */
   const demoHurtHp =
-    (monsterType === "V" || monsterType === "K") && visualState === "hurt"
+    (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L") && visualState === "hurt"
       ? { hp: 6, maxHp: 9 }
       : undefined;
 
@@ -146,7 +146,7 @@ export function Monster3dReferenceViewer() {
             ))}
           </select>
         </label>
-        {(monsterType === "V" || monsterType === "K") && visualState === "attack" ? (
+        {(monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L") && visualState === "attack" ? (
           <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.8rem", color: "#b8afc8" }}>
             Attack clip priority
             <select

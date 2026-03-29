@@ -78,7 +78,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import dynamic from "next/dynamic";
-import { getMonsterGltfPath, isMonster3DEnabled, PLAYER_3D_GLB } from "@/lib/monsterModels3d";
+import { getMonsterGltfPath, isMonster3DEnabled, PLAYER_3D_GLB, getPlayer3DGlb } from "@/lib/monsterModels3d";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import MazeIsoView, { type MazeIsoViewImperativeHandle } from "@/components/MazeIsoView";
 
@@ -2461,11 +2461,13 @@ function getCombatResultMonsterSpriteState(
     won?: boolean;
     shieldAbsorbed?: boolean;
   },
-  victoryPhase: "hurt" | "defeated"
+  victoryPhase: "hurt" | "defeated",
+  monsterType?: MonsterType | null,
 ): MonsterSpriteState {
   if (r.draculaWeakened || r.monsterWeakened) return "recover";
   if (r.won) return victoryPhase === "defeated" ? "defeated" : "hurt";
   if (r.shieldAbsorbed) return "angry";
+  if (monsterType === "V") return "angry";
   return "hurt";
 }
 
@@ -3776,12 +3778,14 @@ export default function LabyrinthGame() {
     const combat = combatStateRef.current;
     if (!combat) {
       combatLog("handleCombatRollComplete: no combat state, ignoring");
+      setRolling(false);
       return;
     }
     combatLog("--- ROLL COMPLETE ---", { dice: value, monsterType: combat.monsterType, monsterIdx: combat.monsterIndex });
     const labNow = labRef.current;
     if (!labNow) {
       combatLog("handleCombatRollComplete: no lab ref, ignoring");
+      setRolling(false);
       return;
     }
     if (combatRollResolveInProgressRef.current) {
@@ -3809,13 +3813,21 @@ export default function LabyrinthGame() {
       combatLog("dice 6 → instant kill, bypassing strike selection");
       const result = resolveCombat(effectiveRoll, 0, combat.monsterType, false, surpriseModifier, value, surpriseState);
       combatLog("resolveCombat result", { won: result.won, instantWin: result.instantWin });
-      void resolveAfterDice(result, p, value);
+      try {
+        resolveAfterDice(result, p, value);
+      } catch (err) {
+        console.error("[COMBAT] resolveAfterDice threw (dice 6):", err);
+        setRolling(false);
+      }
       return;
     }
 
     combatLog("dice 1-5 → showing strike selection", { value, effectiveRoll });
     setCombatStrikeSelection({ diceValue: value, effectiveRoll, holyStrike, surpriseModifier, surpriseState });
     setRolling(false);
+    } catch (err) {
+      console.error("[COMBAT] handleCombatRollComplete threw:", err);
+      setRolling(false);
     } finally {
       combatRollResolveInProgressRef.current = false;
     }
@@ -3837,7 +3849,12 @@ export default function LabyrinthGame() {
       sel.surpriseModifier, sel.diceValue, sel.surpriseState, target
     );
     combatLog("resolveCombat result", { won: result.won, monsterEffect: result.monsterEffect, instantWin: result.instantWin, damage: result.damage, glancingDamage: result.glancingDamage });
-    resolveAfterDice(result, p, sel.diceValue, target);
+    try {
+      resolveAfterDice(result, p, sel.diceValue, target);
+    } catch (err) {
+      console.error("[COMBAT] resolveAfterDice threw (strike pick):", err);
+      setRolling(false);
+    }
   }, []);
 
   function resolveAfterDice(result: CombatResult, p: Parameters<typeof storedArtifactCount>[0] | undefined, value: number, strikeTarget?: StrikeTarget) {
@@ -8733,23 +8750,46 @@ export default function LabyrinthGame() {
               const headerMonsterCombatState: MonsterSpriteState = (() => {
                 if (inActiveFight && headerMt) {
                   if (rolling) {
+                    if ((headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S" || headerMt === "L") && isMonster3DEnabled()) return "rolling";
                     return getMonsterSpriteWhileRolling(headerMt, combatMonsterStance);
+                  }
+                  const sp = combatFooterSnapshot?.strikePortrait;
+                  if (!combatResult && combatRecoveryPhase !== "ready" && sp && sp !== "other") {
+                    if (combatRecoveryPhase === "hurt") {
+                      if (sp === "defeated") return "defeated";
+                      if (sp === "playerHitHeavy") return "knockdown";
+                      if (sp === "playerHit") return "hurt";
+                      if (sp === "monsterHit") return "attack";
+                      if (sp === "shield") return "angry";
+                    }
+                    if (combatRecoveryPhase === "recover") {
+                      if (sp === "defeated") return "defeated";
+                      if (sp === "playerHitHeavy") return "recover";
+                      if (sp === "playerHit") return "recover";
+                      if (sp === "monsterHit") return "idle";
+                      if (sp === "shield") return "idle";
+                    }
                   }
                   if (combatState && labForCombatFaceoff) {
                     const maxHp = getMonsterMaxHp(combatState.monsterType);
-                    const cur =
-                      combatFooterSnapshot?.monsterHp != null && combatFooterSnapshot?.monsterMaxHp != null
+                    const cur = combatStrikeLabPending
+                      ? combatStrikeHpHold!.monsterHp
+                      : combatFooterSnapshot?.monsterHp != null && combatFooterSnapshot?.monsterMaxHp != null
                         ? combatFooterSnapshot.monsterHp
                         : (() => {
                             const m = labForCombatFaceoff.monsters[combatState.monsterIndex];
                             return m ? (m.hp ?? maxHp) : maxHp;
                           })();
-                    return monsterCalmPortraitFromHp(cur, combatFooterSnapshot?.monsterMaxHp ?? maxHp);
+                    const calmMax = combatStrikeLabPending
+                      ? combatStrikeHpHold!.monsterMaxHp
+                      : (combatFooterSnapshot?.monsterMaxHp ?? maxHp);
+                    if (combatFooterSnapshot?.strikePortrait === "defeated" || cur <= 0) return "defeated";
+                    return monsterCalmPortraitFromHp(cur, calmMax);
                   }
                   return combatMonsterStance;
                 }
                 if (combatResult?.monsterType) {
-                  return getCombatResultMonsterSpriteState(combatResult, combatVictoryPhase);
+                  return getCombatResultMonsterSpriteState(combatResult, combatVictoryPhase, combatResult.monsterType);
                 }
                 return "neutral";
               })();
@@ -8757,15 +8797,17 @@ export default function LabyrinthGame() {
                 headerMt &&
                 (getMonsterSprite(headerMt, headerMonsterCombatState) ?? getMonsterIdleSprite(headerMt));
 
-              const gltfVisualState: MonsterSpriteState = headerMonsterCombatState;
               const dracula3dAwaitingRollIdle =
+                (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S" || headerMt === "L") &&
                 isMonster3DEnabled() &&
-                headerMt &&
-                (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S") &&
                 inActiveFight &&
                 !rolling &&
                 !combatResult &&
-                combatRecoveryPhase === "ready";
+                combatRecoveryPhase === "ready" &&
+                headerMonsterCombatState !== "defeated";
+              const gltfVisualState: MonsterSpriteState = dracula3dAwaitingRollIdle
+                ? "idle"
+                : headerMonsterCombatState;
               const monsterGltfPath =
                 headerMt && isMonster3DEnabled()
                   ? getMonsterGltfPath(headerMt, gltfVisualState, {
@@ -8777,6 +8819,7 @@ export default function LabyrinthGame() {
                 const a = playerArmour[combatState.playerIndex];
                 return a && a !== NO_ARMOUR_SENTINEL ? a : null;
               })();
+              const combatPlayerGlb = getPlayer3DGlb(playerAvatars[headerPi]);
 
               const playerGltfVisualState: MonsterSpriteState = (() => {
                 if (dracula3dAwaitingRollIdle) return "idle";
@@ -8792,14 +8835,15 @@ export default function LabyrinthGame() {
                 }
               })();
               const playerAttackVariant: "spell" | "skill" | "light" | undefined = (() => {
-                if (playerGltfVisualState !== "attack" && playerGltfVisualState !== "angry") return undefined;
+                const st = playerGltfVisualState as string;
+                if (st === "idle" || st === "rolling" || st === "recover" || st === "neutral" || st === "defeated") return undefined;
                 const seg = combatFooterSnapshot?.draculaAttackSegment;
                 if (seg === "spell") return "spell";
                 if (seg === "skill") return "skill";
                 return "light";
               })();
               const isDracula3dCombatPortrait =
-                !!monsterGltfPath && (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S");
+                !!monsterGltfPath && (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S" || headerMt === "L");
               const draculaAttackLikePortrait =
                 !isDracula3dCombatPortrait &&
                 headerMt === "V" &&
@@ -8942,12 +8986,12 @@ export default function LabyrinthGame() {
                 : lsSpritePx;
               const draculaHurt3dLocked = combatFooterSnapshot?.draculaHurt3dHp;
               const draculaHurtHpFor3d =
-                (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S") &&
+                (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S" || headerMt === "L") &&
                 gltfVisualState === "hurt" &&
                 draculaHurt3dLocked &&
                 draculaHurt3dLocked.hp >= 3
                   ? { hp: draculaHurt3dLocked.hp, maxHp: draculaHurt3dLocked.maxHp }
-                  : (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S") &&
+                  : (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S" || headerMt === "L") &&
                       gltfVisualState === "hurt" &&
                       monsterMaxHp >= 1 &&
                       monsterCurHp >= 3 &&
@@ -9204,7 +9248,7 @@ export default function LabyrinthGame() {
                         <CombatScene3D
                           key={combat3dInstanceKey}
                           monsterGltfPath={monsterGltfPath}
-                          playerGltfPath={PLAYER_3D_GLB}
+                          playerGltfPath={combatPlayerGlb}
                           armourGltfPath={combatArmourPath}
                           monsterVisualState={gltfVisualState}
                           playerVisualState={playerGltfVisualState}
@@ -9992,7 +10036,7 @@ export default function LabyrinthGame() {
                           <CombatScene3D
                             key={combat3dInstanceKey}
                             monsterGltfPath={monsterGltfPath}
-                            playerGltfPath={PLAYER_3D_GLB}
+                            playerGltfPath={combatPlayerGlb}
                             armourGltfPath={combatArmourPath}
                             monsterVisualState={gltfVisualState}
                             playerVisualState={playerGltfVisualState}
@@ -11250,6 +11294,7 @@ export default function LabyrinthGame() {
                     ? handleCombatRollClick
                     : undefined
                 }
+                playerGlbPath={getPlayer3DGlb(playerAvatars[currentPlayer])}
                 fillViewport={mazeIsoFillViewport}
                 onTouchCameraForwardGrid={mazeMapView === "iso" ? onTouchCameraForwardGrid : undefined}
                 onIsoCameraBearingDeg={mazeMapView === "iso" ? onIsoCameraBearingDeg : undefined}

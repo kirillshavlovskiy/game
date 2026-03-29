@@ -24,6 +24,7 @@ import {
   PLAYER_3D_GLB,
   resolveMonsterAnimationClipName,
   resolvePlayerAnimationClipName,
+  getPlayer3DGlb,
 } from "@/lib/monsterModels3d";
 
 type MiniMonster = { x: number; y: number; type?: string; draculaState?: DraculaState };
@@ -84,6 +85,8 @@ type Props = {
   combatPulseVersion?: number;
   combatMonster?: { x: number; y: number; type?: string } | null;
   onCombatRollRequest?: () => void;
+  /** Dynamic player GLB path based on selected avatar. Falls back to wasteland-drifter. */
+  playerGlbPath?: string;
 };
 
 export type MazeIsoViewImperativeHandle = {
@@ -225,13 +228,16 @@ function WallBlocks({
 function PlayerAvatar3D({
   visualState,
   actionVersion = 0,
+  glbPath,
 }: {
   visualState: "idle" | "hunt" | "attack";
   actionVersion?: number;
+  glbPath?: string;
 }) {
+  const url = glbPath || PLAYER_3D_GLB;
   const rootRef = useRef<THREE.Group>(null);
   const rightHandNodeRef = useRef<THREE.Object3D | null>(null);
-  const { scene, animations } = useGLTF(PLAYER_3D_GLB);
+  const { scene, animations } = useGLTF(url);
   const clonedScene = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   const { actions, names } = useAnimations(animations, rootRef);
 
@@ -296,9 +302,9 @@ function PlayerAvatar3D({
 }
 
 function PlayerMarker({
-  playerX, playerY, facingDx, facingDy, combatPulse = 0,
+  playerX, playerY, facingDx, facingDy, combatPulse = 0, playerGlbPath,
 }: {
-  playerX: number; playerY: number; facingDx: number; facingDy: number; combatPulse?: number;
+  playerX: number; playerY: number; facingDx: number; facingDy: number; combatPulse?: number; playerGlbPath?: string;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const modelAnchorRef = useRef<THREE.Group>(null);
@@ -387,7 +393,7 @@ function PlayerMarker({
             </>
           )}
         >
-          <PlayerAvatar3D visualState={visualState} actionVersion={actionVersion} />
+          <PlayerAvatar3D visualState={visualState} actionVersion={actionVersion} glbPath={playerGlbPath} />
         </Suspense>
       </group>
     </group>
@@ -2514,6 +2520,7 @@ function MazeScene({
   onTouchCameraForwardGrid,
   onIsoCameraBearingDeg,
   orbitLookApplierRef,
+  playerGlbPath,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
   resetTick: number;
@@ -2587,6 +2594,7 @@ function MazeScene({
         facingDx={facingDx}
         facingDy={facingDy}
         combatPulse={combatPulseVersion}
+        playerGlbPath={playerGlbPath}
       />
       {magicPortalPreviewOptions &&
         magicPortalPreviewOptions.length > 0 &&
@@ -2942,6 +2950,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     combatPulseVersion = 0,
     combatMonster = null,
     onCombatRollRequest,
+    playerGlbPath,
     fillViewport = false,
     touchUi = false,
     hideOverlayViewButtons = false,
@@ -3144,6 +3153,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           onTouchCameraForwardGrid={onTouchCameraForwardGrid}
           onIsoCameraBearingDeg={onIsoCameraBearingDeg}
           orbitLookApplierRef={orbitLookApplierRef}
+          playerGlbPath={playerGlbPath}
         />
       </Canvas>
       {combatActive && (

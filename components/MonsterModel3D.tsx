@@ -195,7 +195,7 @@ function GltfSubject({
   }, [url, tightFraming]);
 
   /** Merged Meshy rigs (Dracula + skeleton): same scale in combat so framing matches. */
-  const scale = (tightFraming ? 1.14 : 1) * (isPlayerModel ? 0.9 : (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" ? 0.9 : 1));
+  const scale = (tightFraming ? 1.14 : 1) * (isPlayerModel ? 0.9 : (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L" ? 0.9 : 1));
 
   return (
     <Center>
@@ -265,7 +265,7 @@ function PositionedGltfSubject(props: Parameters<typeof GltfSubject>[0] & { posi
     return () => { if (actForListener) { mixer.removeEventListener("finished", onFin); actForListener = null; } for (const a of Object.values(actions)) { a?.fadeOut(0.12); } };
   }, [actions, names, mixer, rest.url, rest.visualState, rest.monsterType, rest.draculaAttackVariant, hurtHp, hurtMaxHp, rest.draculaLoopAngrySkill01, rest.isPlayerModel]);
 
-  const scale = (rest.tightFraming ? 1.14 : 1) * (rest.isPlayerModel ? 0.9 : (rest.monsterType === "V" || rest.monsterType === "K" || rest.monsterType === "Z" || rest.monsterType === "S" ? 0.9 : 1));
+  const scale = (rest.tightFraming ? 1.14 : 1) * (rest.isPlayerModel ? 0.9 : (rest.monsterType === "V" || rest.monsterType === "K" || rest.monsterType === "Z" || rest.monsterType === "S" || rest.monsterType === "L" ? 0.9 : 1));
 
   const yRotation = rest.isPlayerModel ? Math.PI / 2 : -Math.PI / 2;
 
@@ -345,7 +345,7 @@ function Scene({
     <>
       {meshyCameraBases ? (
         <MeshyCombatCameraFraming
-          enabled={isPlayerModel || monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S"}
+          enabled={isPlayerModel || monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L"}
           visualState={visualState}
           baseZ={meshyCameraBases.baseZ}
           baseY={meshyCameraBases.baseY}
@@ -425,7 +425,9 @@ export function MonsterModel3D({
   const isDracula = monsterType === "V";
   const isSkeleton = monsterType === "K";
   const isZombie = monsterType === "Z";
-  const mergedMeshyCombat = isDracula || isSkeleton || isZombie;
+  const isSpider = monsterType === "S";
+  const isLava = monsterType === "L";
+  const mergedMeshyCombat = isDracula || isSkeleton || isZombie || isSpider || isLava;
   const cameraZBase = referenceViewerStyle ? (tightFraming ? 2.2 : 2.85) : tightFraming ? 2.12 : 2.82;
   const cameraYBase = referenceViewerStyle ? (tightFraming ? 0.95 : 1.05) : tightFraming ? 0.98 : 1.06;
   const mergedMeshyCameraZExtra = mergedMeshyCombat ? 0.62 : 0;
@@ -463,7 +465,7 @@ export function MonsterModel3D({
     };
   }, [gltfPath, committedUrl]);
 
-  const canvasLayoutKey = `${tightFraming ? "tight" : "wide"}-${referenceViewerStyle ? "ref" : "mod"}${isDracula ? "-v" : ""}${isSkeleton ? "-k" : ""}${isZombie ? "-z" : ""}`;
+  const canvasLayoutKey = `${tightFraming ? "tight" : "wide"}-${referenceViewerStyle ? "ref" : "mod"}-${monsterType ?? "?"}`;
   const errorBoundaryKey = `${monsterType ?? "?"}-${canvasLayoutKey}`;
 
   // Skeletal clips need a continuous frame loop; `demand` only redraws on `invalidate()` and stutters.
@@ -676,11 +678,17 @@ export function CombatScene3D({
   height,
   fallback,
 }: CombatScene3DProps) {
-  const isMergedMeshy = monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S";
+  const isMergedMeshy = monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L";
   const cameraZ = 5.2;
   const cameraY = 1.0;
   const fov = 40;
   const meshyCameraBases = { baseZ: cameraZ, baseY: cameraY, baseFov: fov };
+
+  const isContactExchange =
+    (playerVisualState === "attack" || playerVisualState === "angry" || playerVisualState === "hurt" || playerVisualState === "knockdown") &&
+    (monsterVisualState === "attack" || monsterVisualState === "hurt" || monsterVisualState === "knockdown" || monsterVisualState === "angry");
+  const playerPosX = isContactExchange ? -0.55 : -0.85;
+  const monsterPosX = isContactExchange ? 0.55 : 0.85;
 
   const [mUrl, setMUrl] = useState(monsterGltfPath);
   const [pUrl, setPUrl] = useState(playerGltfPath);
@@ -747,7 +755,7 @@ export function CombatScene3D({
             tightFraming={false}
             isPlayerModel
             draculaAttackVariant={playerAttackVariant}
-            positionX={-1.0}
+            positionX={playerPosX}
             weaponUrl={armourGltfPath}
           />
           <PositionedGltfSubject
@@ -759,7 +767,7 @@ export function CombatScene3D({
             draculaHurtHp={draculaHurtHp}
             draculaLoopAngrySkill01={draculaLoopAngrySkill01}
             onOneShotAnimationFinished={onOneShotAnimationFinished}
-            positionX={1.0}
+            positionX={monsterPosX}
           />
         </Suspense>
       </Canvas>

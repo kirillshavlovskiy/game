@@ -5,16 +5,18 @@ Expects filenames like:
   Meshy_AI_Blue_Eyed_Skeleton_biped_Animation_<ClipName>_withSkin.glb
 → Blender action / glTF clip name <ClipName> (e.g. Idle_11, falling_down, Running).
 
-Run from repo root (adjust paths):
+Supports multiple input directories (e.g. original + extra donor clips):
+  blender --background --python scripts/blender_merge_skeleton_animation_glbs.py -- \\
+    "/path/to/Meshy_AI_Blue_Eyed_Skeleton_biped" \\
+    --output "/path/to/public/models/monsters/skeleton-merged.glb"
+
+Legacy (single dir + output as 2nd positional arg):
   blender --background --python scripts/blender_merge_skeleton_animation_glbs.py -- \\
     "/path/to/Meshy_AI_Blue_Eyed_Skeleton_biped" \\
     "/path/to/public/models/monsters/skeleton-merged.glb"
 
 Then retarget node indices (required after merge, same as Dracula):
   node scripts/retarget-glb-animation-nodes.mjs skeleton-merged.glb public/models/monsters/skeleton.glb --ref Idle_11
-
-If your exporter keeps Meshy-style names, use the exact animation name from the merged file, e.g.:
-  --ref "Armature|Idle_11|baselayer"
 
 See also: scripts/blender_merge_dracula_animation_glbs.py (same pipeline for Dracula).
 """
@@ -27,7 +29,7 @@ from pathlib import Path
 
 import bpy
 
-CLIP_RE = re.compile(r"Animation_(.+)_withSkin\.glb$", re.IGNORECASE)
+CLIP_RE = re.compile(r"Animation_(.+?)_withSkin\.glb$", re.IGNORECASE)
 
 
 def _argv_after_dd() -> list[str]:
@@ -45,6 +47,8 @@ def clip_name_from_filename(path: str) -> str:
 
 def list_input_glbs(directory: Path) -> list[Path]:
     paths = sorted(directory.glob("Meshy_AI_Blue_Eyed_Skeleton_biped_Animation_*_withSkin.glb"))
+    if not paths:
+        paths = sorted(directory.glob("*_Animation_*_withSkin.glb"))
     if not paths:
         paths = sorted(directory.glob("*.glb"))
     return paths
@@ -112,24 +116,52 @@ def build_nla(arm: bpy.types.Object, actions: list[bpy.types.Action]) -> None:
 
 def main() -> None:
     args = _argv_after_dd()
-    if len(args) < 2:
+
+    # Parse --output flag or legacy 2-arg form
+    in_dirs: list[Path] = []
+    out_glb: Path | None = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--output" and i + 1 < len(args):
+            out_glb = Path(args[i + 1]).expanduser().resolve()
+            i += 2
+            continue
+        in_dirs.append(Path(args[i]).expanduser().resolve())
+        i += 1
+
+    if out_glb is None and len(in_dirs) >= 2 and not in_dirs[-1].is_dir():
+        out_glb = in_dirs.pop()
+
+    if not in_dirs or out_glb is None:
         print(
             "Usage: blender --background --python scripts/blender_merge_skeleton_animation_glbs.py -- "
-            "<input_dir_with_glbs> <output_merged.glb>",
+            "<dir1> [dir2 ...] --output <output.glb>\n"
+            "  or:  <dir> <output.glb>  (legacy 2-arg form)",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    in_dir = Path(args[0]).expanduser().resolve()
-    out_glb = Path(args[1]).expanduser().resolve()
-    if not in_dir.is_dir():
-        print(f"Not a directory: {in_dir}", file=sys.stderr)
+    for d in in_dirs:
+        if not d.is_dir():
+            print(f"Not a directory: {d}", file=sys.stderr)
+            sys.exit(1)
+
+    paths: list[Path] = []
+    seen_clips: set[str] = set()
+    for d in in_dirs:
+        for p in list_input_glbs(d):
+            cn = clip_name_from_filename(p.name)
+            if cn not in seen_clips:
+                seen_clips.add(cn)
+                paths.append(p)
+            else:
+                print(f"  Skip duplicate clip '{cn}': {p.name}")
+
+    if not paths:
+        print(f"No GLBs found in {[str(d) for d in in_dirs]}", file=sys.stderr)
         sys.exit(1)
 
-    paths = list_input_glbs(in_dir)
-    if not paths:
-        print(f"No GLBs found in {in_dir}", file=sys.stderr)
-        sys.exit(1)
+    print(f"Found {len(paths)} unique animation GLBs from {len(in_dirs)} director(ies)")
 
     # Prefer Idle_11 as base mesh / bind pose (calm portrait default).
     idle = next((p for p in paths if "Idle_11" in p.name), paths[0])

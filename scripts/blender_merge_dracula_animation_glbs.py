@@ -5,7 +5,13 @@ Expects filenames like:
   Meshy_AI_Dracula_biped_Animation_<ClipName>_withSkin.glb
 → glTF animation name <ClipName> (e.g. Idle_6, falling_down).
 
-Run from repo root (adjust paths):
+Supports multiple input directories (e.g. original + extended pack):
+  blender --background --python scripts/blender_merge_dracula_animation_glbs.py -- \\
+    "/path/to/Meshy_AI_Dracula_biped-2" \\
+    "/path/to/Meshy_AI_Dracula_biped" \\
+    --output "/path/to/public/models/monsters/dracula-merged.glb"
+
+Legacy (single dir + output as 2nd positional arg):
   blender --background --python scripts/blender_merge_dracula_animation_glbs.py -- \\
     "/path/to/Meshy_AI_Dracula_biped-2" \\
     "/path/to/public/models/monsters/dracula-merged.glb"
@@ -26,7 +32,7 @@ from pathlib import Path
 import bpy
 from mathutils import Vector
 
-CLIP_RE = re.compile(r"Animation_(.+)_withSkin\.glb$", re.IGNORECASE)
+CLIP_RE = re.compile(r"Animation_(.+?)_withSkin\.glb$", re.IGNORECASE)
 
 
 def _argv_after_dd() -> list[str]:
@@ -44,6 +50,8 @@ def clip_name_from_filename(path: str) -> str:
 
 def list_input_glbs(directory: Path) -> list[Path]:
     paths = sorted(directory.glob("Meshy_AI_Dracula_biped_Animation_*_withSkin.glb"))
+    if not paths:
+        paths = sorted(directory.glob("*_Animation_*_withSkin.glb"))
     if not paths:
         paths = sorted(directory.glob("*.glb"))
     return paths
@@ -111,24 +119,54 @@ def build_nla(arm: bpy.types.Object, actions: list[bpy.types.Action]) -> None:
 
 def main() -> None:
     args = _argv_after_dd()
-    if len(args) < 2:
+
+    # Parse --output flag or legacy 2-arg form
+    in_dirs: list[Path] = []
+    out_glb: Path | None = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--output" and i + 1 < len(args):
+            out_glb = Path(args[i + 1]).expanduser().resolve()
+            i += 2
+            continue
+        in_dirs.append(Path(args[i]).expanduser().resolve())
+        i += 1
+
+    # Legacy: last positional is output if it looks like a .glb file path (not a directory)
+    if out_glb is None and len(in_dirs) >= 2 and not in_dirs[-1].is_dir():
+        out_glb = in_dirs.pop()
+
+    if not in_dirs or out_glb is None:
         print(
             "Usage: blender --background --python scripts/blender_merge_dracula_animation_glbs.py -- "
-            "<input_dir_with_glbs> <output_merged.glb>",
+            "<dir1> [dir2 ...] --output <output.glb>\n"
+            "  or:  <dir> <output.glb>  (legacy 2-arg form)",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    in_dir = Path(args[0]).expanduser().resolve()
-    out_glb = Path(args[1]).expanduser().resolve()
-    if not in_dir.is_dir():
-        print(f"Not a directory: {in_dir}", file=sys.stderr)
+    for d in in_dirs:
+        if not d.is_dir():
+            print(f"Not a directory: {d}", file=sys.stderr)
+            sys.exit(1)
+
+    # Gather all GLBs from all input directories
+    paths: list[Path] = []
+    seen_clips: set[str] = set()
+    for d in in_dirs:
+        for p in list_input_glbs(d):
+            cn = clip_name_from_filename(p.name)
+            if cn not in seen_clips:
+                seen_clips.add(cn)
+                paths.append(p)
+            else:
+                print(f"  Skip duplicate clip '{cn}': {p.name}")
+
+    if not paths:
+        print(f"No GLBs found in {[str(d) for d in in_dirs]}", file=sys.stderr)
         sys.exit(1)
 
-    paths = list_input_glbs(in_dir)
-    if not paths:
-        print(f"No GLBs found in {in_dir}", file=sys.stderr)
-        sys.exit(1)
+    print(f"Found {len(paths)} unique animation GLBs from {len(in_dirs)} director(ies)")
 
     # Prefer Idle_6 as base mesh/bind pose
     idle = next((p for p in paths if "Idle_6" in p.name), paths[0])

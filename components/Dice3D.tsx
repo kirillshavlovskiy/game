@@ -95,9 +95,13 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
             const v = getValueFromResult(result);
             onRollComplete(v);
             return v;
-          } catch {
+          } catch (rollErr) {
             const fallback = Math.floor(Math.random() * 6) + 1;
-            onRollComplete(fallback);
+            try {
+              onRollComplete(fallback);
+            } catch (cbErr) {
+              console.error("[Dice3D] onRollComplete threw in fallback path:", cbErr);
+            }
             return fallback;
           }
         },
