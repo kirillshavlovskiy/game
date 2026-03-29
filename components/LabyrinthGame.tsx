@@ -3833,12 +3833,6 @@ export default function LabyrinthGame() {
     combatLog("dice 1-5 → showing strike selection", { value, effectiveRoll });
     setCombatStrikeSelection({ diceValue: value, effectiveRoll, holyStrike, surpriseModifier, surpriseState });
     setRolling(false);
-    } catch (err) {
-      console.error("[COMBAT] handleCombatRollComplete threw:", err);
-      setRolling(false);
-    } finally {
-      combatRollResolveInProgressRef.current = false;
-    }
   }, []);
 
   const handleStrikeTargetPick = useCallback((target: StrikeTarget) => {
