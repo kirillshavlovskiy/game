@@ -8828,8 +8828,12 @@ export default function LabyrinthGame() {
                 : isDracula3dCombatPortrait
                   ? Math.max(360, 340)
                   : 220;
+              const hide3dPlayerColumn = !!monsterGltfPath;
               const combatVersusGridStyleEffective: React.CSSProperties = {
                 ...combatModalVersusGridStyle,
+                ...(hide3dPlayerColumn
+                  ? { gridTemplateColumns: "0px 0px minmax(0, 1fr)", columnGap: 0 }
+                  : {}),
                 ...(isLandscapeCompact
                   ? {
                       gridTemplateRows: isDracula3dCombatPortrait
@@ -9695,7 +9699,7 @@ export default function LabyrinthGame() {
                   <div style={combatVersusGridStyleEffective}>
                     <div
                       style={{
-                        display: "flex",
+                        display: hide3dPlayerColumn ? "none" : "flex",
                         alignItems: "center",
                         justifyContent: "center",
                         minHeight: 26,
@@ -9741,7 +9745,7 @@ export default function LabyrinthGame() {
                         </span>
                       ) : null}
                     </div>
-                    <div />
+                    <div style={hide3dPlayerColumn ? { display: "none" } : undefined} />
                     <div
                       style={{
                         display: "flex",
@@ -9802,11 +9806,12 @@ export default function LabyrinthGame() {
                         minWidth: 0,
                         alignSelf: "center",
                         paddingBottom: 4,
+                        display: hide3dPlayerColumn ? "none" : undefined,
                       }}
                     >
                       {playerNames[headerPi] ?? `Player ${headerPi + 1}`}
                     </span>
-                    <div aria-hidden style={{ minWidth: 28 }} />
+                    <div aria-hidden style={{ minWidth: 28, display: hide3dPlayerColumn ? "none" : undefined }} />
                     <span
                       style={{
                         fontSize: "0.8rem",
@@ -9825,7 +9830,7 @@ export default function LabyrinthGame() {
 
                     <div
                       style={{
-                        display: "flex",
+                        display: hide3dPlayerColumn ? "none" : "flex",
                         alignItems: "center",
                         justifyContent: "center",
                         minHeight: combatPortraitCellMinH,
@@ -9848,7 +9853,7 @@ export default function LabyrinthGame() {
                         {showCombatDefeatSkull ? "💀" : playerAvatars[headerPi] ?? PLAYER_AVATARS[headerPi % PLAYER_AVATARS.length]}
                       </span>
                     </div>
-                    <div aria-hidden style={{ minWidth: 28 }} />
+                    <div aria-hidden style={{ minWidth: 28, display: hide3dPlayerColumn ? "none" : undefined }} />
                     <div
                       style={{
                         position: "relative",
