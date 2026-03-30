@@ -419,14 +419,16 @@ export function spiderMergedAttackClipPriority(variant: "spell" | "skill" | "lig
 }
 
 /* ────────────────────────────────────────────────────────────────────
- * PLAYER 3D MODEL CONFIG  (Wasteland Drifter — 20 animations)
+ * PLAYER 3D MODEL CONFIG  (Wasteland Drifter — merged animations)
  *
- * Animations: Combat_Stance, Arise, Attack, Backflip_and_Hooks,
- * Cautious_Crouch_Walk_Forward_inplace, Cautious_Crouch_Walk_Left_inplace,
- * Cautious_Crouch_Walk_Right_inplace, Charged_Axe_Chop, Charged_Spell_Cast_2,
- * Charged_Upward_Slash, Dead, Double_Blade_Spin, Double_Combo_Attack,
- * Face_Punch_Reaction_1, Jumping_Punch, Reaping_Swing, running,
- * Shot_and_Fall_Backward, Triple_Combo_Attack, walking_man, falling_down
+ * Heavy knockdown / death reaction: prefer **Shot_and_Slow_Fall_Backward** (Meshy override
+ * in `public/models/player/animation-overrides/`), then legacy **Shot_and_Fall_Backward**
+ * from donor GLB if re-merge was not run yet.
+ *
+ * Other clips: Combat_Stance, Arise, Attack, Backflip_and_Hooks, crouch walks,
+ * Charged_Axe_Chop, Charged_Spell_Cast_2, Charged_Upward_Slash, Dead,
+ * Double_Blade_Spin, Double_Combo_Attack, Face_Punch_Reaction_1, Jumping_Punch,
+ * Reaping_Swing, running, Triple_Combo_Attack, walking_man, falling_down.
  * ──────────────────────────────────────────────────────────────────── */
 
 export const PLAYER_3D_GLB = "/models/player/wasteland-drifter.glb";
@@ -484,7 +486,20 @@ const PLAYER_ATTACK_LIGHT_PRIORITY = [
 
 const PLAYER_ATTACK_FALLBACK_TAIL = ["Attack", "Jumping_Punch"] as const;
 
-const PLAYER_HURT_HEAVY = ["Shot_and_Fall_Backward", "falling_down", "Face_Punch_Reaction_1"] as const;
+const PLAYER_HURT_HEAVY = [
+  "Shot_and_Slow_Fall_Backward",
+  "Shot_and_Fall_Backward",
+  "falling_down",
+  "Face_Punch_Reaction_1",
+] as const;
+
+/** Lethal **spell** strike (e.g. Jumping_Punch) — full Meshy `Shot_and_Fall_Backward`, not slow fall. */
+const PLAYER_HURT_FATAL_JUMP_KILL = [
+  "Shot_and_Fall_Backward",
+  "Shot_and_Slow_Fall_Backward",
+  "falling_down",
+  "Face_Punch_Reaction_1",
+] as const;
 const PLAYER_HURT_MEDIUM = ["Face_Punch_Reaction_1", "falling_down"] as const;
 const PLAYER_HURT_LIGHT = ["Face_Punch_Reaction_1"] as const;
 
@@ -527,11 +542,45 @@ const PLAYER_CLIP_PRIORITY: Partial<Record<Monster3DSpriteState, readonly string
     "Cautious_Crouch_Walk_Right_inplace",
     "Combat_Stance",
   ],
-  hurt: ["Shot_and_Fall_Backward", "Face_Punch_Reaction_1", "falling_down"],
-  knockdown: ["Shot_and_Fall_Backward", "falling_down", "Face_Punch_Reaction_1"],
-  defeated: ["Shot_and_Fall_Backward", "Dead"],
+  hurt: ["Shot_and_Slow_Fall_Backward", "Shot_and_Fall_Backward", "Face_Punch_Reaction_1", "falling_down"],
+  knockdown: ["Shot_and_Slow_Fall_Backward", "Shot_and_Fall_Backward", "falling_down", "Face_Punch_Reaction_1"],
+  defeated: ["Shot_and_Slow_Fall_Backward", "Shot_and_Fall_Backward", "Dead"],
   recover: ["Arise", "walking_man"],
 };
+
+/** Blender / glTF export names for player clips (short NLA names vs `Armature|…|baselayer`). */
+const PLAYER_CLIP_ALIASES_BY_CANONICAL: Record<string, readonly string[]> = {
+  Shot_and_Slow_Fall_Backward: ["Armature|Shot_and_Slow_Fall_Backward|baselayer"],
+  Shot_and_Fall_Backward: ["Armature|Shot_and_Fall_Backward|baselayer"],
+  Face_Punch_Reaction_1: ["Armature|Face_Punch_Reaction_1|baselayer"],
+  falling_down: ["Armature|falling_down|baselayer"],
+  Dead: ["Armature|Dead|baselayer"],
+  Arise: ["Armature|Arise|baselayer"],
+  Combat_Stance: ["Armature|Combat_Stance|baselayer"],
+  walking_man: ["Armature|walking_man|baselayer"],
+  running: ["Armature|running|baselayer"],
+};
+
+function expandPlayerClipTryList(shortNames: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const n of shortNames) {
+    if (!seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+    const aliases = PLAYER_CLIP_ALIASES_BY_CANONICAL[n];
+    if (aliases) {
+      for (const a of aliases) {
+        if (!seen.has(a)) {
+          seen.add(a);
+          out.push(a);
+        }
+      }
+    }
+  }
+  return out;
+}
 
 export function playerAttackClipPriority(variant: "spell" | "skill" | "light" = "spell"): string[] {
   const ordered =
@@ -569,15 +618,24 @@ export function resolvePlayerAnimationClipName(
   state: Monster3DSpriteState,
   animationNames: readonly string[],
   attackVariant?: "spell" | "skill" | "light",
+  opts?: { fatalJumpKill?: boolean },
 ): string | null {
   if (animationNames.length === 0) return null;
 
   if (state === "idle" || state === "neutral") {
-    const cs = matchAnimationNameInsensitive(animationNames, "Combat_Stance");
+    const cs = firstPreferredMatchingInsensitive(expandPlayerClipTryList(["Combat_Stance"]), animationNames);
     if (cs) return cs;
   }
 
-  const preferred = getPlayerPreferredClipNames(state, attackVariant);
+  if (opts?.fatalJumpKill && state === "hurt") {
+    const jumpKill = expandPlayerClipTryList([...PLAYER_HURT_FATAL_JUMP_KILL]);
+    for (const n of jumpKill) {
+      const hit = matchAnimationNameInsensitive(animationNames, n);
+      if (hit) return hit;
+    }
+  }
+
+  const preferred = expandPlayerClipTryList(getPlayerPreferredClipNames(state, attackVariant));
   for (const n of preferred) {
     const hit = matchAnimationNameInsensitive(animationNames, n);
     if (hit) return hit;

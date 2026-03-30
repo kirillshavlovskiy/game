@@ -72,16 +72,32 @@ function getValueFromResult(result: unknown): number {
   return 1;
 }
 
+/** Max rAF spins waiting for init effect to install `initReadyRef` (first paint). */
+const INIT_REF_WAIT_FRAMES = 90;
+
 const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
   function Dice3D({ onRollComplete, disabled = false, fitContainer = false, hideHint = false }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const diceBoxRef = useRef<DiceBoxInstance | null>(null);
+    /** Resolves when dice-box `initialize()` finishes (success or failure) for this mount. */
+    const initReadyRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
 
     useImperativeHandle(
       ref,
       () => ({
         /** Always runs the roll — parent gates via button state. `disabled` is visual/pointer-events only; deferring roll (e.g. mobile rAF after setRolling) would otherwise see disabled=true and skip onRollComplete. */
         roll: async () => {
+          if (!diceBoxRef.current) {
+            let spins = 0;
+            while (!initReadyRef.current && spins < INIT_REF_WAIT_FRAMES) {
+              await new Promise<void>((r) => requestAnimationFrame(() => r()));
+              spins++;
+            }
+            if (initReadyRef.current) {
+              await initReadyRef.current.promise;
+            }
+          }
+
           const box = diceBoxRef.current;
           if (!box) {
             const fallback = Math.floor(Math.random() * 6) + 1;
@@ -110,9 +126,21 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
     );
 
     useEffect(() => {
-      if (!containerRef.current) return;
       let mounted = true;
       let resizeObserver: ResizeObserver | null = null;
+      let resolveInit!: () => void;
+      const initSettled = new Promise<void>((res) => {
+        resolveInit = res;
+      });
+      initReadyRef.current = { promise: initSettled, resolve: resolveInit };
+
+      if (!containerRef.current) {
+        resolveInit();
+        return () => {
+          mounted = false;
+          initReadyRef.current = null;
+        };
+      }
 
       const initDice = async () => {
         const el = containerRef.current;
@@ -197,9 +225,18 @@ const Dice3D = forwardRef<Dice3DRef, Dice3DProps>(
         resizeObserver.observe(el);
       };
 
-      void initDice();
+      void (async () => {
+        try {
+          await initDice();
+        } finally {
+          if (mounted) resolveInit();
+        }
+      })();
+
       return () => {
         mounted = false;
+        resolveInit();
+        initReadyRef.current = null;
         resizeObserver?.disconnect();
         resizeObserver = null;
         diceBoxRef.current = null;

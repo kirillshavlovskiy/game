@@ -29,6 +29,15 @@ Then retarget node indices (same as monsters):
     public/models/player/hooded-wraith.glb \\
     public/models/player/hooded-wraith.glb \\
     --ref Walking
+
+**Player animation overrides** (optional): drop Meshy GLBs into
+`public/models/player/animation-overrides/`. After harvesting the donor, each
+file is imported and merged by clip name from the filename (e.g.
+`Meshy_AI_Animation_Shot_and_Slow_Fall_Backward_withSkin.glb` →
+`Shot_and_Slow_Fall_Backward`,
+`Meshy_AI_Animation_Shot_and_Fall_Backward_withSkin.glb` →
+`Shot_and_Fall_Backward`). Both can coexist: slow fall for normal heavy hits,
+full **Shot_and_Fall_Backward** for lethal jump-kill reactions in-game.
 """
 
 from __future__ import annotations
@@ -40,6 +49,8 @@ from pathlib import Path
 import bpy
 
 CLIP_RE = re.compile(r"Animation_(.+?)_withSkin\.glb$", re.IGNORECASE)
+# Donor re-import may suffix duplicate action names: Shot_and_Fall_Backward.001
+_DONOR_DUP_SUFFIX_RE = re.compile(r"^(.+)\.\d+$")
 
 
 def _argv_after_dd() -> list[str]:
@@ -108,6 +119,12 @@ def sanitize_action_name(name: str) -> str:
     return name
 
 
+def _base_clip_name(name: str) -> str:
+    """`Shot_and_Fall_Backward.002` → `Shot_and_Fall_Backward` (donor duplicate suffix)."""
+    m = _DONOR_DUP_SUFFIX_RE.match(name)
+    return m.group(1) if m else name
+
+
 def harvest_actions_from_glb(glb_path: Path) -> list[tuple[str, bpy.types.Action]]:
     """Import a GLB that has multiple NLA-baked animations, copy each action, then delete imported objects."""
     pre_actions = {a.name for a in bpy.data.actions}
@@ -155,6 +172,62 @@ def harvest_actions_from_glb(glb_path: Path) -> list[tuple[str, bpy.types.Action
                 pass
 
     return harvested
+
+
+def apply_player_animation_overrides(actions_by_clip: dict[str, bpy.types.Action]) -> None:
+    """Merge GLBs from public/models/player/animation-overrides/ (repo root next to scripts/)."""
+    repo_root = Path(__file__).resolve().parent.parent
+    override_dir = repo_root / "public" / "models" / "player" / "animation-overrides"
+    if not override_dir.is_dir():
+        return
+    glbs = sorted(override_dir.glob("*.glb"))
+    if not glbs:
+        return
+    print(f"\nPlayer animation overrides ({override_dir.name}/): {[p.name for p in glbs]}")
+    for ov in glbs:
+        pre_actions = {a.name for a in bpy.data.actions}
+        import_glb(ov)
+        imp = list(bpy.context.selected_objects)
+        imp_arm = find_armature(imp)
+        if not imp_arm:
+            delete_objects(imp)
+            print(f"  Skip (no armature): {ov.name}")
+            continue
+        cn = clip_name_from_filename(ov.name)
+        dup = extract_action_from_import(imp_arm, cn)
+        delete_objects(imp)
+        if dup:
+            if cn == "Shot_and_Fall_Backward":
+                for k in list(actions_by_clip.keys()):
+                    if _base_clip_name(k) == "Shot_and_Fall_Backward":
+                        old = actions_by_clip.pop(k, None)
+                        if old is not None:
+                            old.use_fake_user = False
+                            try:
+                                bpy.data.actions.remove(old)
+                            except Exception:
+                                pass
+                print("  - cleared donor/char Shot_and_Fall_Backward* before override")
+            if cn == "Shot_and_Slow_Fall_Backward":
+                for k in list(actions_by_clip.keys()):
+                    if _base_clip_name(k) == "Shot_and_Slow_Fall_Backward":
+                        old = actions_by_clip.pop(k, None)
+                        if old is not None:
+                            old.use_fake_user = False
+                            try:
+                                bpy.data.actions.remove(old)
+                            except Exception:
+                                pass
+            actions_by_clip[cn] = dup
+            print(f"  + override clip {cn} ← {ov.name}")
+        for a in list(bpy.data.actions):
+            if a.name in pre_actions:
+                continue
+            if a.users == 0 and a not in actions_by_clip.values():
+                try:
+                    bpy.data.actions.remove(a)
+                except Exception:
+                    pass
 
 
 def build_nla(arm: bpy.types.Object, actions: list[bpy.types.Action]) -> None:
@@ -276,6 +349,8 @@ def main() -> None:
                 bpy.data.actions.remove(act)
             except Exception:
                 pass
+
+    apply_player_animation_overrides(actions_by_clip)
 
     # ──── Step 4: Build NLA and export ────
     unique_actions = sorted(actions_by_clip.values(), key=lambda x: x.name.lower())

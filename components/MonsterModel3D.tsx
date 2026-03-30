@@ -5,6 +5,7 @@ import React, {
   Suspense,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ErrorInfo,
@@ -13,9 +14,74 @@ import React, {
 import { Canvas, invalidate, useThree, useFrame } from "@react-three/fiber";
 import { Center, OrbitControls, useAnimations, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { MonsterType } from "@/lib/labyrinth";
+import type { StrikeTarget } from "@/lib/combatSystem";
 import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
 import { glbSlugFromPathOrUrl, resolveMonsterAnimationClipName, resolvePlayerAnimationClipName } from "@/lib/monsterModels3d";
+
+/**
+ * World X half-separation (|playerX| = |monsterX|). Armature root translation is locked, but jump/attack
+ * clips still move the mesh via bones — spell/jump needs *tighter* baseline than light melee or the lunge
+ * reads as landing past the opponent.
+ */
+const COMBAT_IDLE_SEPARATION_HALF = 1.38;
+const COMBAT_STRIKE_PICK_SEPARATION_HALF = 0.92;
+
+function combatContactHalfXForVariant(variant: "spell" | "skill" | "light" | undefined): number {
+  const v = variant ?? "light";
+  if (v === "spell") return 0.36;
+  if (v === "skill") return 0.46;
+  return 0.42;
+}
+
+function combatFaceOffPositions(args: {
+  strikePickActive: boolean;
+  isContactExchange: boolean;
+  /** 0 = idle spacing, 1 = closed to strike range while dice roll */
+  rollingApproachBlend: number;
+  playerVisualState: Monster3DSpriteState;
+  monsterVisualState: Monster3DSpriteState;
+  playerAttackVariant?: "spell" | "skill" | "light";
+  draculaAttackVariant?: "spell" | "skill" | "light";
+}): { playerPosX: number; monsterPosX: number } {
+  const {
+    strikePickActive,
+    isContactExchange,
+    rollingApproachBlend,
+    playerVisualState,
+    monsterVisualState,
+    playerAttackVariant,
+    draculaAttackVariant,
+  } = args;
+  if (strikePickActive) {
+    const h = COMBAT_STRIKE_PICK_SEPARATION_HALF;
+    return { playerPosX: -h, monsterPosX: h };
+  }
+  if (!isContactExchange) {
+    const idle = COMBAT_IDLE_SEPARATION_HALF;
+    const t = Math.max(0, Math.min(1, rollingApproachBlend));
+    const close = COMBAT_STRIKE_PICK_SEPARATION_HALF;
+    const h = idle * (1 - t) + close * t;
+    return { playerPosX: -h, monsterPosX: h };
+  }
+  const pAtk = playerVisualState === "attack";
+  const mAtk = monsterVisualState === "attack";
+  let half: number;
+  if (pAtk && !mAtk) {
+    half = combatContactHalfXForVariant(playerAttackVariant);
+  } else if (mAtk && !pAtk) {
+    half = combatContactHalfXForVariant(draculaAttackVariant);
+  } else if (pAtk && mAtk) {
+    half = Math.max(
+      combatContactHalfXForVariant(playerAttackVariant),
+      combatContactHalfXForVariant(draculaAttackVariant)
+    );
+  } else {
+    half = 0.42;
+  }
+  return { playerPosX: -half, monsterPosX: half };
+}
 
 export interface MonsterModel3DProps {
   gltfPath: string;
@@ -70,6 +136,41 @@ class ModelErrorBoundary extends Component<
   }
 }
 
+/**
+ * Find the Armature / root Object3D whose `.position` track is driven by
+ * Meshy root-motion clips.  Returns `null` when none is found.
+ */
+function findArmatureRoot(scene: THREE.Object3D): THREE.Object3D | null {
+  for (const child of scene.children) {
+    if (child.name === "Armature" || child.name === "Root" || child.name === "Hips") return child;
+  }
+  let first: THREE.Object3D | null = null;
+  scene.traverse((obj) => {
+    if (!first && obj !== scene && (obj instanceof THREE.Bone || obj.type === "Bone")) {
+      first = obj;
+    }
+  });
+  if (first != null && (first as THREE.Object3D).parent === scene) return first;
+  return null;
+}
+
+/**
+ * Per-frame root-motion lock: after the animation mixer has updated,
+ * reset the Armature position so clips cannot translate the model
+ * across the scene.  Bone rotations / local offsets still animate.
+ */
+function useRootMotionLock(scene: THREE.Object3D) {
+  const armRef = useRef<THREE.Object3D | null>(null);
+  useEffect(() => {
+    armRef.current = findArmatureRoot(scene);
+  }, [scene]);
+  useFrame(() => {
+    const arm = armRef.current;
+    if (!arm) return;
+    arm.position.set(0, 0, 0);
+  });
+}
+
 function GltfSubject({
   url,
   visualState,
@@ -80,6 +181,7 @@ function GltfSubject({
   draculaLoopAngrySkill01 = false,
   onOneShotAnimationFinished,
   isPlayerModel = false,
+  playerFatalJumpKill = false,
 }: {
   url: string;
   visualState: Monster3DSpriteState;
@@ -90,6 +192,8 @@ function GltfSubject({
   draculaLoopAngrySkill01?: boolean;
   onOneShotAnimationFinished?: () => void;
   isPlayerModel?: boolean;
+  /** Lethal spell strike (e.g. Jumping_Punch) — prefer `Shot_and_Fall_Backward` on player `hurt`. */
+  playerFatalJumpKill?: boolean;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const { scene, animations } = useGLTF(url);
@@ -97,6 +201,8 @@ function GltfSubject({
   const onFinishedRef = useRef(onOneShotAnimationFinished);
   onFinishedRef.current = onOneShotAnimationFinished;
   const prevVisualStateRef = useRef<Monster3DSpriteState>(visualState);
+
+  useRootMotionLock(scene);
 
   useEffect(() => {
     useGLTF.preload(url);
@@ -132,7 +238,9 @@ function GltfSubject({
     const hurtCtx =
       hurtHp != null && hurtMaxHp != null ? { hp: hurtHp, maxHp: hurtMaxHp } : draculaHurtHp ?? null;
     const pick = isPlayerModel
-      ? resolvePlayerAnimationClipName(visualState, names, draculaAttackVariant)
+      ? resolvePlayerAnimationClipName(visualState, names, draculaAttackVariant, {
+          fatalJumpKill: playerFatalJumpKill,
+        })
       : resolveMonsterAnimationClipName(visualState, names, {
       monsterType,
       glbSlug,
@@ -188,7 +296,7 @@ function GltfSubject({
         a?.fadeOut(0.12);
       }
     };
-  }, [actions, names, mixer, url, visualState, monsterType, draculaAttackVariant, hurtHp, hurtMaxHp, draculaLoopAngrySkill01, isPlayerModel]);
+  }, [actions, names, mixer, url, visualState, monsterType, draculaAttackVariant, hurtHp, hurtMaxHp, draculaLoopAngrySkill01, isPlayerModel, playerFatalJumpKill]);
 
   useEffect(() => {
     invalidate();
@@ -207,15 +315,27 @@ function GltfSubject({
 }
 
 /** Same as GltfSubject but positioned at an explicit X offset (for shared combat scene). */
-function PositionedGltfSubject(props: Parameters<typeof GltfSubject>[0] & { positionX?: number; weaponUrl?: string | null }) {
-  const { positionX = 0, weaponUrl, ...rest } = props;
-  const groupRef = useRef<THREE.Group>(null);
+function PositionedGltfSubject(
+  props: Parameters<typeof GltfSubject>[0] & {
+    positionX?: number;
+    weaponUrl?: string | null;
+    hitRootRef?: React.MutableRefObject<THREE.Group | null> | null;
+  }
+) {
+  const { positionX = 0, weaponUrl, hitRootRef, ...rest } = props;
+  const groupRef = useRef<THREE.Group | null>(null);
+  const setGroupRef = (node: THREE.Group | null) => {
+    groupRef.current = node;
+    if (hitRootRef) hitRootRef.current = node;
+  };
   const { scene, animations } = useGLTF(rest.url);
   const innerRef = useRef<THREE.Group>(null);
   const { actions, names, mixer } = useAnimations(animations, innerRef);
   const onFinishedRef = useRef(rest.onOneShotAnimationFinished);
   onFinishedRef.current = rest.onOneShotAnimationFinished;
   const prevVisualStateRef = useRef<Monster3DSpriteState>(rest.visualState);
+
+  useRootMotionLock(scene);
 
   useEffect(() => { useGLTF.preload(rest.url); }, [rest.url]);
 
@@ -235,7 +355,9 @@ function PositionedGltfSubject(props: Parameters<typeof GltfSubject>[0] & { posi
     const glbSlug = glbSlugFromPathOrUrl(rest.url);
     const hurtCtx = hurtHp != null && hurtMaxHp != null ? { hp: hurtHp, maxHp: hurtMaxHp } : rest.draculaHurtHp ?? null;
     const pick = rest.isPlayerModel
-      ? resolvePlayerAnimationClipName(rest.visualState, names, rest.draculaAttackVariant)
+      ? resolvePlayerAnimationClipName(rest.visualState, names, rest.draculaAttackVariant, {
+          fatalJumpKill: rest.playerFatalJumpKill,
+        })
       : resolveMonsterAnimationClipName(rest.visualState, names, {
           monsterType: rest.monsterType,
           glbSlug,
@@ -263,7 +385,7 @@ function PositionedGltfSubject(props: Parameters<typeof GltfSubject>[0] & { posi
     }
     invalidate();
     return () => { if (actForListener) { mixer.removeEventListener("finished", onFin); actForListener = null; } for (const a of Object.values(actions)) { a?.fadeOut(0.12); } };
-  }, [actions, names, mixer, rest.url, rest.visualState, rest.monsterType, rest.draculaAttackVariant, hurtHp, hurtMaxHp, rest.draculaLoopAngrySkill01, rest.isPlayerModel]);
+  }, [actions, names, mixer, rest.url, rest.visualState, rest.monsterType, rest.draculaAttackVariant, hurtHp, hurtMaxHp, rest.draculaLoopAngrySkill01, rest.isPlayerModel, rest.playerFatalJumpKill]);
 
   const scale = (rest.tightFraming ? 1.14 : 1) * (rest.isPlayerModel ? 0.9 : (rest.monsterType === "V" || rest.monsterType === "K" || rest.monsterType === "Z" || rest.monsterType === "S" || rest.monsterType === "L" ? 0.9 : 1));
 
@@ -271,7 +393,7 @@ function PositionedGltfSubject(props: Parameters<typeof GltfSubject>[0] & { posi
 
   return (
     <>
-      <group ref={groupRef} position={[positionX, 0, 0]}>
+      <group ref={setGroupRef} position={[positionX, 0, 0]}>
         <Center>
           <group ref={innerRef} scale={scale} rotation={[0, yRotation, 0]}>
             <primitive object={scene} />
@@ -656,10 +778,264 @@ export interface CombatScene3DProps {
   playerAttackVariant?: "spell" | "skill" | "light";
   draculaHurtHp?: { hp: number; maxHp: number } | null;
   draculaLoopAngrySkill01?: boolean;
+  /** Lethal Jumping_Punch (spell) — player plays `Shot_and_Fall_Backward` while hurt. */
+  playerFatalJumpKill?: boolean;
   onOneShotAnimationFinished?: () => void;
   width: number;
   height: number;
   fallback: ReactNode;
+  /** Tighter default camera + orbit (used for all combat modals — desktop and mobile). */
+  compactCombatViewport?: boolean;
+  /** When true, orbit is off and taps on the monster pick head / body / legs by screen Y on the mesh bounds. */
+  strikePickActive?: boolean;
+  onStrikeTargetPick?: (target: StrikeTarget) => void;
+  /** While dice roll: 0–1 lerp from idle spacing toward close range (fighters advance). */
+  rollingApproachBlend?: number;
+}
+
+/** Same vertical splits as `CombatStrikeZonePicker` raycast (legs / body / head). */
+const STRIKE_ZONE_Y_T0 = 0.28;
+const STRIKE_ZONE_Y_T1 = 0.62;
+
+/** Aim shells appear once fighters start closing in (rolling approach). */
+const STRIKE_AIM_BLEND_START = 0.07;
+
+function CombatStrikeAimBands({
+  monsterRootRef,
+  show,
+  approachBlend,
+}: {
+  monsterRootRef: React.MutableRefObject<THREE.Group | null>;
+  show: boolean;
+  /** 0–1 rolling approach; drives opacity (bands fade in as they advance). */
+  approachBlend: number;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  const legsRef = useRef<THREE.Mesh>(null);
+  const bodyRef = useRef<THREE.Mesh>(null);
+  const headRef = useRef<THREE.Mesh>(null);
+  const geo = useMemo(() => new THREE.BoxGeometry(1, 1, 1), []);
+  const matLegs = useMemo(
+    () =>
+      new THREE.MeshBasicMaterial({
+        color: 0x2d8f5a,
+        transparent: true,
+        opacity: 0.14,
+        depthWrite: false,
+        depthTest: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+        side: THREE.DoubleSide,
+      }),
+    []
+  );
+  const matBody = useMemo(
+    () =>
+      new THREE.MeshBasicMaterial({
+        color: 0xc9a227,
+        transparent: true,
+        opacity: 0.14,
+        depthWrite: false,
+        depthTest: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+        side: THREE.DoubleSide,
+      }),
+    []
+  );
+  const matHead = useMemo(
+    () =>
+      new THREE.MeshBasicMaterial({
+        color: 0xc94a3a,
+        transparent: true,
+        opacity: 0.14,
+        depthWrite: false,
+        depthTest: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+        side: THREE.DoubleSide,
+      }),
+    []
+  );
+
+  useEffect(() => {
+    return () => {
+      geo.dispose();
+      matLegs.dispose();
+      matBody.dispose();
+      matHead.dispose();
+    };
+  }, [geo, matLegs, matBody, matHead]);
+
+  useFrame(() => {
+    const g = groupRef.current;
+    const root = monsterRootRef.current;
+    const fade = Math.min(1, Math.max(0, (approachBlend - STRIKE_AIM_BLEND_START) / 0.28));
+    const op = 0.05 + 0.2 * fade;
+    matLegs.opacity = op;
+    matBody.opacity = op;
+    matHead.opacity = op;
+
+    if (!g || !show || fade < 0.02 || !root) {
+      if (g) g.visible = false;
+      return;
+    }
+
+    root.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(root);
+    if (box.isEmpty()) {
+      g.visible = false;
+      return;
+    }
+
+    const min = box.min;
+    const max = box.max;
+    const h = max.y - min.y;
+    if (h < 0.02) {
+      g.visible = false;
+      return;
+    }
+
+    const cx = (min.x + max.x) / 2;
+    const cz = (min.z + max.z) / 2;
+    const pad = 0.03;
+    const sx = Math.max(0.06, max.x - min.x + pad * 2);
+    const sz = Math.max(0.06, max.z - min.z + pad * 2);
+
+    const setSeg = (
+      mesh: THREE.Mesh | null,
+      yMinT: number,
+      yMaxT: number
+    ) => {
+      if (!mesh) return;
+      const y0 = min.y + yMinT * h;
+      const y1 = min.y + yMaxT * h;
+      const ch = Math.max(0.015, y1 - y0);
+      const cy = (y0 + y1) / 2;
+      mesh.position.set(cx, cy, cz);
+      mesh.scale.set(sx, ch, sz);
+    };
+
+    setSeg(legsRef.current, 0, STRIKE_ZONE_Y_T0);
+    setSeg(bodyRef.current, STRIKE_ZONE_Y_T0, STRIKE_ZONE_Y_T1);
+    setSeg(headRef.current, STRIKE_ZONE_Y_T1, 1);
+
+    g.visible = true;
+  });
+
+  return (
+    <group ref={groupRef} renderOrder={500}>
+      <mesh ref={legsRef} geometry={geo} material={matLegs} />
+      <mesh ref={bodyRef} geometry={geo} material={matBody} />
+      <mesh ref={headRef} geometry={geo} material={matHead} />
+    </group>
+  );
+}
+
+function CombatStrikeZonePicker({
+  monsterRootRef,
+  enabled,
+  onPick,
+}: {
+  monsterRootRef: React.MutableRefObject<THREE.Group | null>;
+  enabled: boolean;
+  onPick: (zone: StrikeTarget) => void;
+}) {
+  const { camera, gl } = useThree();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const ndc = useMemo(() => new THREE.Vector2(), []);
+  const onPickRef = useRef(onPick);
+  onPickRef.current = onPick;
+
+  useEffect(() => {
+    if (!enabled) return;
+    const el = gl.domElement;
+    const onDown = (e: PointerEvent) => {
+      const root = monsterRootRef.current;
+      if (!root) return;
+      const rect = el.getBoundingClientRect();
+      ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObject(root, true);
+      if (hits.length === 0) return;
+      root.updateWorldMatrix(true, true);
+      const box = new THREE.Box3().setFromObject(root);
+      if (box.isEmpty()) return;
+      const h = box.max.y - box.min.y;
+      if (h < 1e-4) return;
+      const pt = hits[0]!.point;
+      const t = (pt.y - box.min.y) / h;
+      const zone: StrikeTarget =
+        t >= STRIKE_ZONE_Y_T1 ? "head" : t >= STRIKE_ZONE_Y_T0 ? "body" : "legs";
+      onPickRef.current(zone);
+    };
+    el.addEventListener("pointerdown", onDown);
+    return () => el.removeEventListener("pointerdown", onDown);
+  }, [enabled, camera, gl, monsterRootRef, ndc, raycaster]);
+  return null;
+}
+
+/** Wheel / dolly zoom stays centered on the orbit target (no drei damping drift; no two-finger pan mixed into pinch). */
+function CombatOrbitControls({
+  orbitMinD,
+  orbitMaxD,
+  orbitTargetY,
+  minPolarAngle,
+  maxPolarAngle,
+  enabled = true,
+}: {
+  orbitMinD: number;
+  orbitMaxD: number;
+  orbitTargetY: number;
+  minPolarAngle: number;
+  maxPolarAngle: number;
+  enabled?: boolean;
+}) {
+  const orbitRef = useRef<OrbitControlsImpl>(null);
+  const targetArr = useMemo(
+    (): [number, number, number] => [0, orbitTargetY, 0],
+    [orbitTargetY]
+  );
+  const syncedRef = useRef(false);
+
+  useFrame(() => {
+    const oc = orbitRef.current;
+    if (!oc) return;
+    if (!syncedRef.current) {
+      oc.target.set(0, orbitTargetY, 0);
+      oc.zoomToCursor = false;
+      oc.screenSpacePanning = false;
+      oc.update();
+      syncedRef.current = true;
+    }
+  });
+
+  useEffect(() => {
+    syncedRef.current = false;
+  }, [orbitTargetY]);
+
+  return (
+    <OrbitControls
+      ref={orbitRef}
+      enabled={enabled}
+      enableDamping={false}
+      enablePan={false}
+      zoomToCursor={false}
+      screenSpacePanning={false}
+      enableZoom
+      enableRotate
+      minDistance={orbitMinD}
+      maxDistance={orbitMaxD}
+      minPolarAngle={minPolarAngle}
+      maxPolarAngle={maxPolarAngle}
+      target={targetArr}
+      touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE }}
+    />
+  );
 }
 
 export function CombatScene3D({
@@ -673,22 +1049,50 @@ export function CombatScene3D({
   playerAttackVariant,
   draculaHurtHp,
   draculaLoopAngrySkill01,
+  playerFatalJumpKill = false,
   onOneShotAnimationFinished,
   width,
   height,
   fallback,
+  compactCombatViewport = false,
+  strikePickActive = false,
+  onStrikeTargetPick,
+  rollingApproachBlend = 0,
 }: CombatScene3DProps) {
+  const monsterHitRootRef = useRef<THREE.Group | null>(null);
   const isMergedMeshy = monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L";
-  const cameraZ = 5.2;
-  const cameraY = 1.0;
-  const fov = 40;
+  const cameraZ = compactCombatViewport ? 3.28 : 5.35;
+  const cameraY = compactCombatViewport ? 0.92 : 1.0;
+  const fov = compactCombatViewport ? 50 : 40;
   const meshyCameraBases = { baseZ: cameraZ, baseY: cameraY, baseFov: fov };
+  const orbitMinD = compactCombatViewport ? 1.12 : 2;
+  const orbitMaxD = compactCombatViewport ? 5.8 : 10;
+  const orbitTargetY = compactCombatViewport ? 0.56 : 0.8;
 
   const isContactExchange =
     (playerVisualState === "attack" || playerVisualState === "angry" || playerVisualState === "hurt" || playerVisualState === "knockdown") &&
     (monsterVisualState === "attack" || monsterVisualState === "hurt" || monsterVisualState === "knockdown" || monsterVisualState === "angry");
-  const playerPosX = isContactExchange ? -0.55 : -0.85;
-  const monsterPosX = isContactExchange ? 0.55 : 0.85;
+  const { playerPosX, monsterPosX } = useMemo(
+    () =>
+      combatFaceOffPositions({
+        strikePickActive,
+        isContactExchange,
+        rollingApproachBlend,
+        playerVisualState,
+        monsterVisualState,
+        playerAttackVariant,
+        draculaAttackVariant,
+      }),
+    [
+      strikePickActive,
+      isContactExchange,
+      rollingApproachBlend,
+      playerVisualState,
+      monsterVisualState,
+      playerAttackVariant,
+      draculaAttackVariant,
+    ]
+  );
 
   const [mUrl, setMUrl] = useState(monsterGltfPath);
   const [pUrl, setPUrl] = useState(playerGltfPath);
@@ -719,6 +1123,7 @@ export function CombatScene3D({
 
   return (
     <ModelErrorBoundary key={canvasKey} fallback={fallback}>
+      <div style={{ width: "100%", maxWidth: width, cursor: strikePickActive ? "crosshair" : undefined }}>
       <Canvas
         key={canvasKey}
         style={{ width: "100%", maxWidth: width, height, display: "block", verticalAlign: "top" }}
@@ -736,15 +1141,13 @@ export function CombatScene3D({
             baseY={meshyCameraBases.baseY}
             baseFov={meshyCameraBases.baseFov}
           />
-          <OrbitControls
-            enablePan={false}
-            enableZoom={true}
-            enableRotate={true}
-            minDistance={2}
-            maxDistance={10}
+          <CombatOrbitControls
+            orbitMinD={orbitMinD}
+            orbitMaxD={orbitMaxD}
+            orbitTargetY={orbitTargetY}
             minPolarAngle={Math.PI / 6}
             maxPolarAngle={Math.PI / 2}
-            target={[0, 0.8, 0]}
+            enabled={!strikePickActive}
           />
           <ambientLight intensity={0.38} />
           <directionalLight position={[3.2, 5.5, 2.8]} intensity={1.05} />
@@ -755,6 +1158,7 @@ export function CombatScene3D({
             tightFraming={false}
             isPlayerModel
             draculaAttackVariant={playerAttackVariant}
+            playerFatalJumpKill={playerFatalJumpKill}
             positionX={playerPosX}
             weaponUrl={armourGltfPath}
           />
@@ -768,9 +1172,25 @@ export function CombatScene3D({
             draculaLoopAngrySkill01={draculaLoopAngrySkill01}
             onOneShotAnimationFinished={onOneShotAnimationFinished}
             positionX={monsterPosX}
+            hitRootRef={monsterHitRootRef}
           />
+          {strikePickActive && onStrikeTargetPick ? (
+            <>
+              <CombatStrikeAimBands
+                monsterRootRef={monsterHitRootRef}
+                show={strikePickActive}
+                approachBlend={rollingApproachBlend}
+              />
+              <CombatStrikeZonePicker
+                monsterRootRef={monsterHitRootRef}
+                enabled
+                onPick={onStrikeTargetPick}
+              />
+            </>
+          ) : null}
         </Suspense>
       </Canvas>
+      </div>
     </ModelErrorBoundary>
   );
 }

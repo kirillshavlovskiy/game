@@ -139,13 +139,13 @@ export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
       return `🧟 Zombie: Dice 6 = instant win! Dice 5 = −4 HP. Dice 3–4 = half max HP (−${half}). Dice 1–2 = −1 HP. Miss: glancing by die; you take 2 HP (+Attack/Angry) unless shield blocks.`;
     }
     case "V":
-      return "🧛 Dracula: High defense (5). Defeat: +1 on movement dice (map, max 6). Combat: d6 + holy sword/cross only. Miss: 1 HP (+Attack/Angry) unless shield blocks.";
+      return "🧛 Dracula: High defense (5). Defeat: +1 on movement dice (map, max 6). When you start this fight, your HP is set to full (map bites don’t carry in). Combat: d6 + holy sword/cross only. Miss: 1 HP (+Attack/Angry; head strike +extra) unless shield blocks.";
     case "S":
       return "🕷 Spider: Defense (4). Dice 6 = instant win! Die 1–3 = spider attacks you (heavy/medium/light). Die 4 = spider takes a hit. Miss: you take 1 HP unless shield blocks.";
     case "L":
       return "🔥 Lava Elemental: High defense (6). Dice 6 = instant win! Miss: glancing chip on it by die; you take 2 HP (+Attack/Angry) unless shield blocks.";
     default:
-      return "Dice 6 = instant win! Miss: glancing chip on the monster (by die) AND you lose HP (1 for most beasts, 2 zombie/lava) unless shield blocks — Attack/Angry surprise adds +1 or +2 to that hit. Dice artifact: optional second strike after the first roll.";
+      return "Dice 6 = instant win! Same roll: monster damage and your damage net out (e.g. −2 vs −2 = no HP change). Miss: glancing + counter — net applies. 3D: aim on the monster while the dice roll (or whiff for heavy damage). Dice artifact: optional second strike after the first roll.";
   }
 }
 
@@ -167,6 +167,39 @@ function getStrikeTargetModifiers(target: StrikeTarget | undefined) {
   }
 }
 
+/**
+ * Raw HP amounts that would be dealt before cross-netting (same roll).
+ * Caller applies shield to zero `rawPlayer` before computing net.
+ */
+export function computeCombatHpExchangeRaw(result: CombatResult, monsterHpBefore: number): {
+  rawMonsterHp: number;
+  rawPlayerHp: number;
+} {
+  let rawMonsterHp = 0;
+  let rawPlayerHp = result.won ? 0 : Math.max(0, result.damage ?? 0);
+  if (!result.won && (result.glancingDamage ?? 0) > 0) {
+    rawMonsterHp += result.glancingDamage ?? 0;
+  }
+  if (result.won) {
+    if (result.instantWin) rawMonsterHp += Math.max(0, monsterHpBefore);
+    else rawMonsterHp += Math.max(1, result.monsterHpLoss ?? 1);
+  }
+  return { rawMonsterHp, rawPlayerHp };
+}
+
+/** After optional shield on player damage: net HP lost each side (symmetric trade). */
+export function computeNetHpLoss(rawMonsterHp: number, rawPlayerHp: number): {
+  netMonsterHp: number;
+  netPlayerHp: number;
+} {
+  const rm = Math.max(0, Math.round(rawMonsterHp));
+  const rp = Math.max(0, Math.round(rawPlayerHp));
+  return {
+    netMonsterHp: Math.max(0, rm - rp),
+    netPlayerHp: Math.max(0, rp - rm),
+  };
+}
+
 export function resolveCombat(
   playerRoll: number,
   attackBonus: number,
@@ -175,7 +208,9 @@ export function resolveCombat(
   surpriseModifier = 0,
   rawD6?: number,
   surpriseState?: MonsterSurpriseState,
-  strikeTarget?: StrikeTarget
+  strikeTarget?: StrikeTarget,
+  /** Rolled but did not pick a strike zone in time (3D combat): forced miss, no glancing chip, harsh counter damage. */
+  timingMiss?: boolean
 ): CombatResult {
   const monsterDefense = getMonsterDefense(monsterType);
   const monsterDamage = getMonsterDamage(monsterType);
@@ -203,6 +238,30 @@ export function resolveCombat(
       attackTotal: 0,
       monsterEffect: "ghost_evade",
       glancingDamage: 0,
+    };
+  }
+
+  if (timingMiss) {
+    const effDef = monsterDefense + surpriseModifier;
+    const isAggressive = surpriseState === "attack" || surpriseState === "angry";
+    const counterBonus = isAggressive ? (surpriseState === "angry" ? 2 : 1) : 0;
+    const whiffPenalty = 3;
+    const maxMissDmg = monsterDamage + counterBonus + whiffPenalty;
+    return {
+      won: false,
+      damage: maxMissDmg,
+      playerRoll,
+      monsterDefense: effDef,
+      attackTotal: playerRoll + attackBonus,
+      glancingDamage: 0,
+      monsterEffect:
+        monsterType === "Z"
+          ? "zombie_slow"
+          : monsterType === "V"
+            ? "dracula_lifesteal"
+            : monsterType === "L"
+              ? "lava_burn"
+              : undefined,
     };
   }
 
