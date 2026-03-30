@@ -873,13 +873,41 @@ export function lavaMergedAttackClipPriority(variant: "spell" | "skill" | "light
   return expandLavaClipTryList([...ordered, ...LAVA_ATTACK_FALLBACK_TAIL]);
 }
 
-/** glTF / Three.js may differ only by case (`idle_6` vs `Idle_6`). */
+/** Strip Blender duplicate-action suffixes (`Combat_Stance.003` → `Combat_Stance`). */
+function stripBlenderActionDuplicateSuffix(name: string): string {
+  return name.replace(/(\.\d+)+$/i, "");
+}
+
+/**
+ * glTF / Three.js may differ only by case (`idle_6` vs `Idle_6`).
+ * Merged NLA exports often emit `Combat_Stance.001` while game logic asks for `Combat_Stance` — treat as the same clip.
+ */
 function matchAnimationNameInsensitive(animationNames: readonly string[], target: string): string | null {
   const tl = target.toLowerCase();
   for (const n of animationNames) {
     if (n.toLowerCase() === tl) return n;
   }
-  return null;
+  if (stripBlenderActionDuplicateSuffix(tl) !== tl) {
+    return null;
+  }
+  let best: string | null = null;
+  let bestSuffix = Infinity;
+  for (const n of animationNames) {
+    const nl = n.toLowerCase();
+    if (stripBlenderActionDuplicateSuffix(nl) !== tl) continue;
+    const tail = nl.slice(tl.length);
+    if (tail === "") {
+      return n;
+    }
+    const m = /^(\.\d+)+$/i.exec(tail);
+    if (!m) continue;
+    const last = Number((tail.match(/\d+/g) ?? ["999"]).pop());
+    if (last < bestSuffix) {
+      bestSuffix = last;
+      best = n;
+    }
+  }
+  return best;
 }
 
 function firstPreferredMatchingInsensitive(preferred: readonly string[], animationNames: readonly string[]): string | null {
