@@ -55,9 +55,13 @@ export function Monster3dReferenceViewer() {
   const [monsterType, setMonsterType] = useState<MonsterType>("V");
   const [visualState, setVisualState] = useState<Monster3DSpriteState>("idle");
   const [draculaAttackVariant, setDraculaAttackVariant] = useState<"spell" | "skill" | "light">("spell");
+  const [defeatPreviewMode, setDefeatPreviewMode] = useState<"single" | "sequence">("sequence");
   const [tight, setTight] = useState(false);
   const [glbUrl, setGlbUrl] = useState<string | null>(null);
   const [checking, setChecking] = useState(true);
+  const [playbackVisualState, setPlaybackVisualState] = useState<Monster3DSpriteState>("idle");
+  const queuedVisualStateRef = useRef<Monster3DSpriteState | null>(null);
+  const [previewRunId, setPreviewRunId] = useState(0);
 
   const slug = MONSTER_3D_GLB_SLUG_BY_TYPE[monsterType];
   const path = `/models/monsters/${slug}.glb`;
@@ -77,14 +81,35 @@ export function Monster3dReferenceViewer() {
     };
   }, [path]);
 
+  const canSequenceDefeat = monsterType !== "G" && (visualState === "defeated" || visualState === "knockdown");
+
+  useEffect(() => {
+    queuedVisualStateRef.current = null;
+    if (visualState === "defeated" && defeatPreviewMode === "sequence" && monsterType !== "G") {
+      setPlaybackVisualState("knockdown");
+      queuedVisualStateRef.current = "defeated";
+      return;
+    }
+    setPlaybackVisualState(visualState);
+  }, [monsterType, visualState, defeatPreviewMode, previewRunId]);
+
   const mergedAttackVariant =
-    (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L") && visualState === "attack" ? draculaAttackVariant : undefined;
+    (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L") && playbackVisualState === "attack"
+      ? draculaAttackVariant
+      : undefined;
 
   /** Demo tiers for merged Meshy hurt clips — matches combat when footer passes HP. */
   const demoHurtHp =
-    (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L") && visualState === "hurt"
+    (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L") && playbackVisualState === "hurt"
       ? { hp: 6, maxHp: 9 }
       : undefined;
+
+  const handleOneShotFinished = () => {
+    const queued = queuedVisualStateRef.current;
+    if (!queued) return;
+    queuedVisualStateRef.current = null;
+    setPlaybackVisualState(queued);
+  };
 
   return (
     <section
@@ -146,7 +171,7 @@ export function Monster3dReferenceViewer() {
             ))}
           </select>
         </label>
-        {(monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L") && visualState === "attack" ? (
+        {(monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L") && playbackVisualState === "attack" ? (
           <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.8rem", color: "#b8afc8" }}>
             Attack clip priority
             <select
@@ -170,6 +195,26 @@ export function Monster3dReferenceViewer() {
             </select>
           </label>
         ) : null}
+        {canSequenceDefeat ? (
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.8rem", color: "#b8afc8" }}>
+            Defeat preview
+            <select
+              value={defeatPreviewMode}
+              onChange={(e) => setDefeatPreviewMode(e.target.value as "single" | "sequence")}
+              style={{
+                minWidth: 220,
+                padding: "6px 8px",
+                borderRadius: 8,
+                background: "#1a1520",
+                color: "#e8e4ec",
+                border: "1px solid rgba(255,255,255,0.15)",
+              }}
+            >
+              <option value="single">Selected state only</option>
+              <option value="sequence">Play knockdown then defeated</option>
+            </select>
+          </label>
+        ) : null}
         <label
           style={{
             display: "flex",
@@ -184,7 +229,30 @@ export function Monster3dReferenceViewer() {
           <input type="checkbox" checked={tight} onChange={(e) => setTight(e.target.checked)} />
           Tight framing (Dracula attack style)
         </label>
+        <button
+          type="button"
+          onClick={() => setPreviewRunId((n) => n + 1)}
+          style={{
+            padding: "7px 12px",
+            borderRadius: 8,
+            background: "#23192d",
+            color: "#f2eefe",
+            border: "1px solid rgba(255,255,255,0.14)",
+            cursor: "pointer",
+          }}
+        >
+          Replay preview
+        </button>
       </div>
+
+      {(visualState === "defeated" || visualState === "knockdown") && monsterType !== "G" ? (
+        <p style={{ margin: "0 0 8px", fontSize: "0.8rem", color: "#b8afc8" }}>
+          {defeatPreviewMode === "sequence"
+            ? "Preview mode: knockdown fall first, then final defeated pose."
+            : "Preview mode: only the selected defeat state is played."}{" "}
+          Current playback state: <code style={{ color: "#c4e8ff" }}>{playbackVisualState}</code>
+        </p>
+      ) : null}
 
       <p style={{ margin: "0 0 8px", fontSize: "0.82rem", fontFamily: "ui-monospace, monospace", color: "#7ec8ff" }}>
         {checking ? "Checking file…" : glbUrl ? `Loading: ${glbUrl}` : `Missing file: ${path}`}
@@ -213,13 +281,14 @@ export function Monster3dReferenceViewer() {
           <Suspense fallback={null}>
             {glbUrl ? (
               <Monster3dGltfSceneContent
-                key={`${glbUrl}-${tight}-${mergedAttackVariant ?? "na"}-${demoHurtHp ? "hurt" : "nh"}`}
+                key={`${glbUrl}-${tight}-${mergedAttackVariant ?? "na"}-${demoHurtHp ? "hurt" : "nh"}-${previewRunId}`}
                 url={glbUrl}
-                visualState={visualState}
+                visualState={playbackVisualState}
                 tightFraming={tight}
                 monsterType={monsterType}
                 draculaAttackVariant={mergedAttackVariant}
                 draculaHurtHp={demoHurtHp}
+                onOneShotAnimationFinished={handleOneShotFinished}
               />
             ) : (
               <PlaceholderScene />

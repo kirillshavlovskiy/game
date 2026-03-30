@@ -22,15 +22,15 @@ import { glbSlugFromPathOrUrl, resolveMonsterAnimationClipName, resolvePlayerAni
 
 /**
  * World X half-separation (|playerX| = |monsterX|). Armature root translation is locked, but jump/attack
- * clips still move the mesh via bones — spell/jump needs *tighter* baseline than light melee or the lunge
- * reads as landing past the opponent.
+ * clips still move the mesh via bones. `Jumping_Punch`-style spell lunges need a much tighter baseline
+ * than light melee or the attacker lands in front of the defender instead of into their standing point.
  */
 const COMBAT_IDLE_SEPARATION_HALF = 1.38;
 const COMBAT_STRIKE_PICK_SEPARATION_HALF = 0.92;
 
 function combatContactHalfXForVariant(variant: "spell" | "skill" | "light" | undefined): number {
   const v = variant ?? "light";
-  if (v === "spell") return 0.36;
+  if (v === "spell") return 0.18;
   if (v === "skill") return 0.46;
   return 0.42;
 }
@@ -116,6 +116,14 @@ function shouldLoopVisualState(state: Monster3DSpriteState, draculaLoopAngrySkil
   return state === "idle" || state === "neutral" || state === "hunt" || state === "rolling";
 }
 
+/**
+ * Let authored one-shot clips use their baked root motion (jump-ins, knockdowns,
+ * defeats, stand-ups). Only looping stance states stay pinned in place.
+ */
+function shouldLockRootMotionForState(state: Monster3DSpriteState, draculaLoopAngrySkill01: boolean): boolean {
+  return shouldLoopVisualState(state, draculaLoopAngrySkill01);
+}
+
 class ModelErrorBoundary extends Component<
   { children: ReactNode; fallback: ReactNode },
   { hasError: boolean }
@@ -156,18 +164,24 @@ function findArmatureRoot(scene: THREE.Object3D): THREE.Object3D | null {
 
 /**
  * Per-frame root-motion lock: after the animation mixer has updated,
- * reset the Armature position so clips cannot translate the model
- * across the scene.  Bone rotations / local offsets still animate.
+ * restore the Armature to its bind offset so looping stance clips cannot
+ * drift across the combat scene. One-shot actions may opt out and use the
+ * GLB's authored translation.
  */
-function useRootMotionLock(scene: THREE.Object3D) {
+function useRootMotionLock(scene: THREE.Object3D, enabled: boolean) {
   const armRef = useRef<THREE.Object3D | null>(null);
+  const basePosRef = useRef<THREE.Vector3 | null>(null);
   useEffect(() => {
-    armRef.current = findArmatureRoot(scene);
+    const arm = findArmatureRoot(scene);
+    armRef.current = arm;
+    basePosRef.current = arm ? arm.position.clone() : null;
   }, [scene]);
   useFrame(() => {
+    if (!enabled) return;
     const arm = armRef.current;
-    if (!arm) return;
-    arm.position.set(0, 0, 0);
+    const basePos = basePosRef.current;
+    if (!arm || !basePos) return;
+    arm.position.copy(basePos);
   });
 }
 
@@ -202,7 +216,7 @@ function GltfSubject({
   onFinishedRef.current = onOneShotAnimationFinished;
   const prevVisualStateRef = useRef<Monster3DSpriteState>(visualState);
 
-  useRootMotionLock(scene);
+  useRootMotionLock(scene, shouldLockRootMotionForState(visualState, !!draculaLoopAngrySkill01));
 
   useEffect(() => {
     useGLTF.preload(url);
@@ -335,7 +349,7 @@ function PositionedGltfSubject(
   onFinishedRef.current = rest.onOneShotAnimationFinished;
   const prevVisualStateRef = useRef<Monster3DSpriteState>(rest.visualState);
 
-  useRootMotionLock(scene);
+  useRootMotionLock(scene, shouldLockRootMotionForState(rest.visualState, !!rest.draculaLoopAngrySkill01));
 
   useEffect(() => { useGLTF.preload(rest.url); }, [rest.url]);
 
@@ -408,9 +422,9 @@ function PositionedGltfSubject(
 }
 
 /**
- * Fixed camera for merged Meshy rigs — all skeleton/dracula animation clips have their
- * root X/Z locked so the model never drifts. Camera stays completely static; no per-state
- * offsets, no movement between clips.
+ * Fixed camera for merged Meshy rigs — stance clips stay pinned while authored
+ * one-shot actions may use root motion. Camera stays completely static; no
+ * per-state offsets, no movement between clips.
  */
 function MeshyCombatCameraFraming({
   enabled,
@@ -669,10 +683,12 @@ function findHandBone(root: THREE.Object3D): THREE.Bone | null {
   return fallback;
 }
 
+const WEAPON_GRIP_FRACTION_FROM_END = 0.12;
+
 function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D; url: string }) {
   const { scene: weaponScene } = useGLTF(url);
   const weaponClone = React.useMemo(() => weaponScene.clone(true), [weaponScene]);
-  const attachedRef = useRef<{ bone: THREE.Bone; container: THREE.Group } | null>(null);
+  const attachedRef = useRef<{ bone: THREE.Bone; container: THREE.Group; alignFromLocal: THREE.Vector3 } | null>(null);
   const orientedRef = useRef(false);
 
   useEffect(() => { useGLTF.preload(url); }, [url]);
@@ -687,13 +703,15 @@ function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D;
     const box = new THREE.Box3().setFromObject(weaponClone);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
+    const axisSizes = [size.x, size.y, size.z];
+    const longestAxis = axisSizes.indexOf(Math.max(...axisSizes));
+    const longestDim = axisSizes[longestAxis] || Math.max(size.x, size.y, size.z);
 
     const boneWs = new THREE.Vector3();
     bone.getWorldScale(boneWs);
     const avgWs = (boneWs.x + boneWs.y + boneWs.z) / 3;
     const desiredWorldLen = 0.45;
-    const localScale = desiredWorldLen / (maxDim * Math.max(avgWs, 0.001));
+    const localScale = desiredWorldLen / (longestDim * Math.max(avgWs, 0.001));
 
     const container = new THREE.Group();
     container.name = "__weapon__";
@@ -702,15 +720,26 @@ function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D;
     scaleGrp.scale.setScalar(localScale);
 
     const offsetGrp = new THREE.Group();
-    const handleY = box.min.y + size.y * 0.15;
-    offsetGrp.position.set(-center.x, -handleY, -center.z);
+    const gripPoint = center.clone();
+    const mins = [box.min.x, box.min.y, box.min.z];
+    gripPoint.setComponent(
+      longestAxis,
+      mins[longestAxis]! + axisSizes[longestAxis]! * WEAPON_GRIP_FRACTION_FROM_END
+    );
+    offsetGrp.position.copy(gripPoint.multiplyScalar(-1));
 
     offsetGrp.add(weaponClone);
     scaleGrp.add(offsetGrp);
     container.add(scaleGrp);
     bone.add(container);
 
-    attachedRef.current = { bone, container };
+    const alignFromLocal = new THREE.Vector3(
+      longestAxis === 0 ? 1 : 0,
+      longestAxis === 1 ? 1 : 0,
+      longestAxis === 2 ? 1 : 0,
+    );
+
+    attachedRef.current = { bone, container, alignFromLocal };
     orientedRef.current = false;
 
     if (process.env.NODE_ENV !== "production") {
@@ -718,7 +747,7 @@ function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D;
       parentScene.traverse((c) => { if ((c as THREE.Bone).isBone) bones.push(c.name); });
       console.log("[BoneAttachedWeapon] bones:", bones.join(", "));
       console.log("[BoneAttachedWeapon] picked:", bone.name, "parent:", bone.parent?.name);
-      console.log("[BoneAttachedWeapon] weaponSize:", size.toArray().map(v => +v.toFixed(3)), "localScale:", +localScale.toFixed(4));
+      console.log("[BoneAttachedWeapon] weaponSize:", size.toArray().map(v => +v.toFixed(3)), "localScale:", +localScale.toFixed(4), "longestAxis:", longestAxis, "gripPoint:", gripPoint.toArray().map(v => +v.toFixed(3)));
     }
 
     return () => {
@@ -731,7 +760,7 @@ function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D;
   useFrame(() => {
     const att = attachedRef.current;
     if (!att || orientedRef.current) return;
-    const { bone, container } = att;
+    const { bone, container, alignFromLocal } = att;
 
     bone.updateWorldMatrix(true, false);
     const boneQ = new THREE.Quaternion();
@@ -751,7 +780,7 @@ function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D;
     const bladeDirLocal = bladeDirWorld.applyQuaternion(boneQInv);
 
     container.quaternion.setFromUnitVectors(
-      new THREE.Vector3(0, 1, 0),
+      alignFromLocal,
       bladeDirLocal,
     );
 
