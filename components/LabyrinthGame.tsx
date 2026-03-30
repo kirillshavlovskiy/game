@@ -9637,8 +9637,8 @@ export default function LabyrinthGame() {
                             role="status"
                             aria-live="polite"
                           >
-                            Fighters advance while the dice roll — <strong>green / gold / red</strong> bands show legs / body / head. Tap that zone or press{" "}
-                            <strong>1</strong> / <strong>2</strong> / <strong>3</strong>. No target = whiff — <strong>heavy</strong> damage.
+                            Fighters advance while the dice roll — <strong>tap the monster</strong> (high / middle / low) or press{" "}
+                            <strong>1</strong> / <strong>2</strong> / <strong>3</strong> to aim. No target = whiff — <strong>heavy</strong> damage.
                           </div>
                         ) : null}
                         <CombatScene3D
@@ -10476,7 +10476,8 @@ export default function LabyrinthGame() {
                               role="status"
                               aria-live="polite"
                             >
-                              <strong>Green · gold · red</strong> = legs · body · head — tap a band or <strong>1–3</strong>. No pick = whiff — <strong>heavy</strong> damage.
+                              While they close in, <strong>tap the monster</strong> (high / mid / low) or <strong>1–3</strong> to aim.
+                              No pick = whiff — <strong>heavy</strong> damage.
                             </div>
                           ) : null}
                           <CombatScene3D

@@ -797,144 +797,6 @@ export interface CombatScene3DProps {
 const STRIKE_ZONE_Y_T0 = 0.28;
 const STRIKE_ZONE_Y_T1 = 0.62;
 
-/** Aim shells appear once fighters start closing in (rolling approach). */
-const STRIKE_AIM_BLEND_START = 0.07;
-
-function CombatStrikeAimBands({
-  monsterRootRef,
-  show,
-  approachBlend,
-}: {
-  monsterRootRef: React.MutableRefObject<THREE.Group | null>;
-  show: boolean;
-  /** 0–1 rolling approach; drives opacity (bands fade in as they advance). */
-  approachBlend: number;
-}) {
-  const groupRef = useRef<THREE.Group>(null);
-  const legsRef = useRef<THREE.Mesh>(null);
-  const bodyRef = useRef<THREE.Mesh>(null);
-  const headRef = useRef<THREE.Mesh>(null);
-  const geo = useMemo(() => new THREE.BoxGeometry(1, 1, 1), []);
-  const matLegs = useMemo(
-    () =>
-      new THREE.MeshBasicMaterial({
-        color: 0x2d8f5a,
-        transparent: true,
-        opacity: 0.14,
-        depthWrite: false,
-        depthTest: true,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2,
-        side: THREE.DoubleSide,
-      }),
-    []
-  );
-  const matBody = useMemo(
-    () =>
-      new THREE.MeshBasicMaterial({
-        color: 0xc9a227,
-        transparent: true,
-        opacity: 0.14,
-        depthWrite: false,
-        depthTest: true,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2,
-        side: THREE.DoubleSide,
-      }),
-    []
-  );
-  const matHead = useMemo(
-    () =>
-      new THREE.MeshBasicMaterial({
-        color: 0xc94a3a,
-        transparent: true,
-        opacity: 0.14,
-        depthWrite: false,
-        depthTest: true,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2,
-        side: THREE.DoubleSide,
-      }),
-    []
-  );
-
-  useEffect(() => {
-    return () => {
-      geo.dispose();
-      matLegs.dispose();
-      matBody.dispose();
-      matHead.dispose();
-    };
-  }, [geo, matLegs, matBody, matHead]);
-
-  useFrame(() => {
-    const g = groupRef.current;
-    const root = monsterRootRef.current;
-    const fade = Math.min(1, Math.max(0, (approachBlend - STRIKE_AIM_BLEND_START) / 0.28));
-    const op = 0.05 + 0.2 * fade;
-    matLegs.opacity = op;
-    matBody.opacity = op;
-    matHead.opacity = op;
-
-    if (!g || !show || fade < 0.02 || !root) {
-      if (g) g.visible = false;
-      return;
-    }
-
-    root.updateWorldMatrix(true, true);
-    const box = new THREE.Box3().setFromObject(root);
-    if (box.isEmpty()) {
-      g.visible = false;
-      return;
-    }
-
-    const min = box.min;
-    const max = box.max;
-    const h = max.y - min.y;
-    if (h < 0.02) {
-      g.visible = false;
-      return;
-    }
-
-    const cx = (min.x + max.x) / 2;
-    const cz = (min.z + max.z) / 2;
-    const pad = 0.03;
-    const sx = Math.max(0.06, max.x - min.x + pad * 2);
-    const sz = Math.max(0.06, max.z - min.z + pad * 2);
-
-    const setSeg = (
-      mesh: THREE.Mesh | null,
-      yMinT: number,
-      yMaxT: number
-    ) => {
-      if (!mesh) return;
-      const y0 = min.y + yMinT * h;
-      const y1 = min.y + yMaxT * h;
-      const ch = Math.max(0.015, y1 - y0);
-      const cy = (y0 + y1) / 2;
-      mesh.position.set(cx, cy, cz);
-      mesh.scale.set(sx, ch, sz);
-    };
-
-    setSeg(legsRef.current, 0, STRIKE_ZONE_Y_T0);
-    setSeg(bodyRef.current, STRIKE_ZONE_Y_T0, STRIKE_ZONE_Y_T1);
-    setSeg(headRef.current, STRIKE_ZONE_Y_T1, 1);
-
-    g.visible = true;
-  });
-
-  return (
-    <group ref={groupRef} renderOrder={500}>
-      <mesh ref={legsRef} geometry={geo} material={matLegs} />
-      <mesh ref={bodyRef} geometry={geo} material={matBody} />
-      <mesh ref={headRef} geometry={geo} material={matHead} />
-    </group>
-  );
-}
-
 function CombatStrikeZonePicker({
   monsterRootRef,
   enabled,
@@ -1175,18 +1037,11 @@ export function CombatScene3D({
             hitRootRef={monsterHitRootRef}
           />
           {strikePickActive && onStrikeTargetPick ? (
-            <>
-              <CombatStrikeAimBands
-                monsterRootRef={monsterHitRootRef}
-                show={strikePickActive}
-                approachBlend={rollingApproachBlend}
-              />
-              <CombatStrikeZonePicker
-                monsterRootRef={monsterHitRootRef}
-                enabled
-                onPick={onStrikeTargetPick}
-              />
-            </>
+            <CombatStrikeZonePicker
+              monsterRootRef={monsterHitRootRef}
+              enabled
+              onPick={onStrikeTargetPick}
+            />
           ) : null}
         </Suspense>
       </Canvas>
