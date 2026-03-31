@@ -86,7 +86,10 @@ import {
   mapIsoCombatPlayerAnimCue,
 } from "@/lib/monsterModels3d";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
-import MazeIsoView, { type MazeIsoViewImperativeHandle } from "@/components/MazeIsoView";
+import MazeIsoView, {
+  type CatapultTrajectoryPreviewFn,
+  type MazeIsoViewImperativeHandle,
+} from "@/components/MazeIsoView";
 
 const CombatScene3D = dynamic(
   () => import("@/components/MonsterModel3D").then((m) => m.CombatScene3D),
@@ -466,7 +469,7 @@ const MOBILE_MOVE_PAD_CELL_PX = 36;
 const MOBILE_MOVE_PAD_SCROLL_PADDING_RIGHT_PX = MOBILE_MOVE_PAD_CELL_PX * 3 + 2 * 2 + 8 * 2 + 12;
 /** Compact artifact chip min width. */
 const MOBILE_ARTIFACT_CHIP_W = 56;
-type MobileDockAction = "bomb" | StoredArtifactKind;
+type MobileDockAction = "bomb" | "catapultCharge" | StoredArtifactKind;
 
 /** Let catapult / teleport visuals finish before turn change or clearing flight overlay */
 const SPECIAL_MOVE_SETTLE_MS = 2000;
@@ -635,6 +638,12 @@ function hasCombatVisibleStoredArtifacts(
   return STORED_ARTIFACT_ORDER.some(
     (k) => !isStoredArtifactMapOnly(k) && storedArtifactCount(p, k) > 0
   );
+}
+
+function dockActionIconVariant(id: MobileDockAction): ArtifactIconVariant {
+  if (id === "bomb") return "bomb";
+  if (id === "catapultCharge") return "catapult";
+  return storedArtifactIconVariant(id);
 }
 
 function storedArtifactIconVariant(kind: StoredArtifactKind): ArtifactIconVariant {
@@ -1168,68 +1177,39 @@ function minimapOrbitDonutPath(cx: number, cy: number, rInner: number, rOuter: n
   ].join(" ");
 }
 
-/** N/E/S/W compass + green orbit band; centered mini-map (player in the middle). Desktop + mobile landscape. */
-function MobileLandscapeMinimapOrbitWrap({
+/**
+ * Shared landscape + portrait mini-map green ring: same drag/tap-90° behavior, `setOrbitRingPointerHeld` so camera
+ * auto-follow does not run for one frame before `rotateMode` commits on touch, and skip one orbit apply to avoid
+ * bogus first touch deltas (~90° yaw).
+ */
+function useMinimapOrbitRingPointerHandlers({
   mazeIsoViewRef,
-  diameter,
-  lab,
-  currentPlayer,
-  playerFacing,
-  fogIntensityMap,
-  playerCells,
-  isoMiniMapZoom,
-  setIsoMiniMapZoom,
-  isoMiniMapPinchStartRef,
-  onOpenGrid,
-  bearingAngleDeg,
+  wrap,
+  cx,
+  cy,
+  rDonutInner,
+  rDonutOuter,
 }: {
   mazeIsoViewRef: RefObject<MazeIsoViewImperativeHandle | null>;
-  diameter: number;
-  lab: Labyrinth;
-  currentPlayer: number;
-  playerFacing: Record<number, { dx: number; dy: number }>;
-  fogIntensityMap: Map<string, number>;
-  playerCells: Record<string, number>;
-  isoMiniMapZoom: number;
-  setIsoMiniMapZoom: Dispatch<SetStateAction<number>>;
-  isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
-  onOpenGrid: () => void;
-  bearingAngleDeg?: number | null;
+  wrap: number;
+  cx: number;
+  cy: number;
+  rDonutInner: number;
+  rDonutOuter: number;
 }) {
-  /** Outer box matches joystick `diameter`; map + orbit + compass fit inside (no larger footprint). */
-  const wrap = diameter;
-  const rimTotal = 2 * MINIMAP_ORBIT_RING_PX + 2 * MINIMAP_COMPASS_PAD_PX;
-  const mapDiscPx = Math.max(MINIMAP_INNER_DISC_MIN_PX, Math.floor(wrap - rimTotal));
-  const inset = (wrap - mapDiscPx) / 2;
-  const cx = wrap / 2;
-  const cy = wrap / 2;
-  const rMap = mapDiscPx / 2;
-  const rDonutInner = rMap + 1.5;
-  const rDonutOuter = rMap + MINIMAP_ORBIT_RING_PX;
-  const rEdge = wrap / 2 - 2;
-  const tickOuter = rEdge;
-  const tickLen = 6;
-  const labelR = rEdge - 9;
-
-  const cardinals = [
-    { label: "N", ang: -Math.PI / 2 },
-    { label: "E", ang: 0 },
-    { label: "S", ang: Math.PI / 2 },
-    { label: "W", ang: Math.PI },
-  ] as const;
-
-  /** Ring drag: map motion to orbit around map center — tangential → yaw (like turning the compass), radial → pitch. Raw screen dx/dy matched canvas and felt wrong on a circle (e.g. N/S drag at E/W became pitch). */
   const ringDragRef = useRef<{ x: number; y: number; angle: number } | null>(null);
-  /** Track whether the pointer moved enough to count as a drag (vs a tap). */
   const ringDragMovedRef = useRef(false);
-  /** Screen-space angle of the initial tap for tap-to-turn direction. */
   const ringTapAngleRef = useRef(0);
+  const skipNextOrbitApplyRef = useRef(false);
 
   const onRingPointerDown = useCallback(
     (e: ReactPointerEvent<SVGPathElement>) => {
       e.preventDefault();
       e.stopPropagation();
-      mazeIsoViewRef.current?.activateRotate();
+      const m = mazeIsoViewRef.current;
+      m?.setOrbitRingPointerHeld(true);
+      m?.activateRotate();
+      skipNextOrbitApplyRef.current = true;
       ringDragMovedRef.current = false;
       const svg = e.currentTarget.ownerSVGElement as SVGSVGElement | null;
       if (svg) {
@@ -1292,6 +1272,11 @@ function MobileLandscapeMinimapOrbitWrap({
       const tangPx = dA * rMidPx * MINIMAP_ORBIT_TANGENTIAL_BOOST;
       const sens = MINIMAP_ORBIT_POINTER_SENS;
       if (tangPx !== 0 || rad !== 0) {
+        if (skipNextOrbitApplyRef.current) {
+          skipNextOrbitApplyRef.current = false;
+          ringDragRef.current = { x: e.clientX, y: e.clientY, angle: newAng };
+          return;
+        }
         mazeIsoViewRef.current?.orbitLookByPixelDelta(tangPx * sens, rad * sens);
         mazeIsoViewRef.current?.bumpRotateSession();
       }
@@ -1300,22 +1285,90 @@ function MobileLandscapeMinimapOrbitWrap({
     [mazeIsoViewRef, wrap, cx, cy, rDonutInner, rDonutOuter],
   );
 
-  const onRingPointerEnd = useCallback((e: ReactPointerEvent<SVGPathElement>) => {
-    const wasTap = ringDragRef.current != null && !ringDragMovedRef.current;
-    ringDragRef.current = null;
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    if (wasTap) {
-      const tapAng = ringTapAngleRef.current;
-      const rightHalf = tapAng > -Math.PI / 2 && tapAng < Math.PI / 2;
-      const px90 = (Math.PI / 2) / 0.005;
-      mazeIsoViewRef.current?.activateRotate();
-      mazeIsoViewRef.current?.orbitLookByPixelDelta(rightHalf ? px90 : -px90, 0);
-    }
-  }, [mazeIsoViewRef]);
+  const onRingPointerEnd = useCallback(
+    (e: ReactPointerEvent<SVGPathElement>) => {
+      mazeIsoViewRef.current?.setOrbitRingPointerHeld(false);
+      skipNextOrbitApplyRef.current = false;
+      const wasTap = ringDragRef.current != null && !ringDragMovedRef.current;
+      ringDragRef.current = null;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      if (wasTap) {
+        const tapAng = ringTapAngleRef.current;
+        const rightHalf = tapAng > -Math.PI / 2 && tapAng < Math.PI / 2;
+        const px90 = (Math.PI / 2) / 0.005;
+        const m = mazeIsoViewRef.current;
+        m?.activateRotate();
+        m?.orbitLookByPixelDelta(rightHalf ? px90 : -px90, 0);
+      }
+    },
+    [mazeIsoViewRef],
+  );
+
+  return { onRingPointerDown, onRingPointerMove, onRingPointerEnd };
+}
+
+/** N/E/S/W compass + green orbit band; centered mini-map (player in the middle). Desktop + mobile landscape. */
+function MobileLandscapeMinimapOrbitWrap({
+  mazeIsoViewRef,
+  diameter,
+  lab,
+  currentPlayer,
+  playerFacing,
+  fogIntensityMap,
+  playerCells,
+  isoMiniMapZoom,
+  setIsoMiniMapZoom,
+  isoMiniMapPinchStartRef,
+  onOpenGrid,
+  bearingAngleDeg,
+}: {
+  mazeIsoViewRef: RefObject<MazeIsoViewImperativeHandle | null>;
+  diameter: number;
+  lab: Labyrinth;
+  currentPlayer: number;
+  playerFacing: Record<number, { dx: number; dy: number }>;
+  fogIntensityMap: Map<string, number>;
+  playerCells: Record<string, number>;
+  isoMiniMapZoom: number;
+  setIsoMiniMapZoom: Dispatch<SetStateAction<number>>;
+  isoMiniMapPinchStartRef: MutableRefObject<{ distance: number; zoom: number } | null>;
+  onOpenGrid: () => void;
+  bearingAngleDeg?: number | null;
+}) {
+  /** Outer box matches joystick `diameter`; map + orbit + compass fit inside (no larger footprint). */
+  const wrap = diameter;
+  const rimTotal = 2 * MINIMAP_ORBIT_RING_PX + 2 * MINIMAP_COMPASS_PAD_PX;
+  const mapDiscPx = Math.max(MINIMAP_INNER_DISC_MIN_PX, Math.floor(wrap - rimTotal));
+  const inset = (wrap - mapDiscPx) / 2;
+  const cx = wrap / 2;
+  const cy = wrap / 2;
+  const rMap = mapDiscPx / 2;
+  const rDonutInner = rMap + 1.5;
+  const rDonutOuter = rMap + MINIMAP_ORBIT_RING_PX;
+  const rEdge = wrap / 2 - 2;
+  const tickOuter = rEdge;
+  const tickLen = 6;
+  const labelR = rEdge - 9;
+
+  const cardinals = [
+    { label: "N", ang: -Math.PI / 2 },
+    { label: "E", ang: 0 },
+    { label: "S", ang: Math.PI / 2 },
+    { label: "W", ang: Math.PI },
+  ] as const;
+
+  const { onRingPointerDown, onRingPointerMove, onRingPointerEnd } = useMinimapOrbitRingPointerHandlers({
+    mazeIsoViewRef,
+    wrap,
+    cx,
+    cy,
+    rDonutInner,
+    rDonutOuter,
+  });
 
   const donutD = minimapOrbitDonutPath(cx, cy, rDonutInner, rDonutOuter);
 
@@ -1430,6 +1483,74 @@ function MobileLandscapeMinimapOrbitWrap({
         />
       </svg>
     </div>
+  );
+}
+
+/**
+ * Green orbit band on the **outer** annulus of the combined mini-map + move disc (portrait / non-split HUD).
+ * Matches `MobileLandscapeMinimapOrbitWrap` drag + tap-90° behavior; sits between map (z 0) and joystick (z 2).
+ */
+function IsoMinimapOrbitRingOverlay({
+  diameter,
+  joystickPadPx,
+  mazeIsoViewRef,
+}: {
+  diameter: number;
+  joystickPadPx: number;
+  mazeIsoViewRef: RefObject<MazeIsoViewImperativeHandle | null>;
+}) {
+  const wrap = diameter;
+  const cx = wrap / 2;
+  const cy = wrap / 2;
+  const rDonutInner = joystickPadPx / 2 + 5;
+  const rDonutOuter = wrap / 2 - 2;
+  const ringGeometryOk = rDonutOuter - rDonutInner >= 7;
+
+  const { onRingPointerDown, onRingPointerMove, onRingPointerEnd } = useMinimapOrbitRingPointerHandlers({
+    mazeIsoViewRef,
+    wrap,
+    cx,
+    cy,
+    rDonutInner,
+    rDonutOuter,
+  });
+
+  if (!ringGeometryOk) return null;
+
+  const donutD = minimapOrbitDonutPath(cx, cy, rDonutInner, rDonutOuter);
+
+  return (
+    <svg
+      width={wrap}
+      height={wrap}
+      style={{
+        position: "absolute",
+        left: 0,
+        top: 0,
+        zIndex: 3,
+        overflow: "visible",
+        pointerEvents: "none",
+      }}
+      aria-hidden
+    >
+      <path
+        d={donutD}
+        fill="rgba(0,255,136,0.14)"
+        fillRule="evenodd"
+        stroke="rgba(0,255,136,0.5)"
+        strokeWidth={1}
+        style={{
+          pointerEvents: "auto",
+          touchAction: "none",
+          cursor: "grab",
+          filter: "drop-shadow(0 0 3px rgba(0,255,136,0.3))",
+        }}
+        onPointerDown={onRingPointerDown}
+        onPointerMove={onRingPointerMove}
+        onPointerUp={onRingPointerEnd}
+        onPointerCancel={onRingPointerEnd}
+      />
+    </svg>
   );
 }
 
@@ -1837,6 +1958,7 @@ function CircularIsoMinimapMoveHud({
   focusDisabled,
   outerRef,
   bearingAngleDeg,
+  mazeIsoViewRef,
 }: {
   diameter: number;
   showMinimap: boolean;
@@ -1862,10 +1984,18 @@ function CircularIsoMinimapMoveHud({
   focusDisabled: boolean;
   outerRef?: Ref<HTMLDivElement>;
   bearingAngleDeg?: number | null;
+  /** When set with `showMinimap`, outer green band orbits the 3D camera (same as desktop / landscape mini-map). */
+  mazeIsoViewRef?: RefObject<MazeIsoViewImperativeHandle | null>;
 }) {
+  const joystickPadPxForOrbit = Math.min(ISO_HUD_JOYSTICK_PAD_PX, Math.round(diameter * 0.58));
   return (
     <div
       ref={outerRef}
+      title={
+        showMinimap && mazeIsoViewRef
+          ? "Green ring: drag to orbit 3D (map turns with view); center = move. Tap ring for 90° step."
+          : undefined
+      }
       style={{
         position: "relative",
         width: diameter,
@@ -1899,6 +2029,13 @@ function CircularIsoMinimapMoveHud({
             bearingAngleDeg={bearingAngleDeg ?? null}
           />
         </div>
+      ) : null}
+      {showMinimap && mazeIsoViewRef ? (
+        <IsoMinimapOrbitRingOverlay
+          diameter={diameter}
+          joystickPadPx={joystickPadPxForOrbit}
+          mazeIsoViewRef={mazeIsoViewRef}
+        />
       ) : null}
       <IsoHudJoystickMoveRing
         diameter={diameter}
@@ -2683,7 +2820,12 @@ export default function LabyrinthGame() {
   /** After resolving a teleport, block opening magic portal again until the player moves (avoids chain-teleport + idle timer abuse). */
   const [suppressMagicPortalUntilMove, setSuppressMagicPortalUntilMove] = useState(false);
   const [catapultMode, setCatapultMode] = useState(false);
-  const [catapultPicker, setCatapultPicker] = useState<{ playerIndex: number; from: [number, number] } | null>(null);
+  const [catapultPicker, setCatapultPicker] = useState<{
+    playerIndex: number;
+    from: [number, number];
+    /** Launch using a stored charge (any tile); otherwise one-time use from catapult cell. */
+    viaCharge?: boolean;
+  } | null>(null);
   const [passThroughMagic, setPassThroughMagic] = useState(false);
   const [catapultAnimation, setCatapultAnimation] = useState<{
     from: [number, number];
@@ -2692,6 +2834,10 @@ export default function LabyrinthGame() {
   } | null>(null);
   const catapultDragRef = useRef<{ startX: number; startY: number; cellX: number; cellY: number } | null>(null);
   const [catapultDragOffset, setCatapultDragOffset] = useState<{ dx: number; dy: number } | null>(null);
+  /** 3D slingshot: latest pointer for floor raycast + in-scene arc (client coordinates). */
+  const [catapultAimClient, setCatapultAimClient] = useState<{ x: number; y: number } | null>(null);
+  /** 3D only: orbit to frame the maze first, then enter pull-to-aim (fixes inverted aim vs camera). */
+  const [catapultIsoPhase, setCatapultIsoPhase] = useState<"orient" | "pull">("orient");
   const [jumpAnimation, setJumpAnimation] = useState<{
     playerIndex: number;
     x: number;
@@ -2923,6 +3069,7 @@ export default function LabyrinthGame() {
   const hiddenGemTeleportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const teleportPickerRef = useRef(teleportPicker);
   const catapultPickerRef = useRef(catapultPicker);
+  const openSlingshotFromDockRef = useRef<(() => void) | null>(null);
   /** Sync true while a manual teleport picker is required (last-move magic/gem/artifact); blocks stale-dice turn advance until pick/cancel. */
   const manualTeleportPendingRef = useRef(false);
   const passThroughMagicRef = useRef(false);
@@ -3181,6 +3328,7 @@ export default function LabyrinthGame() {
     }
     const actions: MobileDockAction[] = [];
     if ((p.bombs ?? 0) > 0) actions.push("bomb");
+    if ((p.catapultCharges ?? 0) > 0) actions.push("catapultCharge");
     for (const k of STORED_ARTIFACT_ORDER) {
       if (storedArtifactCount(p, k) > 0) actions.push(k);
     }
@@ -3376,8 +3524,8 @@ export default function LabyrinthGame() {
     const p = lab.players[pi];
     const m = mi >= 0 && mi < lab.monsters.length ? lab.monsters[mi] : undefined;
     if (p && m && p.x === m.x && p.y === m.y) {
-        combatLog("cancel-check: SKIP — indexed monster still on player (fight active)");
-        return;
+      combatLog("cancel-check: SKIP — indexed monster still on player (fight active)");
+      return;
     }
     /** Skeleton shield break moves player and monster to different tiles — no same-cell collision while the fight is still valid. */
     if (
@@ -4043,10 +4191,10 @@ export default function LabyrinthGame() {
       const resolveSaysEncounterContinues =
         !monsterSlainThisRoll &&
         (result.monsterEffect === "skeleton_shield" ||
-          glancingMonsterSurvives ||
-          wonMonsterSurvivesPartial ||
-          ghostContinues ||
-          shieldWouldAbsorb ||
+        glancingMonsterSurvives ||
+        wonMonsterSurvivesPartial ||
+        ghostContinues ||
+        shieldWouldAbsorb ||
           playerHitSurvives);
 
       combatLog("applyPost branch flags", {
@@ -4289,8 +4437,8 @@ export default function LabyrinthGame() {
       };
 
       const flushCombatLab = () => {
-        flushSync(() => {
-          pendingPlayerDamageHighlightIndexRef.current = null;
+      flushSync(() => {
+        pendingPlayerDamageHighlightIndexRef.current = null;
       setLab((prev) => {
         if (!prev || winnerRef.current !== null) return prev;
         const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
@@ -4389,8 +4537,8 @@ export default function LabyrinthGame() {
         }
 
         if (result.won && m && monsterIdx >= 0 && monsterIdx < next.monsters.length && (m.hp ?? 0) > 0) {
-          combatContinuesAfterRollRef.current = true;
-          return next;
+            combatContinuesAfterRollRef.current = true;
+            return next;
         }
 
         const hpForDefeat =
@@ -4459,45 +4607,45 @@ export default function LabyrinthGame() {
           }
         } else if (!result.won && p && netPlayerHp > 0 && !usedShieldForNet) {
           pendingPlayerDamageHighlightIndexRef.current = pi;
-          const hpBefore = p.hp ?? DEFAULT_PLAYER_HP;
+            const hpBefore = p.hp ?? DEFAULT_PLAYER_HP;
           p.hp = Math.max(0, hpBefore - netPlayerHp);
           combatLog("BRANCH: player takes hit (net)", { damage: netPlayerHp, hpBefore, hpAfter: p.hp });
-          if (combat.monsterType === "Z") p.loseNextMove = true; // Zombie slow: lose next movement point
-          if (p.hp <= 0) {
-            const defeatMonsterMaxHp = getMonsterMaxHp(combat.monsterType);
-            const defeatMonsterHp = m ? Math.min(defeatMonsterMaxHp, Math.max(0, m.hp ?? defeatMonsterMaxHp)) : defeatMonsterMaxHp;
-            const defeatPlayerHp = p.hp;
-            // Respawn at start, lose 1 artifact (instead of elimination)
-            p.x = 0;
-            p.y = 0;
-            p.hp = DEFAULT_PLAYER_HP;
-            const hasStored = STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(p, k) > 0);
-            if (hasStored) {
-              decrementOneStoredArtifactSlot(p);
-            } else if (p.artifacts > 0) {
-              p.artifacts--;
-              const ac = p.artifactsCollected ?? [];
-              if (ac.length > 0) p.artifactsCollected = ac.slice(0, -1);
-            }
-            playerDefeatedInCombatRef.current = true;
-            setCombatResult({
-              ...result,
-              won: false,
-              monsterType: combat.monsterType,
-              playerIndex: pi,
+            if (combat.monsterType === "Z") p.loseNextMove = true; // Zombie slow: lose next movement point
+            if (p.hp <= 0) {
+              const defeatMonsterMaxHp = getMonsterMaxHp(combat.monsterType);
+              const defeatMonsterHp = m ? Math.min(defeatMonsterMaxHp, Math.max(0, m.hp ?? defeatMonsterMaxHp)) : defeatMonsterMaxHp;
+              const defeatPlayerHp = p.hp;
+              // Respawn at start, lose 1 artifact (instead of elimination)
+              p.x = 0;
+              p.y = 0;
+              p.hp = DEFAULT_PLAYER_HP;
+              const hasStored = STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(p, k) > 0);
+              if (hasStored) {
+                decrementOneStoredArtifactSlot(p);
+              } else if (p.artifacts > 0) {
+                p.artifacts--;
+                const ac = p.artifactsCollected ?? [];
+                if (ac.length > 0) p.artifactsCollected = ac.slice(0, -1);
+              }
+              playerDefeatedInCombatRef.current = true;
+              setCombatResult({
+                ...result,
+                won: false,
+                monsterType: combat.monsterType,
+                playerIndex: pi,
               damage: netPlayerHp,
-              playerDefeated: true,
-              monsterHp: defeatMonsterHp,
-              monsterMaxHp: defeatMonsterMaxHp,
-              playerHpAtEnd: defeatPlayerHp,
-            });
-            // Always pass turn after combat respawn — do not gate on currentPlayerRef (it can lag useEffect during flushSync and skip advance).
-            let nextP = (pi + 1) % next.numPlayers;
-            while (next.eliminatedPlayers.has(nextP) && nextP !== pi) {
-              nextP = (nextP + 1) % next.numPlayers;
-            }
-            currentPlayerRef.current = nextP;
-            setCurrentPlayer(nextP);
+                playerDefeated: true,
+                monsterHp: defeatMonsterHp,
+                monsterMaxHp: defeatMonsterMaxHp,
+                playerHpAtEnd: defeatPlayerHp,
+              });
+              // Always pass turn after combat respawn — do not gate on currentPlayerRef (it can lag useEffect during flushSync and skip advance).
+              let nextP = (pi + 1) % next.numPlayers;
+              while (next.eliminatedPlayers.has(nextP) && nextP !== pi) {
+                nextP = (nextP + 1) % next.numPlayers;
+              }
+              currentPlayerRef.current = nextP;
+              setCurrentPlayer(nextP);
             showMovementDiceOrInfinite({
               movesLeftRef,
               setMovesLeft,
@@ -4505,12 +4653,12 @@ export default function LabyrinthGame() {
               setShowDiceModal,
               setRolling,
             });
-            const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
-            const firstLiving = living.length > 0 ? Math.min(...living) : -1;
-            const roundComplete = living.length <= 1 || nextP === firstLiving;
-            if (roundComplete) setTimeout(() => triggerRoundEndRef.current(), 0);
-          } else {
-            combatContinuesAfterRollRef.current = true;
+              const living = [...Array(next.numPlayers).keys()].filter((i) => !next.eliminatedPlayers.has(i));
+              const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+              const roundComplete = living.length <= 1 || nextP === firstLiving;
+              if (roundComplete) setTimeout(() => triggerRoundEndRef.current(), 0);
+            } else {
+              combatContinuesAfterRollRef.current = true;
           }
         }
         return next;
@@ -4652,9 +4800,9 @@ export default function LabyrinthGame() {
     setRolling(true);
     requestAnimationFrame(() => {
       combatDiceRef.current?.roll().catch(() => {
-            combatStrikeIsRerollRef.current = false;
-            setRolling(false);
-          });
+        combatStrikeIsRerollRef.current = false;
+        setRolling(false);
+      });
     });
   }, [setLab]);
 
@@ -5036,18 +5184,18 @@ export default function LabyrinthGame() {
     setRolling(true);
     combatDicePhysicsInFlightRef.current = true;
     const runRoll = () => {
-      const rollResult = combatDiceRef.current?.roll();
-      if (rollResult) {
+    const rollResult = combatDiceRef.current?.roll();
+    if (rollResult) {
         rollResult
           .catch(() => setRolling(false))
           .finally(() => {
             combatDicePhysicsInFlightRef.current = false;
           });
-      } else {
+    } else {
         combatDicePhysicsInFlightRef.current = false;
-        const v = Math.floor(Math.random() * 6) + 1;
-        handleCombatRollComplete(v);
-      }
+      const v = Math.floor(Math.random() * 6) + 1;
+      handleCombatRollComplete(v);
+    }
     };
     requestAnimationFrame(() => requestAnimationFrame(runRoll));
   }, [rolling, combatStrikeHpHold, handleCombatRollComplete]);
@@ -5444,6 +5592,7 @@ export default function LabyrinthGame() {
     if (mobileDockAction === null) return;
     if (gamePausedRef.current) return;
     if (mobileDockAction === "bomb") handleUseBomb();
+    else if (mobileDockAction === "catapultCharge") openSlingshotFromDockRef.current?.();
     else if (mobileDockAction === "dice" && combatStateRef.current) handleCombatDiceArtifactRerollToggle();
     else handleUseArtifact(mobileDockAction);
   }, [mobileDockAction, handleUseBomb, handleUseArtifact, handleCombatDiceArtifactRerollToggle]);
@@ -5452,6 +5601,7 @@ export default function LabyrinthGame() {
     if (immersiveInventoryPick === null) return;
     if (gamePausedRef.current) return;
     if (immersiveInventoryPick === "bomb") handleUseBomb();
+    else if (immersiveInventoryPick === "catapultCharge") openSlingshotFromDockRef.current?.();
     else handleUseArtifact(immersiveInventoryPick);
     setImmersiveInventoryPick(null);
   }, [immersiveInventoryPick, handleUseBomb, handleUseArtifact]);
@@ -5718,11 +5868,7 @@ export default function LabyrinthGame() {
             next.recordBombCollected(currentPlayer, p.x, p.y);
             setBombGained(true);
           }
-          // Magic: no auto-teleport on step — use "Magic portal" to open the picker; idle auto-pick only if movesLeft > 0
-          if (cell && isCatapultCell(cell) && !next.hasUsedCatapultFrom(currentPlayer, p.x, p.y)) {
-            setCatapultPicker({ playerIndex: currentPlayer, from: [p.x, p.y] });
-            setCatapultMode(true);
-          }
+          // Slingshot: no auto-open — use "Use slingshot" in the dock (or catapult charge item) when ready.
           const owner = cell ? getCollectibleOwner(cell) : null;
           if (owner === currentPlayer && cell && isDiamondCell(cell)) {
             p.diamonds = (p.diamonds ?? 0) + 1;
@@ -6004,6 +6150,43 @@ export default function LabyrinthGame() {
     catapultPicker,
     gamePaused,
     suppressMagicPortalUntilMove,
+  ]);
+
+  const slingshotCellAvailable = useMemo(() => {
+    if (!lab || combatState || pendingCombatOffer || winner !== null || teleportPicker || catapultPicker || gamePaused)
+      return false;
+    const p = lab.players[currentPlayer];
+    if (!p) return false;
+    const cell = lab.getCellAt(p.x, p.y);
+    return !!(cell && isCatapultCell(cell) && !lab.hasUsedCatapultFrom(currentPlayer, p.x, p.y));
+  }, [
+    lab,
+    currentPlayer,
+    combatState,
+    pendingCombatOffer,
+    winner,
+    teleportPicker,
+    catapultPicker,
+    gamePaused,
+  ]);
+
+  const canOfferSlingshotDock = useMemo(() => {
+    if (!lab || combatState || pendingCombatOffer || winner !== null || teleportPicker || catapultPicker || gamePaused)
+      return false;
+    const p = lab.players[currentPlayer];
+    if (!p) return false;
+    const charges = (p.catapultCharges ?? 0) > 0;
+    return slingshotCellAvailable || charges;
+  }, [
+    lab,
+    currentPlayer,
+    combatState,
+    pendingCombatOffer,
+    winner,
+    teleportPicker,
+    catapultPicker,
+    gamePaused,
+    slingshotCellAvailable,
   ]);
 
   const landscapeCombatInfoRows = useMemo(() => {
@@ -6315,7 +6498,12 @@ export default function LabyrinthGame() {
       next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
       const result = next.catapultLaunch(playerIndex, dx, dy, strength);
       if (result) {
+        const pl = next.players[playerIndex];
+        if (catapultPicker.viaCharge) {
+          if (pl) pl.catapultCharges = Math.max(0, (pl.catapultCharges ?? 0) - 1);
+        } else {
         next.recordCatapultUsedFrom(playerIndex, from[0], from[1]);
+        }
         setCatapultAnimation({ from, to: [result.destX, result.destY], playerIndex });
         setTeleportPicker(null);
         manualTeleportPendingRef.current = false;
@@ -6346,18 +6534,36 @@ export default function LabyrinthGame() {
   );
 
   /** Purple destination beacons in 3D while magic portal is available (matches 2D hole styling). */
+  /** Purple beacons only after the player opens the magic picker (consent), not just standing on the cell. */
   const isoMagicPortalPreviewOptions = useMemo(() => {
-    if (!lab || mazeMapView !== "iso" || !magicPortalReady) return null;
+    if (!lab || mazeMapView !== "iso") return null;
+    if (teleportPicker?.sourceType !== "magic") return null;
     return lab.getTeleportOptions(currentPlayer, MAGIC_TELEPORT_PICKER_OPTIONS);
-  }, [lab, mazeMapView, magicPortalReady, currentPlayer]);
+  }, [lab, mazeMapView, teleportPicker, currentPlayer]);
+
+  const catapultTrajectoryPreview = useMemo<CatapultTrajectoryPreviewFn | undefined>(() => {
+    if (!lab) return undefined;
+    return (fx, fy, dx, dy, s) => lab.getCatapultTrajectory(fx, fy, dx, dy, s, false);
+  }, [lab]);
+
+  useEffect(() => {
+    if (!catapultPicker) {
+      setCatapultAimClient(null);
+      setCatapultIsoPhase("orient");
+      return;
+    }
+    setCatapultIsoPhase(mazeMapView === "iso" ? "orient" : "pull");
+  }, [catapultPicker, mazeMapView]);
 
   useEffect(() => {
     if (!catapultMode || !catapultPicker) return;
+    const from = catapultPicker.from;
     const onPointerUp = (e: globalThis.PointerEvent) => {
       if (gamePausedRef.current) return;
       const d = catapultDragRef.current;
       catapultDragRef.current = null;
       setCatapultDragOffset(null);
+      setCatapultAimClient(null);
       if (!d) return;
       const releaseX = e.clientX;
       const releaseY = e.clientY;
@@ -6365,12 +6571,21 @@ export default function LabyrinthGame() {
       const dy = releaseY - d.startY;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 15) return; // too short a drag
-      // Launch opposite to pull direction (slingshot: pull back → launch forward)
+      if (mazeMapView === "iso") {
+        if (catapultIsoPhase !== "pull") return;
+        const resolved = mazeIsoViewRef.current?.resolveCatapultLaunchAtClient(from, releaseX, releaseY);
+        if (resolved) {
+          handleCatapultLaunch(resolved.dx, resolved.dy, resolved.strength);
+          return;
+        }
+      }
+      // 2D grid: screen pull from cell center; 3D fallback if raycast missed
       handleCatapultLaunch(-dx, -dy, dist);
     };
     const onPointerCancel = () => {
       catapultDragRef.current = null;
       setCatapultDragOffset(null);
+      setCatapultAimClient(null);
     };
     window.addEventListener("pointerup", onPointerUp);
     window.addEventListener("pointercancel", onPointerCancel);
@@ -6378,7 +6593,7 @@ export default function LabyrinthGame() {
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerCancel);
     };
-  }, [catapultMode, catapultPicker, handleCatapultLaunch]);
+  }, [catapultMode, catapultPicker, handleCatapultLaunch, mazeMapView, catapultIsoPhase]);
 
   const handleTeleportSelect = useCallback(
     (destX: number, destY: number) => {
@@ -6568,6 +6783,40 @@ export default function LabyrinthGame() {
     manualTeleportPendingRef.current = true;
     setTeleportPicker({ playerIndex: currentPlayer, from: [cp.x, cp.y], options, sourceType: "magic" });
   }, [lab, cp, currentPlayer, combatState, pendingCombatOffer, winner, teleportPicker, catapultPicker]);
+
+  const openSlingshotFromDock = useCallback(() => {
+    if (gamePausedRef.current) return;
+    if (!lab || !cp || combatState || pendingCombatOffer || winner !== null) return;
+    if (teleportPicker || catapultPicker) return;
+    const cell = lab.getCellAt(cp.x, cp.y);
+    const onCatapult = !!(
+      cell &&
+      isCatapultCell(cell) &&
+      !lab.hasUsedCatapultFrom(currentPlayer, cp.x, cp.y)
+    );
+    if (onCatapult) {
+      setCatapultPicker({ playerIndex: currentPlayer, from: [cp.x, cp.y], viaCharge: false });
+      setCatapultMode(true);
+      return;
+    }
+    if ((cp.catapultCharges ?? 0) > 0) {
+      setCatapultPicker({ playerIndex: currentPlayer, from: [cp.x, cp.y], viaCharge: true });
+      setCatapultMode(true);
+    }
+  }, [
+    lab,
+    cp,
+    currentPlayer,
+    combatState,
+    pendingCombatOffer,
+    winner,
+    teleportPicker,
+    catapultPicker,
+  ]);
+
+  useEffect(() => {
+    openSlingshotFromDockRef.current = openSlingshotFromDock;
+  }, [openSlingshotFromDock]);
 
   const acceptPendingCombat = useCallback(() => {
     const o = pendingCombatOfferRef.current;
@@ -7351,13 +7600,20 @@ export default function LabyrinthGame() {
   const desktopDockThreeColumn = desktopWindowedIsoThreeColumnDock || desktopGridThreeColumnDock;
   /** Full-width collapsible bar; narrowed + centered while monster ambush / fight-offer is open. */
   const desktopDockFullWidthBar = !isMobile && !pendingCombatOffer && !!lab;
-  /** Collapsed desktop dock: still show mini-map + move (artifacts / turn stay hidden until expand). */
-  const desktopDockCollapsedMapMoveStrip =
+  /** Collapsed desktop dock: grid only — 3D uses on-canvas HUD (see desktopCollapsedIsoHudOnCanvas). */
+  const desktopDockCollapsedGridMapMoveStrip =
     !isMobile &&
     desktopControlsCollapsed &&
     !!lab &&
     !pendingCombatOffer &&
-    (mazeMapView === "grid" || showUnifiedDockInDesktopIso);
+    mazeMapView === "grid";
+  /** Collapsed desktop windowed 3D: mini-map + move overlaid on the canvas (not in bottom dock). */
+  const desktopCollapsedIsoHudOnCanvas =
+    !isMobile &&
+    desktopControlsCollapsed &&
+    !!lab &&
+    !pendingCombatOffer &&
+    showUnifiedDockInDesktopIso;
   const inCombatDock = !!combatState;
   const totalDiamondsDock = lab.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
   const bombUseDisabled = !cp || (cp?.bombs ?? 0) <= 0 || (moveDisabled && !combatState);
@@ -7373,15 +7629,20 @@ export default function LabyrinthGame() {
       ? true
       : mobileDockAction === "bomb"
         ? bombUseDisabled
+        : mobileDockAction === "catapultCharge"
+          ? !canOfferSlingshotDock
         : artifactUseDisabledDock(mobileDockAction);
   const immersiveApplyDisabled =
     immersiveInventoryPick == null
       ? true
       : immersiveInventoryPick === "bomb"
         ? bombUseDisabled
-        : artifactUseDisabledDock(immersiveInventoryPick);
+        : immersiveInventoryPick === "catapultCharge"
+          ? !canOfferSlingshotDock
+          : artifactUseDisabledDock(immersiveInventoryPick);
   const dockActions: { id: MobileDockAction; n: number }[] = [];
   if ((cp?.bombs ?? 0) > 0) dockActions.push({ id: "bomb", n: cp!.bombs ?? 0 });
+  if ((cp?.catapultCharges ?? 0) > 0) dockActions.push({ id: "catapultCharge", n: cp!.catapultCharges ?? 0 });
   for (const k of STORED_ARTIFACT_ORDER) {
     const n = storedArtifactCount(cp, k);
     if (n > 0) dockActions.push({ id: k, n });
@@ -7394,9 +7655,10 @@ export default function LabyrinthGame() {
   const mobileIsoEdgeToEdge =
     isMobile && mazeMapView === "iso" && lab && !isoImmersiveUi && !combatOverlayVisible;
 
-  /** 3D: drop padded `maze-wrap` frame; WebGL fills the play shell (non-immersive mobile + any immersive iso). */
+  /** 3D: drop padded `maze-wrap` / inner card chrome; WebGL fills the play shell (mobile edge, immersive, desktop windowed). */
   const mazeIsoFillViewport =
-    mazeMapView === "iso" && (mobileIsoEdgeToEdge || isoImmersiveUi);
+    mazeMapView === "iso" &&
+    (mobileIsoEdgeToEdge || isoImmersiveUi || (!isMobile && !isoImmersiveUi && !!lab));
   /** Mobile 3D: fixed viewport-sized layer so canvas is not inset by `maze-wrap` / mazeArea padding. */
   const isoPlayRootViewportFill =
     mazeMapView === "iso" && (mobileIsoEdgeToEdge || (isoImmersiveUi && isMobile));
@@ -8714,7 +8976,7 @@ export default function LabyrinthGame() {
                   WebkitOverflowScrolling: "touch" as const,
                 }
               : isLandscapeCompact && !isMobile
-                ? { alignItems: "stretch", justifyContent: "center" as const }
+              ? { alignItems: "stretch", justifyContent: "center" as const }
                 : isMobile
                   ? {
                       alignItems: "stretch" as const,
@@ -8722,7 +8984,7 @@ export default function LabyrinthGame() {
                       overflowY: "auto",
                       WebkitOverflowScrolling: "touch" as const,
                     }
-                  : {}),
+              : {}),
             ...(isMobile
               ? { paddingTop: "max(12px, env(safe-area-inset-top, 0px))" }
               : { paddingTop: "max(8px, env(safe-area-inset-top, 0px))" }),
@@ -8745,19 +9007,19 @@ export default function LabyrinthGame() {
                   ? "calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px)"
                   : "calc(100dvh - 24px)"
                 : isLandscapeCompact
-                  ? "calc(100dvh - max(16px, env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px)))"
+                ? "calc(100dvh - max(16px, env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px)))"
                   : isMobile
                     ? "calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px)"
-                    : "calc(100dvh - 16px)",
+                : "calc(100dvh - 16px)",
               height: combatActiveFitViewport && !isLandscapeCompact
                 ? isMobile
                   ? "calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px)"
                   : "calc(100dvh - 24px)"
                 : isLandscapeCompact
-                  ? "calc(100dvh - max(16px, env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px)))"
+                ? "calc(100dvh - max(16px, env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px)))"
                   : isMobile
                     ? "calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px)"
-                    : undefined,
+                : undefined,
               minHeight: 0,
               overflowY: combatActiveFitViewport ? "hidden" : "auto",
               WebkitOverflowScrolling: "touch",
@@ -9161,9 +9423,9 @@ export default function LabyrinthGame() {
               const pHp =
                 combatResult?.playerDefeated && combatResult.playerIndex === headerPi
                   ? (combatResult.playerHpAtEnd ?? 0)
-                    : labForCombatFaceoff && !labForCombatFaceoff.eliminatedPlayers.has(headerPi)
-                      ? (labForCombatFaceoff.players[headerPi]?.hp ?? DEFAULT_PLAYER_HP)
-                      : null;
+                  : labForCombatFaceoff && !labForCombatFaceoff.eliminatedPlayers.has(headerPi)
+                    ? (labForCombatFaceoff.players[headerPi]?.hp ?? DEFAULT_PLAYER_HP)
+                    : null;
               const pMax = DEFAULT_PLAYER_HP;
               const pPct = pHp != null ? pHp / pMax : 1;
               const pFill = pHp != null ? (pPct >= 0.66 ? "linear-gradient(90deg, #22cc44, #44ff66)" : pPct >= 0.33 ? "linear-gradient(90deg, #ffaa00, #ffcc44)" : "linear-gradient(90deg, #ff4444, #ff6666)") : "#666";
@@ -9254,8 +9516,8 @@ export default function LabyrinthGame() {
                         ? "minmax(10px, auto) minmax(0, auto) minmax(260px, min(400px, 54vh)) auto minmax(6px, auto)"
                         : "minmax(10px, auto) minmax(0, auto) minmax(156px, 200px) auto minmax(6px, auto)",
                       rowGap: 6,
-                      }
-                    : {}),
+                    }
+                  : {}),
               };
               const combatSpritePx = isLandscapeCompact ? COMBAT_LANDSCAPE_SPRITE_PX : COMBAT_FACEOFF_SPRITE_PX;
               const combatPlayerAvatarPx = isLandscapeCompact ? COMBAT_LANDSCAPE_SPRITE_PX : COMBAT_PLAYER_AVATAR_PX;
@@ -9549,19 +9811,19 @@ export default function LabyrinthGame() {
                         width: "100%",
                         ...(useCombatLandscapeFaceoff
                           ? {
-                              flex: 1,
+                          flex: 1,
                               minHeight: 0,
-                              display: "flex",
-                              flexDirection: "column",
+                          display: "flex",
+                          flexDirection: "column",
                               justifyContent: "center",
-                              alignItems: "center",
+                          alignItems: "center",
                             }
                           : {}),
-                      }}
-                    >
+                        }}
+                      >
                     {combatAutoHintVisible && combatMonsterHintFullText && !combatResult && (
-                    <div
-                      style={{
+                        <div
+                          style={{
                           position: "absolute",
                           top: 6,
                           left: "50%",
@@ -9569,7 +9831,7 @@ export default function LabyrinthGame() {
                           zIndex: 120,
                           width: "min(560px, calc(100% - 24px))",
                           boxSizing: "border-box",
-                        display: "flex",
+                            display: "flex",
                           alignItems: "flex-start",
                         gap: 8,
                           padding: "8px 10px",
@@ -9580,8 +9842,8 @@ export default function LabyrinthGame() {
                           pointerEvents: "auto",
                         }}
                       >
-                        <span
-                          style={{
+                            <span
+                              style={{
                             flex: 1,
                             minWidth: 0,
                             color: "#f0e6cc",
@@ -9592,7 +9854,7 @@ export default function LabyrinthGame() {
                           }}
                         >
                           {combatMonsterHintFullText}
-                        </span>
+                            </span>
                         <button
                           type="button"
                           aria-label="Close hint"
@@ -9617,13 +9879,13 @@ export default function LabyrinthGame() {
                     )}
                     {monsterGltfPath && headerMonsterSprite ? (
                       <div
-                        style={{
+                          style={{
                           position: "relative",
                           display: "flex",
                           flexDirection: "column",
                           alignItems: "center",
                           justifyContent: "center",
-                          width: "100%",
+                            width: "100%",
                           marginBottom: combatActiveFitViewport ? 2 : 4,
                           ...(useCombatLandscapeFaceoff
                             ? { flex: "0 0 auto", minHeight: 0 }
@@ -9698,8 +9960,8 @@ export default function LabyrinthGame() {
                       style={{
                         display: "flex",
                         flexDirection: "column",
-                        alignItems: "center",
-                        justifyContent: "center",
+                            alignItems: "center",
+                            justifyContent: "center",
                         width: "100%",
                         flexShrink: 0,
                         paddingLeft: 4,
@@ -10000,53 +10262,53 @@ export default function LabyrinthGame() {
                             ) : null}
                             {/** Combat toast (resolve summary) shown inline when available. */}
                             {!rolling && combatToast ? (
-                              <div
-                                style={{
-                                  width: "100%",
+                          <div
+                            style={{
+                              width: "100%",
                                   maxWidth: "min(100%, 420px)",
                                   height: COMBAT_HINT_STRIP_PX,
                                   minHeight: COMBAT_HINT_STRIP_PX,
                                   maxHeight: COMBAT_HINT_STRIP_PX,
-                                  flexShrink: 0,
+                              flexShrink: 0,
                                   boxSizing: "border-box",
-                                  display: "flex",
-                                  alignItems: "center",
+                          display: "flex",
+                          alignItems: "center",
                                   justifyContent: "center",
-                                }}
-                              >
-                                <div
+                        }}
+                      >
+                        <div
                                   role="alert"
                                   aria-live="polite"
-                                  style={{
-                                    width: "100%",
+                          style={{
+                            width: "100%",
                                     height: "100%",
                                     boxSizing: "border-box",
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
                                     padding: "4px 8px",
                                     borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
                                     overflow: "hidden",
                                     border: "2px solid rgba(255,204,0,0.38)",
                                     background: "rgba(255,204,0,0.08)",
                                     color: "#eeccaa",
-                                    fontSize: "0.72rem",
+                                fontSize: "0.72rem",
                                     fontWeight: 500,
-                                    textAlign: "center",
+                                textAlign: "center",
                                     lineHeight: 1.28,
-                                  }}
-                                >
+                              }}
+                            >
                                   <span style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" as const, overflow: "hidden", wordBreak: "break-word" }}>
                                     {combatToast.message}
-                                  </span>
+                            </span>
                                 </div>
                               </div>
-                            ) : null}
-                          </div>
+                          ) : null}
+                        </div>
                         ) : (
                           <div
-                            style={{
-                              width: "100%",
+                          style={{
+                            width: "100%",
                               minHeight: landscapeFaceoffDiceViewportH,
                               flexShrink: 0,
                             }}
@@ -10647,9 +10909,9 @@ export default function LabyrinthGame() {
                     </div>
                     </div>
                   )}
-                </div>
-              );
-            })()}
+                        </div>
+                              );
+                            })()}
             <div style={{ height: 2, flexShrink: 0, minHeight: 2 }} />
             <div
               style={{
@@ -10678,29 +10940,29 @@ export default function LabyrinthGame() {
             >
             {/* Outcome + bonus loot render in centered overlay (`showCombatOutcomeCenterOverlay`), not here. */}
             {combatState || combatResult ? (
-              <div
-                style={{
-                  width: "100%",
+                <div
+                  style={{
+                    width: "100%",
                   minHeight: showCombatOutcomeCenterOverlay ? 0 : 8,
-                  flexShrink: 0,
-                }}
+                    flexShrink: 0,
+                  }}
                 aria-hidden
               />
             ) : null}
-            </div>
+                  </div>
             {showCombatOutcomeCenterOverlay ? (
-              <div
+                  <div
                 role="presentation"
-                style={{
+                    style={{
                   position: "absolute",
                   inset: 0,
                   zIndex: 220,
-                  display: "flex",
+                      display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   padding:
                     "max(10px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px))",
-                  boxSizing: "border-box",
+                      boxSizing: "border-box",
                   pointerEvents: "auto",
                   background: "rgba(5, 5, 10, 0.55)",
                   backdropFilter: "blur(3px)",
@@ -10716,13 +10978,13 @@ export default function LabyrinthGame() {
                   aria-label="Combat result"
                   onClick={(e) => e.stopPropagation()}
                   onPointerDown={(e) => e.stopPropagation()}
-                  style={{
+                      style={{
                     width: "min(100%, 440px)",
                     maxWidth: "100%",
                     maxHeight: "min(82dvh, calc(100% - 20px))",
                     overflowY: "auto",
                     WebkitOverflowScrolling: "touch",
-                    boxSizing: "border-box",
+                        boxSizing: "border-box",
                     padding: "14px 16px 16px",
                     borderRadius: 14,
                     background: "linear-gradient(180deg, rgba(26, 24, 32, 0.98) 0%, rgba(10, 10, 14, 0.99) 100%)",
@@ -11018,6 +11280,14 @@ export default function LabyrinthGame() {
         <div
           style={{
             ...mazeZoomControlsStyle,
+            ...(!isMobile && lab && !isoImmersiveUi
+              ? {
+                  width: "100%",
+                  maxWidth: "100%",
+                  boxSizing: "border-box",
+                  alignSelf: "stretch",
+                }
+              : {}),
             ...(isMobile
               ? {
                   width: "100%",
@@ -11051,61 +11321,24 @@ export default function LabyrinthGame() {
         >
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <button
-                onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
-                style={mazeZoomButtonStyle}
-                title="Zoom out"
-              >
-                −
-              </button>
-              <span style={{ fontSize: "0.8rem", color: "#888", minWidth: 36, textAlign: "center" }}>
-                {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
-              </span>
-              <button
-                onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
-                style={mazeZoomButtonStyle}
-                title="Zoom in"
-              >
-                +
-              </button>
+          <button
+            onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
+            style={mazeZoomButtonStyle}
+            title="Zoom out"
+          >
+            −
+          </button>
+          <span style={{ fontSize: "0.8rem", color: "#888", minWidth: 36, textAlign: "center" }}>
+            {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
+          </span>
+          <button
+            onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
+            style={mazeZoomButtonStyle}
+            title="Zoom in"
+          >
+            +
+          </button>
           </div>
-            {mazeMapView === "iso" && lab && !isoImmersiveUi && (isLandscapeCompact || !isMobile) ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => mazeIsoViewRef.current?.resetCameraView()}
-                  style={{
-                    ...mazeViewToggleButtonStyle(false),
-                    minWidth: 52,
-                    padding: "0 8px",
-                    fontSize: "0.68rem",
-                  }}
-                  title="Reset camera to default view behind the player"
-                >
-                  Reset
-                </button>
-                <button
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    mazeIsoViewRef.current?.activateRotate();
-                  }}
-                  onTouchStart={(e) => {
-                    e.preventDefault();
-                    mazeIsoViewRef.current?.activateRotate();
-                  }}
-                  style={{
-                    ...mazeViewToggleButtonStyle(isoCamRotateActive),
-                    minWidth: 56,
-                    padding: "0 8px",
-                    fontSize: "0.68rem",
-                  }}
-                  title="Drag on 3D (or use the mini-map green ring) to orbit; tilt device where supported"
-                >
-                  {isoCamRotateActive ? "Rotating" : "Rotate"}
-                </button>
-              </>
-            ) : null}
           </div>
           {lab && !combatState && !isoImmersiveUi && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -11167,16 +11400,19 @@ export default function LabyrinthGame() {
           {mobileIsoEdgeToEdge && isLandscapeCompact ? (
             <div style={{ display: "flex", alignItems: "center", flexShrink: 0, pointerEvents: "auto" }}>
               {renderHeaderMenuBlock()}
-            </div>
-          ) : null}
         </div>
+          ) : null}
+          </div>
         )}
         <div
           ref={mazeWrapRef}
           className={MAZE_LITE_TEXTURES ? "maze-wrap" : "maze-wrap maze-horror-render"}
           style={{
             ...mazeWrapStyle,
-            marginTop: mobileIsoEdgeToEdge || isLandscapeCompact || isoImmersiveUi ? 0 : MAZE_MARGIN,
+            marginTop:
+              mobileIsoEdgeToEdge || isLandscapeCompact || isoImmersiveUi || (mazeMapView === "iso" && !isMobile)
+                ? 0
+                : MAZE_MARGIN,
             position: "relative",
             ...(mazeIsoFillViewport
               ? {
@@ -11191,14 +11427,14 @@ export default function LabyrinthGame() {
             ...((mazeMapView === "iso" ||
               (mazeMapView === "grid" && isoImmersiveUi))
               ? {
-                  display: "flex",
-                  flexDirection: "column",
+              display: "flex",
+              flexDirection: "column",
                   flex:
                     mazeMapView === "iso" && isoPlayRootViewportFill
                       ? 0
                       : 1,
-                  minHeight: 0,
-                  width: "100%",
+              minHeight: 0,
+              width: "100%",
                 }
               : {}),
           }}
@@ -11248,30 +11484,34 @@ export default function LabyrinthGame() {
                 minWidth: 0,
               }}
             >
-              <MazeIsoView
+          <MazeIsoView
                 ref={mazeIsoViewRef}
-                grid={lab.grid}
-                mapWidth={lab.width}
-                mapHeight={lab.height}
-                playerX={cp.x}
-                playerY={cp.y}
-                facingDx={playerFacing[currentPlayer]?.dx ?? 0}
-                facingDy={playerFacing[currentPlayer]?.dy ?? 1}
-                zoom={mazeZoom}
-                visible
-                onCellClick={handleCellTap}
+            grid={lab.grid}
+            mapWidth={lab.width}
+            mapHeight={lab.height}
+            playerX={cp.x}
+            playerY={cp.y}
+            facingDx={playerFacing[currentPlayer]?.dx ?? 0}
+            facingDy={playerFacing[currentPlayer]?.dy ?? 1}
+            zoom={mazeZoom}
+            visible
+            onCellClick={handleCellTap}
                 touchUi={false}
-                hideOverlayViewButtons={isLandscapeCompact && isMobile && mazeMapView === "iso"}
                 onRotateModeChange={setIsoCamRotateActive}
-                teleportOptions={teleportPicker?.options ?? []}
-                teleportMode={!!teleportPicker}
+            teleportOptions={teleportPicker?.options ?? []}
+            teleportMode={!!teleportPicker}
                 catapultMode={!!catapultPicker}
                 catapultFrom={catapultPicker?.from ?? null}
+                catapultAimClient={
+                  mazeMapView === "iso" && catapultIsoPhase === "pull" ? catapultAimClient : null
+                }
+                catapultTrajectoryPreview={catapultTrajectoryPreview}
+                catapultLockCameraForPull={mazeMapView !== "iso" || catapultIsoPhase === "pull"}
                 magicPortalPreviewOptions={isoMagicPortalPreviewOptions}
                 teleportSourceType={teleportPicker?.sourceType ?? null}
                 focusVersion={currentPlayer}
                 miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
-                fogIntensityMap={fogIntensityMap}
+            fogIntensityMap={fogIntensityMap}
                 combatActive={mazeMapView === "iso" && !!combatState}
                 combatRolling={rolling}
                 combatRollFace={isoCombatRollFace}
@@ -11306,43 +11546,91 @@ export default function LabyrinthGame() {
                 onTouchCameraForwardGrid={mazeMapView === "iso" ? onTouchCameraForwardGrid : undefined}
                 onIsoCameraBearingDeg={mazeMapView === "iso" ? onIsoCameraBearingDeg : undefined}
               />
-              {mazeMapView === "iso" && catapultPicker && catapultDragOffset && (() => {
-                const { dx, dy } = catapultDragOffset;
-                const pull = Math.hypot(dx, dy);
-                if (pull < 8) return null;
-                const lx = -dx / pull;
-                const ly = -dy / pull;
-                const reach = Math.min(46, 10 + pull * 0.2);
-                const cx = 50;
-                const cy = 50;
-                return (
-                  <svg
+              {desktopCollapsedIsoHudOnCanvas ? (
+                <>
+                  <div
                     style={{
                       position: "absolute",
-                      inset: 0,
-                      pointerEvents: "none",
-                      zIndex: 6,
+                      left: "max(10px, env(safe-area-inset-left, 0px))",
+                      bottom: "max(10px, env(safe-area-inset-bottom, 0px))",
+                      zIndex: 25,
+                      pointerEvents: "auto",
                     }}
-                    viewBox="0 0 100 100"
-                    preserveAspectRatio="xMidYMid meet"
-                    aria-hidden
                   >
-                    <line
-                      x1={cx}
-                      y1={cy}
-                      x2={cx + lx * reach}
-                      y2={cy + ly * reach}
-                      stroke="#ffcc66"
-                      strokeWidth={1.1}
-                      strokeDasharray="3.2 2.1"
-                      strokeLinecap="round"
-                      opacity={0.95}
-                    />
-                    <circle cx={cx} cy={cy} r={2.4} fill="#fff3c4" opacity={0.92} />
-                  </svg>
-                );
-              })()}
-              {catapultPicker && (
+                    <div
+                      style={{
+                        ...controlsSectionStyle,
+                        borderColor: "#554466",
+                        marginTop: 0,
+                        padding: 6,
+                        boxSizing: "border-box",
+                        background: "rgba(14,16,26,0.92)",
+                        borderRadius: 10,
+                        boxShadow: "0 8px 28px rgba(0,0,0,0.45)",
+                      }}
+                    >
+                      <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff" }}>2D mini map</div>
+                      <MobileLandscapeMinimapOrbitWrap
+                        mazeIsoViewRef={mazeIsoViewRef}
+                        diameter={ISO_HUD_MOVE_RING_PX}
+                        lab={lab}
+                        currentPlayer={currentPlayer}
+                        playerFacing={playerFacing}
+                        fogIntensityMap={fogIntensityMap}
+                        playerCells={playerCells}
+                        isoMiniMapZoom={isoMiniMapZoom}
+                        setIsoMiniMapZoom={setIsoMiniMapZoom}
+                        isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                        onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                        bearingAngleDeg={isoCameraBearingDeg}
+                      />
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      position: "absolute",
+                      right: "max(10px, env(safe-area-inset-right, 0px))",
+                      bottom: "max(10px, env(safe-area-inset-bottom, 0px))",
+                      zIndex: 25,
+                      pointerEvents: "auto",
+                    }}
+                  >
+                    <div
+                      style={{
+                        ...controlsSectionStyle,
+                        borderColor: "#554466",
+                        marginTop: 0,
+                        padding: 6,
+                        boxSizing: "border-box",
+                        background: "rgba(14,16,26,0.92)",
+                        borderRadius: 10,
+                        boxShadow: "0 8px 28px rgba(0,0,0,0.45)",
+                      }}
+                    >
+                      <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff" }}>Move</div>
+                      <IsoHudJoystickMoveRing
+                        diameter={ISO_HUD_MOVE_RING_PX}
+                        dimPadOverMinimap={false}
+                        placement="standalone"
+                        canMoveUp={canMoveUp}
+                        canMoveDown={canMoveDown}
+                        canMoveLeft={canMoveLeft}
+                        canMoveRight={canMoveRight}
+                        relativeForward={relativeForward}
+                        relativeBackward={relativeBackward}
+                        relativeLeft={relativeLeft}
+                        relativeRight={relativeRight}
+                        doMove={doMoveStrafe}
+                        scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+                        focusDisabled={
+                          winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+                        }
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {catapultPicker && (mazeMapView !== "iso" || catapultIsoPhase === "pull") && (
                 <div
                   style={{
                     position: "absolute",
@@ -11357,14 +11645,16 @@ export default function LabyrinthGame() {
                     e.preventDefault();
                     e.stopPropagation();
                     const el = e.currentTarget;
-                    const rect = el.getBoundingClientRect();
                     catapultDragRef.current = {
-                      startX: rect.left + rect.width / 2,
-                      startY: rect.top + rect.height / 2,
+                      startX: e.clientX,
+                      startY: e.clientY,
                       cellX: cp.x,
                       cellY: cp.y,
                     };
                     setCatapultDragOffset({ dx: 0, dy: 0 });
+                    if (mazeMapView === "iso") {
+                      setCatapultAimClient({ x: e.clientX, y: e.clientY });
+                    }
                     el.setPointerCapture(e.pointerId);
                   }}
                   onPointerMove={(e) => {
@@ -11375,36 +11665,29 @@ export default function LabyrinthGame() {
                       dx: e.clientX - d.startX,
                       dy: e.clientY - d.startY,
                     });
+                    if (mazeMapView === "iso") {
+                      setCatapultAimClient({ x: e.clientX, y: e.clientY });
+                    }
                   }}
                   onPointerCancel={() => {
                     catapultDragRef.current = null;
                     setCatapultDragOffset(null);
+                    setCatapultAimClient(null);
                   }}
                   aria-hidden
                 />
               )}
               {isoImmersiveUi && (
                 <>
-                  {(!!pendingCombatOffer ||
-                    !!catapultPicker ||
-                    !!teleportPicker ||
-                    (magicPortalReady && !teleportPicker) ||
-                    (immersiveInventoryPick !== null && showMoveGrid)) && (
+                  {!!pendingCombatOffer && (
                     <div
                       style={{
                         position: "absolute",
                         left: "max(10px, env(safe-area-inset-left, 0px))",
                         right: "max(10px, env(safe-area-inset-right, 0px))",
-                        ...(pendingCombatOffer
-                          ? {
-                              bottom: "auto",
-                              top: "calc(max(10px, env(safe-area-inset-top, 0px)) + 52px)",
-                              maxHeight: "min(32vh, 220px)",
-                            }
-                          : {
-                              bottom: "calc(max(12px, env(safe-area-inset-bottom, 0px)) + 172px)",
-                              maxHeight: "min(38vh, 280px)",
-                            }),
+                        bottom: "auto",
+                        top: "calc(max(10px, env(safe-area-inset-top, 0px)) + 52px)",
+                        maxHeight: "min(32vh, 220px)",
                         zIndex: ISO_IMMERSIVE_HUD_Z + 6,
                         pointerEvents: "auto",
                         overflowY: "auto",
@@ -11412,11 +11695,11 @@ export default function LabyrinthGame() {
                         borderRadius: 16,
                         padding: "12px 14px",
                         background: "linear-gradient(180deg, rgba(22,24,36,0.97) 0%, rgba(12,13,22,0.99) 100%)",
-                        border: pendingCombatOffer ? "1px solid rgba(255,102,68,0.35)" : "1px solid rgba(0,255,136,0.25)",
+                        border: "1px solid rgba(255,102,68,0.35)",
                         boxShadow: "0 12px 40px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.05)",
                       }}
                     >
-                      {pendingCombatOffer && lab ? (
+                      {lab ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#9aa0b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
                             Combat
@@ -11449,132 +11732,6 @@ export default function LabyrinthGame() {
                             )}
                           </div>
                         </div>
-                      ) : catapultPicker ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                          <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#9aa0b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                            Slingshot
-                          </div>
-                          <p style={{ margin: 0, fontSize: "0.82rem", color: "#c8cdd8", lineHeight: 1.45 }}>
-                            Drag on the <strong style={{ color: "#ffcc66" }}>3D view</strong> from the center of the screen to pull the sling (aim + power), then release. Switch to <strong style={{ color: "#ffcc66" }}>Grid</strong> if you prefer the top-down slingshot.
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCatapultMode(false);
-                              setCatapultPicker(null);
-                              setCatapultDragOffset(null);
-                            }}
-                            style={{
-                              ...buttonStyle,
-                              alignSelf: "flex-start",
-                              background: "#664400",
-                              color: "#ffeecc",
-                              border: "1px solid #ffcc00",
-                              fontSize: "0.8rem",
-                              padding: "8px 14px",
-                            }}
-                          >
-                            Cancel slingshot
-                          </button>
-                        </div>
-                      ) : teleportPicker ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                          <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#9aa0b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                            Teleport
-                          </div>
-                          <p style={{ margin: 0, fontSize: "0.82rem", color: "#c8cdd8", lineHeight: 1.45 }}>
-                            Tap a highlighted cell on the map, use <strong style={{ color: "#aa66ff" }}>Random</strong>, or open the header menu to cancel.
-                          </p>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                manualTeleportPendingRef.current = false;
-                                setTeleportPicker(null);
-                              }}
-                              style={{ ...buttonStyle, background: "#664400", fontSize: "0.78rem", padding: "6px 12px" }}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const opts = teleportPicker.options;
-                                if (opts.length === 0) return;
-                                const pick = opts[Math.floor(Math.random() * opts.length)]!;
-                                handleTeleportSelect(pick[0], pick[1]);
-                              }}
-                              style={{
-                                ...buttonStyle,
-                                background: "#2a2048",
-                                color: "#e8ddff",
-                                border: "1px solid #8866cc",
-                                fontSize: "0.78rem",
-                                padding: "6px 12px",
-                              }}
-                            >
-                              Random destination
-                            </button>
-                          </div>
-                        </div>
-                      ) : magicPortalReady ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                          <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#9aa0b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                            Magic cell
-                          </div>
-                          <p style={{ margin: 0, fontSize: "0.82rem", color: "#c8cdd8", lineHeight: 1.45 }}>
-                            You are standing on a magic portal. In <strong style={{ color: "#c49cff" }}>3D</strong>, <strong style={{ color: "#aa66ff" }}>purple beacons</strong> mark valid destinations (same idea as the violet magic tiles on the grid). Open the picker to teleport.
-                          </p>
-                          <button type="button" onClick={handleMagicPortalOpen} style={{ ...buttonStyle, ...secondaryButtonStyle, alignSelf: "flex-start" }}>
-                            Open magic portal
-                          </button>
-                        </div>
-                      ) : immersiveInventoryPick !== null && showMoveGrid ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                            <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "#00ff88" }}>
-                              {immersiveInventoryPick === "bomb"
-                                ? "Bomb"
-                                : STORED_ARTIFACT_TITLE[immersiveInventoryPick]}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setImmersiveInventoryPick(null)}
-                              style={{
-                                ...secondaryButtonStyle,
-                                padding: "4px 10px",
-                                fontSize: "0.72rem",
-                                border: "1px solid #555",
-                                background: "#2a2a35",
-                                color: "#aaa",
-                              }}
-                            >
-                              Close
-                            </button>
-                          </div>
-                          <p style={{ margin: 0, fontSize: "0.8rem", color: "#a8aeb8", lineHeight: 1.5 }}>
-                            {immersiveInventoryPick === "bomb"
-                              ? "Explodes a 3×3 area on the map (uses 1 move while not in combat)."
-                              : STORED_ARTIFACT_TOOLTIP[immersiveInventoryPick]}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={applyImmersiveInventoryPick}
-                            disabled={immersiveApplyDisabled}
-                            style={{
-                              ...buttonStyle,
-                              alignSelf: "flex-start",
-                              opacity: immersiveApplyDisabled ? 0.45 : 1,
-                              fontSize: "0.82rem",
-                              padding: "8px 16px",
-                            }}
-                          >
-                            Use{" "}
-                            {immersiveInventoryPick === "bomb"
-                              ? "bomb"
-                              : STORED_ARTIFACT_TITLE[immersiveInventoryPick]}
-                          </button>
-                        </div>
                       ) : null}
                     </div>
                   )}
@@ -11587,10 +11744,14 @@ export default function LabyrinthGame() {
                       paddingLeft: "max(8px, env(safe-area-inset-left, 0px))",
                       paddingRight: "max(8px, env(safe-area-inset-right, 0px))",
                       paddingBottom: "max(10px, env(safe-area-inset-bottom, 0px))",
-                      paddingTop: 28,
+                      paddingTop: 10,
                       zIndex: ISO_IMMERSIVE_HUD_Z,
                       pointerEvents: "none",
                       background: "linear-gradient(0deg, rgba(5,6,12,0.94) 0%, rgba(5,6,12,0.65) 45%, transparent 100%)",
+                      display: "flex",
+                      flexDirection: "column",
+                      justifyContent: "flex-end",
+                      gap: 8,
                     }}
                   >
                     <div
@@ -11603,6 +11764,7 @@ export default function LabyrinthGame() {
                         gap: 10,
                         width: "100%",
                         pointerEvents: "none",
+                        flexShrink: 0,
                         minHeight: splitIsoHudOppositeScreen && showMoveGrid && lab ? ISO_HUD_MOVE_RING_PX + 4 : undefined,
                       }}
                     >
@@ -11683,17 +11845,70 @@ export default function LabyrinthGame() {
                                 zIndex: 1,
                                 flex: "none",
                                 minWidth: 0,
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                justifyContent: "flex-end",
+                                gap: 8,
+                                maxWidth: "min(360px, 50vw)",
                               }
                             : {
                                 flex: 1,
                                 minWidth: 0,
                                 display: "flex",
+                                flexDirection: "column",
                                 justifyContent: "center",
-                                alignItems: "flex-end",
+                                alignItems: "center",
                                 paddingBottom: 4,
+                                gap: 8,
                               }),
                         }}
                       >
+                        {(canOfferSlingshotDock && !catapultPicker) ||
+                        catapultPicker ||
+                        teleportPicker ||
+                        (magicPortalReady && !teleportPicker) ||
+                        (immersiveInventoryPick !== null && showMoveGrid) ? (
+                          <div
+                            style={{
+                              width: "100%",
+                              maxHeight: "min(26vh, 188px)",
+                              overflowY: "auto",
+                              WebkitOverflowScrolling: "touch",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 8,
+                              alignItems: "stretch",
+                            }}
+                          >
+                            <IsoBottomContextPanels
+                              canOfferSlingshotDock={canOfferSlingshotDock}
+                              catapultPicker={catapultPicker}
+                              teleportPicker={teleportPicker}
+                              magicPortalReady={magicPortalReady}
+                              immersiveInventoryPick={immersiveInventoryPick}
+                              showMoveGrid={showMoveGrid}
+                              mazeMapView={mazeMapView}
+                              catapultIsoPhase={catapultIsoPhase}
+                              slingshotCellAvailable={slingshotCellAvailable}
+                              cp={cp}
+                              openSlingshotFromDock={openSlingshotFromDock}
+                              catapultDragRef={catapultDragRef}
+                              setCatapultMode={setCatapultMode}
+                              setCatapultPicker={setCatapultPicker}
+                              setCatapultDragOffset={setCatapultDragOffset}
+                              setCatapultAimClient={setCatapultAimClient}
+                              setCatapultIsoPhase={setCatapultIsoPhase}
+                              manualTeleportPendingRef={manualTeleportPendingRef}
+                              setTeleportPicker={setTeleportPicker}
+                              handleTeleportSelect={handleTeleportSelect}
+                              handleMagicPortalOpen={handleMagicPortalOpen}
+                              setImmersiveInventoryPick={setImmersiveInventoryPick}
+                              applyImmersiveInventoryPick={applyImmersiveInventoryPick}
+                              immersiveApplyDisabled={immersiveApplyDisabled}
+                            />
+                          </div>
+                        ) : null}
                         <div
                           style={{
                             display: "flex",
@@ -11756,9 +11971,15 @@ export default function LabyrinthGame() {
                                       flex: "0 0 auto",
                                       minWidth: 52,
                                     }}
-                                    title={bomb ? "Bomb" : STORED_ARTIFACT_TOOLTIP[id]}
+                                    title={
+                                      bomb
+                                        ? "Bomb"
+                                        : id === "catapultCharge"
+                                          ? "Slingshot charge — use from any tile (consumes 1 charge)."
+                                          : STORED_ARTIFACT_TOOLTIP[id]
+                                    }
                                   >
-                                    <BottomDockInventoryIcon variant={bomb ? "bomb" : storedArtifactIconVariant(id)} />
+                                    <BottomDockInventoryIcon variant={dockActionIconVariant(id)} />
                                     <span style={{ fontSize: "0.62rem", fontWeight: 700 }}>×{n}</span>
                                   </button>
                                 );
@@ -11827,6 +12048,7 @@ export default function LabyrinthGame() {
                                 winner !== null || !lab || (lab.eliminatedPlayers.has(currentPlayer) ?? false)
                               }
                               bearingAngleDeg={isoCameraBearingDeg}
+                              mazeIsoViewRef={mazeIsoViewRef}
                             />
                           )
                         ) : null}
@@ -12516,6 +12738,22 @@ export default function LabyrinthGame() {
               overflowY: "auto",
             }}
           >
+            {canOfferSlingshotDock && !catapultPicker && (
+              <button
+                type="button"
+                onClick={openSlingshotFromDock}
+                style={{
+                  ...buttonStyle,
+                  fontSize: "0.75rem",
+                  padding: "6px 10px",
+                  background: "#1a3d2a",
+                  color: "#b8ffcc",
+                  border: "1px solid #00ff88",
+                }}
+              >
+                Use slingshot
+              </button>
+            )}
             {catapultPicker && (
           <button
             type="button"
@@ -12549,7 +12787,7 @@ export default function LabyrinthGame() {
                   border: "1px solid #aa66ff",
                 }}
               >
-                Magic portal
+                Use magic portal
               </button>
             )}
             {dockActions.length > 0 ? (
@@ -12577,10 +12815,18 @@ export default function LabyrinthGame() {
                           minWidth: MOBILE_ARTIFACT_CHIP_W,
                           fontSize: "0.7rem",
                       }}
-                      title={bomb ? "Bomb" : STORED_ARTIFACT_TOOLTIP[id]}
+                      title={
+                        bomb
+                          ? "Bomb"
+                          : id === "catapultCharge"
+                            ? "Slingshot charge — use from any tile."
+                            : STORED_ARTIFACT_TOOLTIP[id]
+                      }
                     >
-                        <ArtifactIcon variant={bomb ? "bomb" : storedArtifactIconVariant(id)} size={24} />
-                        <span style={{ fontWeight: 700 }}>{bomb ? "Bomb" : STORED_ARTIFACT_TITLE[id]} ×{n}</span>
+                        <ArtifactIcon variant={dockActionIconVariant(id)} size={24} />
+                        <span style={{ fontWeight: 700 }}>
+                          {bomb ? "Bomb" : id === "catapultCharge" ? "Slingshot" : STORED_ARTIFACT_TITLE[id]} ×{n}
+                        </span>
                     </button>
                   );
                 })}
@@ -12596,7 +12842,14 @@ export default function LabyrinthGame() {
                   opacity: mobileApplyDisabled ? 0.45 : 1,
                   }}
                 >
-                  Use {mobileDockAction === "bomb" ? "bomb" : mobileDockAction != null ? STORED_ARTIFACT_TITLE[mobileDockAction] : "…"}
+                  Use{" "}
+                  {mobileDockAction === "bomb"
+                    ? "bomb"
+                    : mobileDockAction === "catapultCharge"
+                      ? "slingshot"
+                      : mobileDockAction != null
+                        ? STORED_ARTIFACT_TITLE[mobileDockAction]
+                        : "…"}
                 </button>
               </>
             ) : (
@@ -12607,25 +12860,33 @@ export default function LabyrinthGame() {
       )}
 
       {isMobile && showMoveGrid && lab && !isoImmersiveUi && splitIsoHudMapAndMove ? (
-        <>
-          {mazeMapView === "iso" ? (
             <div
               style={{
                 position: "fixed",
-                left: "max(8px, env(safe-area-inset-left, 0px))",
+            left: "max(8px, env(safe-area-inset-left, 0px))",
+                right: "max(8px, env(safe-area-inset-right, 0px))",
                 bottom: "max(36px, calc(20px + env(safe-area-inset-bottom, 0px)))",
                 zIndex: 114,
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "flex-end",
+            justifyContent: "space-between",
+            gap: 8,
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              pointerEvents: "auto",
+              flexShrink: 0,
                 padding: "8px 10px",
                 borderRadius: 10,
                 background: "rgba(26,26,36,0.92)",
                 border: "1px solid #444",
                 boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
-                pointerEvents: "auto",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-              }}
-            >
+            }}
+          >
+            {mazeMapView === "iso" ? (
               <MobileLandscapeMinimapOrbitWrap
                 mazeIsoViewRef={mazeIsoViewRef}
                 diameter={ISO_HUD_MOVE_RING_PX}
@@ -12640,22 +12901,70 @@ export default function LabyrinthGame() {
                 onOpenGrid={switchToGridAndFocusCurrentPlayer}
                 bearingAngleDeg={isoCameraBearingDeg}
               />
-            </div>
-          ) : null}
-          <div
+            ) : null}
+          </div>
+          {(canOfferSlingshotDock && !catapultPicker) ||
+          catapultPicker ||
+          teleportPicker ||
+          (magicPortalReady && !teleportPicker) ||
+          (immersiveInventoryPick !== null && showMoveGrid) ? (
+            <div
               style={{
-                position: "fixed",
-                right: "max(8px, env(safe-area-inset-right, 0px))",
-                bottom: "max(36px, calc(20px + env(safe-area-inset-bottom, 0px)))",
-                zIndex: 114,
-                padding: "8px 10px",
+                pointerEvents: "auto",
+                flex: 1,
+                minWidth: 0,
+                maxHeight: "min(34vh, 210px)",
+                overflowY: "auto",
+                WebkitOverflowScrolling: "touch",
+                padding: "6px 8px",
                 borderRadius: 10,
                 background: "rgba(26,26,36,0.92)",
                 border: "1px solid #444",
                 boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
-                pointerEvents: "auto",
               }}
             >
+              <IsoBottomContextPanels
+                dense
+                canOfferSlingshotDock={canOfferSlingshotDock}
+                catapultPicker={catapultPicker}
+                teleportPicker={teleportPicker}
+                magicPortalReady={magicPortalReady}
+                immersiveInventoryPick={immersiveInventoryPick}
+                showMoveGrid={showMoveGrid}
+                mazeMapView={mazeMapView}
+                catapultIsoPhase={catapultIsoPhase}
+                slingshotCellAvailable={slingshotCellAvailable}
+                cp={cp}
+                openSlingshotFromDock={openSlingshotFromDock}
+                catapultDragRef={catapultDragRef}
+                setCatapultMode={setCatapultMode}
+                setCatapultPicker={setCatapultPicker}
+                setCatapultDragOffset={setCatapultDragOffset}
+                setCatapultAimClient={setCatapultAimClient}
+                setCatapultIsoPhase={setCatapultIsoPhase}
+                manualTeleportPendingRef={manualTeleportPendingRef}
+                setTeleportPicker={setTeleportPicker}
+                handleTeleportSelect={handleTeleportSelect}
+                handleMagicPortalOpen={handleMagicPortalOpen}
+                setImmersiveInventoryPick={setImmersiveInventoryPick}
+                applyImmersiveInventoryPick={applyImmersiveInventoryPick}
+                immersiveApplyDisabled={immersiveApplyDisabled}
+              />
+            </div>
+          ) : (
+            <div style={{ flex: 1, minWidth: 0, minHeight: 0 }} aria-hidden />
+          )}
+          <div
+                style={{
+              pointerEvents: "auto",
+              flexShrink: 0,
+              padding: "8px 10px",
+              borderRadius: 10,
+              background: "rgba(26,26,36,0.92)",
+              border: "1px solid #444",
+              boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+            }}
+          >
             <IsoHudJoystickMoveRing
               outerRef={mobileDockExpandedMovePadRef}
               diameter={ISO_HUD_MOVE_RING_PX}
@@ -12676,50 +12985,109 @@ export default function LabyrinthGame() {
               }
             />
           </div>
-        </>
+        </div>
       ) : isMobile && showMoveGrid && lab && !isoImmersiveUi ? (
         <div
-                style={{
+                  style={{
             position: "fixed",
             right: "max(8px, env(safe-area-inset-right, 0px))",
             bottom: "max(36px, calc(20px + env(safe-area-inset-bottom, 0px)))",
             zIndex: 114,
-            padding: "8px 10px",
-            borderRadius: 10,
-            background: "rgba(26,26,36,0.92)",
-            border: "1px solid #444",
-            boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
             pointerEvents: "auto",
+                    display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-end",
+            gap: 8,
+            maxWidth: "min(92vw, 304px)",
           }}
         >
-          <CircularIsoMinimapMoveHud
-            outerRef={mobileDockExpandedMovePadRef}
-            diameter={ISO_HUD_MOVE_RING_PX}
-            showMinimap={mazeMapView === "iso"}
-            lab={lab}
-            currentPlayer={currentPlayer}
-            playerFacing={playerFacing}
-            fogIntensityMap={fogIntensityMap}
-            playerCells={playerCells}
-            isoMiniMapZoom={isoMiniMapZoom}
-            setIsoMiniMapZoom={setIsoMiniMapZoom}
-            isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-            onOpenGrid={switchToGridAndFocusCurrentPlayer}
-            canMoveUp={canMoveUp}
-            canMoveDown={canMoveDown}
-            canMoveLeft={canMoveLeft}
-            canMoveRight={canMoveRight}
-            relativeForward={relativeForward}
-            relativeBackward={relativeBackward}
-            relativeLeft={relativeLeft}
-            relativeRight={relativeRight}
-            doMove={doMoveStrafe}
-            scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
-            focusDisabled={
-              winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
-            }
-            bearingAngleDeg={isoCameraBearingDeg}
-          />
+          {(canOfferSlingshotDock && !catapultPicker) ||
+          catapultPicker ||
+          teleportPicker ||
+          (magicPortalReady && !teleportPicker) ||
+          (immersiveInventoryPick !== null && showMoveGrid) ? (
+            <div
+              style={{
+                width: "100%",
+                maxHeight: "min(32vh, 220px)",
+                overflowY: "auto",
+                WebkitOverflowScrolling: "touch",
+                padding: "8px 10px",
+                borderRadius: 10,
+                background: "rgba(26,26,36,0.92)",
+                border: "1px solid #444",
+                boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+                boxSizing: "border-box",
+              }}
+            >
+              <IsoBottomContextPanels
+                dense
+                canOfferSlingshotDock={canOfferSlingshotDock}
+                catapultPicker={catapultPicker}
+                teleportPicker={teleportPicker}
+                magicPortalReady={magicPortalReady}
+                immersiveInventoryPick={immersiveInventoryPick}
+                showMoveGrid={showMoveGrid}
+                mazeMapView={mazeMapView}
+                catapultIsoPhase={catapultIsoPhase}
+                slingshotCellAvailable={slingshotCellAvailable}
+                cp={cp}
+                openSlingshotFromDock={openSlingshotFromDock}
+                catapultDragRef={catapultDragRef}
+                setCatapultMode={setCatapultMode}
+                setCatapultPicker={setCatapultPicker}
+                setCatapultDragOffset={setCatapultDragOffset}
+                setCatapultAimClient={setCatapultAimClient}
+                setCatapultIsoPhase={setCatapultIsoPhase}
+                manualTeleportPendingRef={manualTeleportPendingRef}
+                setTeleportPicker={setTeleportPicker}
+                handleTeleportSelect={handleTeleportSelect}
+                handleMagicPortalOpen={handleMagicPortalOpen}
+                setImmersiveInventoryPick={setImmersiveInventoryPick}
+                applyImmersiveInventoryPick={applyImmersiveInventoryPick}
+                immersiveApplyDisabled={immersiveApplyDisabled}
+              />
+            </div>
+          ) : null}
+          <div
+            style={{
+              padding: "8px 10px",
+              borderRadius: 10,
+              background: "rgba(26,26,36,0.92)",
+              border: "1px solid #444",
+              boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+            }}
+          >
+            <CircularIsoMinimapMoveHud
+              outerRef={mobileDockExpandedMovePadRef}
+              diameter={ISO_HUD_MOVE_RING_PX}
+              showMinimap={mazeMapView === "iso"}
+              lab={lab}
+              currentPlayer={currentPlayer}
+              playerFacing={playerFacing}
+              fogIntensityMap={fogIntensityMap}
+              playerCells={playerCells}
+              isoMiniMapZoom={isoMiniMapZoom}
+              setIsoMiniMapZoom={setIsoMiniMapZoom}
+              isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+              onOpenGrid={switchToGridAndFocusCurrentPlayer}
+              canMoveUp={canMoveUp}
+              canMoveDown={canMoveDown}
+              canMoveLeft={canMoveLeft}
+              canMoveRight={canMoveRight}
+              relativeForward={relativeForward}
+              relativeBackward={relativeBackward}
+              relativeLeft={relativeLeft}
+              relativeRight={relativeRight}
+              doMove={doMoveStrafe}
+              scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+              focusDisabled={
+                winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+              }
+              bearingAngleDeg={isoCameraBearingDeg}
+              mazeIsoViewRef={mazeIsoViewRef}
+            />
+          </div>
         </div>
       ) : null}
 
@@ -12890,7 +13258,92 @@ export default function LabyrinthGame() {
             : {}),
         }}
       >
+        {canOfferSlingshotDock && !catapultPicker && !isMobile && (
+          <button
+            type="button"
+            onClick={openSlingshotFromDock}
+            style={{
+              ...buttonStyle,
+              width: "100%",
+              marginBottom: 8,
+              fontSize: "0.85rem",
+              padding: "8px 12px",
+              fontWeight: "bold",
+              background: "#1a3d2a",
+              color: "#b8ffcc",
+              border: "2px solid #00ff88",
+              borderRadius: 8,
+              boxShadow: "0 0 12px rgba(0,255,136,0.2)",
+            }}
+          >
+            Use slingshot
+          </button>
+        )}
         {catapultPicker && !isMobile && (
+          <div style={{ width: "100%", marginBottom: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+            {mazeMapView === "iso" && catapultIsoPhase === "orient" ? (
+              <p style={{ margin: 0, fontSize: "0.74rem", color: "#c8cdd8", lineHeight: 1.4 }}>
+                <strong style={{ color: "#ffcc66" }}>Step 1 — Orient.</strong> Orbit the 3D view, then tap{" "}
+                <strong style={{ color: "#00ff88" }}>Ready to aim</strong>.
+              </p>
+            ) : mazeMapView === "iso" ? (
+              <p style={{ margin: 0, fontSize: "0.74rem", color: "#c8cdd8", lineHeight: 1.4 }}>
+                <strong style={{ color: "#ffcc66" }}>Step 2 — Pull.</strong> Drag on the 3D view, then release.
+              </p>
+            ) : (
+              <p style={{ margin: 0, fontSize: "0.74rem", color: "#c8cdd8", lineHeight: 1.4 }}>
+                Drag on the <strong style={{ color: "#ffcc66" }}>grid</strong> from your tile to aim, then release.
+              </p>
+            )}
+            {mazeMapView === "iso" && catapultIsoPhase === "orient" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  catapultDragRef.current = null;
+                  setCatapultDragOffset(null);
+                  setCatapultAimClient(null);
+                  setCatapultIsoPhase("pull");
+                }}
+                style={{
+                  ...buttonStyle,
+                  width: "100%",
+                  fontSize: "0.85rem",
+                  padding: "8px 12px",
+                  fontWeight: "bold",
+                  background: "#1a3d2a",
+                  color: "#b8ffcc",
+                  border: "2px solid #00ff88",
+                  borderRadius: 8,
+                  boxShadow: "0 0 12px rgba(0,255,136,0.2)",
+                }}
+              >
+                Ready to aim (step 2)
+              </button>
+            ) : null}
+            {mazeMapView === "iso" && catapultIsoPhase === "pull" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  catapultDragRef.current = null;
+                  setCatapultDragOffset(null);
+                  setCatapultAimClient(null);
+                  setCatapultIsoPhase("orient");
+                }}
+                style={{
+                  ...buttonStyle,
+                  width: "100%",
+                  fontSize: "0.82rem",
+                  padding: "8px 12px",
+                  fontWeight: "bold",
+                  background: "#2a2830",
+                  color: "#ccc",
+                  border: "2px solid #666",
+                  borderRadius: 8,
+                }}
+              >
+                Adjust camera (step 1)
+              </button>
+            ) : null}
           <button
             type="button"
             onClick={() => {
@@ -12901,7 +13354,6 @@ export default function LabyrinthGame() {
             style={{
               ...buttonStyle,
               width: "100%",
-              marginBottom: 8,
               fontSize: "0.85rem",
               padding: "8px 12px",
               fontWeight: "bold",
@@ -12914,6 +13366,7 @@ export default function LabyrinthGame() {
           >
             Cancel slingshot
           </button>
+          </div>
         )}
         {magicPortalReady && !isMobile && (
           <button
@@ -12938,7 +13391,7 @@ export default function LabyrinthGame() {
                 : `Opens the teleport picker. If you do not choose within ${MAGIC_TELEPORT_PICK_IDLE_MS / 1000}s, a random valid destination is picked.`
             }
           >
-            Magic portal
+            Use magic portal
               </button>
         )}
         {isMobile ? (
@@ -12987,6 +13440,30 @@ export default function LabyrinthGame() {
                   <span style={{ flexShrink: 0, fontSize: "0.9rem", color: "#666" }}>▲ Swipe up</span>
                 </div>
               </div>
+              {canOfferSlingshotDock && !catapultPicker && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openSlingshotFromDock();
+                  }}
+                  style={{
+                    ...buttonStyle,
+                    width: "100%",
+                    flexShrink: 0,
+                    fontSize: "0.8rem",
+                    padding: "8px 12px",
+                    fontWeight: "bold",
+                    background: "#1a3d2a",
+                    color: "#b8ffcc",
+                    border: "2px solid #00ff88",
+                    borderRadius: 8,
+                    boxShadow: "0 0 12px rgba(0,255,136,0.2)",
+                  }}
+                >
+                  Use slingshot
+                </button>
+              )}
               {magicPortalReady && (
                 <button
                   type="button"
@@ -13013,7 +13490,7 @@ export default function LabyrinthGame() {
                       : `Opens the teleport picker. If you do not choose within ${MAGIC_TELEPORT_PICK_IDLE_MS / 1000}s, a random valid destination is picked.`
                   }
                 >
-                  Magic portal
+                  Use magic portal
                 </button>
               )}
             </div>
@@ -13049,7 +13526,7 @@ export default function LabyrinthGame() {
               <span style={{ fontSize: "0.75rem", color: "#666" }}>{desktopControlsCollapsed ? "▲ Expand" : "▼ Collapse"}</span>
             </div>
 
-            {desktopDockCollapsedMapMoveStrip ? (
+            {desktopDockCollapsedGridMapMoveStrip ? (
               <div
                 style={{
                   display: "flex",
@@ -13073,37 +13550,20 @@ export default function LabyrinthGame() {
                     }}
                   >
                     <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff" }}>2D mini map</div>
-                    {mazeMapView === "iso" ? (
-                      <MobileLandscapeMinimapOrbitWrap
-                        mazeIsoViewRef={mazeIsoViewRef}
-                        diameter={ISO_HUD_MOVE_RING_PX}
-                        lab={lab}
-                        currentPlayer={currentPlayer}
-                        playerFacing={playerFacing}
-                        fogIntensityMap={fogIntensityMap}
-                        playerCells={playerCells}
-                        isoMiniMapZoom={isoMiniMapZoom}
-                        setIsoMiniMapZoom={setIsoMiniMapZoom}
-                        isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-                        onOpenGrid={switchToGridAndFocusCurrentPlayer}
-                        bearingAngleDeg={isoCameraBearingDeg}
-                      />
-                    ) : (
-                      <IsoHudMinimapCircle
-                        diameter={ISO_HUD_MOVE_RING_PX}
-                        lab={lab}
-                        currentPlayer={currentPlayer}
-                        playerFacing={playerFacing}
-                        fogIntensityMap={fogIntensityMap}
-                        playerCells={playerCells}
-                        isoMiniMapZoom={isoMiniMapZoom}
-                        setIsoMiniMapZoom={setIsoMiniMapZoom}
-                        isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-                        onOpenGrid={switchToGridAndFocusCurrentPlayer}
-                        playerCenteredRotate
-                        bearingAngleDeg={isoCameraBearingDeg}
-                      />
-                    )}
+                    <IsoHudMinimapCircle
+                      diameter={ISO_HUD_MOVE_RING_PX}
+                      lab={lab}
+                      currentPlayer={currentPlayer}
+                      playerFacing={playerFacing}
+                      fogIntensityMap={fogIntensityMap}
+                      playerCells={playerCells}
+                      isoMiniMapZoom={isoMiniMapZoom}
+                      setIsoMiniMapZoom={setIsoMiniMapZoom}
+                      isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                      onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                      playerCenteredRotate
+                      bearingAngleDeg={isoCameraBearingDeg}
+                    />
                   </div>
                 </div>
                 <div style={{ flexShrink: 0 }}>
@@ -13329,30 +13789,30 @@ export default function LabyrinthGame() {
                         Turn
                       </div>
                       <div style={{ display: "flex", gap: 8, width: "100%", marginTop: 6 }}>
-                        <button
-                          type="button"
-                          onClick={scrollToCurrentPlayerOnMap}
-                          disabled={
-                            winner !== null ||
-                            !lab ||
-                            (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
-                          }
-                          style={{
-                            ...buttonStyle,
-                            ...secondaryButtonStyle,
-                            flex: 1,
-                            minWidth: 0,
-                            fontSize: "0.85rem",
-                            padding: "8px 12px",
-                          }}
-                          title="Scroll the maze so the active player’s cell is centered"
-                        >
-                          Locate player
-                        </button>
-                        <button
-                          type="button"
-                          onClick={endTurn}
-                          className="secondary"
+                    <button
+                      type="button"
+                      onClick={scrollToCurrentPlayerOnMap}
+                      disabled={
+                        winner !== null ||
+                        !lab ||
+                        (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+                      }
+                      style={{
+                        ...buttonStyle,
+                        ...secondaryButtonStyle,
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: "0.85rem",
+                        padding: "8px 12px",
+                      }}
+                      title="Scroll the maze so the active player’s cell is centered"
+                    >
+                      Locate player
+                    </button>
+                    <button
+                      type="button"
+                      onClick={endTurn}
+                      className="secondary"
                           disabled={
                             winner !== null ||
                             !!catapultPicker ||
@@ -13360,22 +13820,22 @@ export default function LabyrinthGame() {
                             !!combatState ||
                             !!pendingCombatOffer
                           }
-                          style={{
-                            ...buttonStyle,
-                            ...secondaryButtonStyle,
-                            flex: 1,
-                            minWidth: 0,
-                            fontSize: "0.85rem",
-                            padding: "8px 12px",
-                          }}
-                          title={
-                            combatState ? "Cannot end turn during combat — fight or run first" : undefined
-                          }
-                        >
-                          End turn
-                        </button>
-                      </div>
-                    </div>
+                      style={{
+                        ...buttonStyle,
+                        ...secondaryButtonStyle,
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: "0.85rem",
+                        padding: "8px 12px",
+                      }}
+                      title={
+                        combatState ? "Cannot end turn during combat — fight or run first" : undefined
+                      }
+                    >
+                      End turn
+                    </button>
+                  </div>
+                </div>
                   ) : (
                     <div style={{ display: "flex", gap: 8, width: "100%" }}>
                       <button
@@ -13386,7 +13846,7 @@ export default function LabyrinthGame() {
                           !lab ||
                           (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
                         }
-                        style={{
+                    style={{
                           ...buttonStyle,
                           ...secondaryButtonStyle,
                           flex: 1,
@@ -13428,12 +13888,12 @@ export default function LabyrinthGame() {
                 </div>
                 {desktopDockThreeColumn && lab ? (
                   <div style={{ flexShrink: 0 }}>
-                    <div
-                      style={{
-                        ...controlsSectionStyle,
+                      <div
+                        style={{
+                          ...controlsSectionStyle,
                         borderColor: "#554466",
-                        marginTop: 0,
-                        padding: 6,
+                          marginTop: 0,
+                          padding: 6,
                         boxSizing: "border-box",
                       }}
                     >
@@ -13460,8 +13920,8 @@ export default function LabyrinthGame() {
                   </div>
                 ) : (lab && mazeMapView === "iso") || (showMoveGrid && lab) ? (
                   <div
-                    style={{
-                      display: "flex",
+                              style={{
+                                display: "flex",
                       flexDirection: "row",
                       alignItems: "stretch",
                       gap: 8,
@@ -13471,12 +13931,12 @@ export default function LabyrinthGame() {
                       maxWidth: splitIsoHudOppositeScreen && !isMobile ? "min(560px, 100%)" : undefined,
                     }}
                   >
-                    <div
-                      style={{
-                        ...controlsSectionStyle,
-                        marginTop: 0,
-                        padding: 6,
-                        flexShrink: 0,
+                      <div
+                        style={{
+                          ...controlsSectionStyle,
+                          marginTop: 0,
+                          padding: 6,
+                          flexShrink: 0,
                         width: splitIsoHudOppositeScreen && !isMobile ? "100%" : undefined,
                         boxSizing: "border-box",
                       }}
@@ -13491,10 +13951,10 @@ export default function LabyrinthGame() {
                       {splitIsoHudOppositeScreen && !isMobile ? (
                         <div
                           style={{
-                            display: "flex",
+                              display: "flex",
                             flexDirection: "row",
                             justifyContent: "space-between",
-                            alignItems: "center",
+                              alignItems: "center",
                             gap: 16,
                             width: "100%",
                           }}
@@ -13563,6 +14023,7 @@ export default function LabyrinthGame() {
                             winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
                           }
                           bearingAngleDeg={isoCameraBearingDeg}
+                          mazeIsoViewRef={mazeIsoViewRef}
                         />
                       )}
                     </div>
@@ -14592,6 +15053,414 @@ const secondaryButtonStyle: React.CSSProperties = {
   background: "#444",
   color: "#c0c0c0",
 };
+
+/** Slingshot / teleport / magic / immersive item consent — keep in bottom HUD between map and move ring (not over the canvas). */
+function IsoBottomContextPanels({
+  dense,
+  canOfferSlingshotDock,
+  catapultPicker,
+  teleportPicker,
+  magicPortalReady,
+  immersiveInventoryPick,
+  showMoveGrid,
+  mazeMapView,
+  catapultIsoPhase,
+  slingshotCellAvailable,
+  cp,
+  openSlingshotFromDock,
+  catapultDragRef,
+  setCatapultMode,
+  setCatapultPicker,
+  setCatapultDragOffset,
+  setCatapultAimClient,
+  setCatapultIsoPhase,
+  manualTeleportPendingRef,
+  setTeleportPicker,
+  handleTeleportSelect,
+  handleMagicPortalOpen,
+  setImmersiveInventoryPick,
+  applyImmersiveInventoryPick,
+  immersiveApplyDisabled,
+}: {
+  dense?: boolean;
+  canOfferSlingshotDock: boolean;
+  catapultPicker: { playerIndex: number; from: [number, number]; viaCharge?: boolean } | null;
+  teleportPicker: { options: [number, number][] } | null;
+  magicPortalReady: boolean;
+  immersiveInventoryPick: MobileDockAction | null;
+  showMoveGrid: boolean;
+  mazeMapView: "grid" | "iso";
+  catapultIsoPhase: "orient" | "pull";
+  slingshotCellAvailable: boolean;
+  cp: { catapultCharges?: number } | null | undefined;
+  openSlingshotFromDock: () => void;
+  catapultDragRef: MutableRefObject<{ startX: number; startY: number; cellX: number; cellY: number } | null>;
+  setCatapultMode: (v: boolean) => void;
+  setCatapultPicker: (v: null) => void;
+  setCatapultDragOffset: (v: null) => void;
+  setCatapultAimClient: (v: null) => void;
+  setCatapultIsoPhase: (v: "orient" | "pull") => void;
+  manualTeleportPendingRef: MutableRefObject<boolean>;
+  setTeleportPicker: (v: null) => void;
+  handleTeleportSelect: (x: number, y: number) => void;
+  handleMagicPortalOpen: () => void;
+  setImmersiveInventoryPick: (v: MobileDockAction | null) => void;
+  applyImmersiveInventoryPick: () => void;
+  immersiveApplyDisabled: boolean;
+}) {
+  const pad = dense ? "6px 8px" : "10px 12px";
+  const titleFs = dense ? "0.62rem" : "0.68rem";
+  const bodyFs = dense ? "0.68rem" : "0.78rem";
+  const btnFs = dense ? "0.68rem" : "0.76rem";
+  const cardRadius = dense ? 10 : 14;
+  return (
+    <>
+      {canOfferSlingshotDock && !catapultPicker ? (
+        <div
+          style={{
+            borderRadius: cardRadius,
+            padding: pad,
+            background: "linear-gradient(180deg, rgba(22,24,36,0.97) 0%, rgba(12,13,22,0.99) 100%)",
+            border: "1px solid rgba(255,204,0,0.35)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: titleFs,
+              fontWeight: 700,
+              color: "#9aa0b8",
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+            }}
+          >
+            Slingshot
+          </div>
+          {!dense ? (
+            <p style={{ margin: "6px 0 8px", fontSize: bodyFs, color: "#c8cdd8", lineHeight: 1.45 }}>
+              {slingshotCellAvailable ? (
+                <>
+                  You are on a <strong style={{ color: "#ffcc66" }}>slingshot tile</strong>. Tap below when you are ready to aim.
+                </>
+              ) : (
+                <>
+                  Use a <strong style={{ color: "#ffcc66" }}>slingshot charge</strong> ({cp?.catapultCharges ?? 0} left) from your current tile.
+                </>
+              )}
+            </p>
+          ) : (
+            <p style={{ margin: "4px 0 6px", fontSize: bodyFs, color: "#c8cdd8", lineHeight: 1.35 }}>
+              {slingshotCellAvailable ? <>Slingshot tile — open aim when ready.</> : <>Charge ×{cp?.catapultCharges ?? 0} — aim from here.</>}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={openSlingshotFromDock}
+            style={{
+              ...buttonStyle,
+              alignSelf: "flex-start",
+              background: "#1a3d2a",
+              color: "#b8ffcc",
+              border: "1px solid #00ff88",
+              fontSize: dense ? "0.72rem" : "0.78rem",
+              padding: dense ? "5px 10px" : "6px 12px",
+            }}
+          >
+            Use slingshot
+          </button>
+        </div>
+      ) : null}
+      {catapultPicker ? (
+        <div
+          style={{
+            borderRadius: cardRadius,
+            padding: pad,
+            background: "linear-gradient(180deg, rgba(22,24,36,0.97) 0%, rgba(12,13,22,0.99) 100%)",
+            border: "1px solid rgba(255,204,0,0.35)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: titleFs,
+              fontWeight: 700,
+              color: "#9aa0b8",
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+            }}
+          >
+            Slingshot
+          </div>
+          {mazeMapView === "iso" && catapultIsoPhase === "orient" ? (
+            <p style={{ margin: dense ? "4px 0" : "6px 0", fontSize: bodyFs, color: "#c8cdd8", lineHeight: 1.45 }}>
+              <strong style={{ color: "#ffcc66" }}>Step 1 — Orient.</strong>{" "}
+              {dense ? (
+                <>Orbit the 3D view, then tap Ready to aim.</>
+              ) : (
+                <>Drag on the 3D maze (right mouse, trackpad, or minimap ring), then continue to step 2.</>
+              )}
+            </p>
+          ) : mazeMapView === "iso" ? (
+            <p style={{ margin: dense ? "4px 0" : "6px 0", fontSize: bodyFs, color: "#c8cdd8", lineHeight: 1.45 }}>
+              <strong style={{ color: "#ffcc66" }}>Step 2 — Pull.</strong>{" "}
+              {dense ? (
+                <>Drag on 3D, release to fire.</>
+              ) : (
+                <>Drag on the 3D view opposite where you want to land, then release.</>
+              )}
+            </p>
+          ) : (
+            <p style={{ margin: dense ? "4px 0" : "6px 0", fontSize: bodyFs, color: "#c8cdd8", lineHeight: 1.45 }}>
+              Drag on the <strong style={{ color: "#ffcc66" }}>grid</strong> from your tile to aim, then release.
+            </p>
+          )}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: dense ? 6 : 8, marginTop: dense ? 4 : 6 }}>
+            {mazeMapView === "iso" && catapultIsoPhase === "orient" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  catapultDragRef.current = null;
+                  setCatapultDragOffset(null);
+                  setCatapultAimClient(null);
+                  setCatapultIsoPhase("pull");
+                }}
+                style={{
+                  ...buttonStyle,
+                  background: "#1a3d2a",
+                  color: "#b8ffcc",
+                  border: "1px solid #00ff88",
+                  fontSize: btnFs,
+                  padding: dense ? "5px 10px" : "6px 12px",
+                }}
+              >
+                Ready to aim (step 2)
+              </button>
+            ) : null}
+            {mazeMapView === "iso" && catapultIsoPhase === "pull" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  catapultDragRef.current = null;
+                  setCatapultDragOffset(null);
+                  setCatapultAimClient(null);
+                  setCatapultIsoPhase("orient");
+                }}
+                style={{
+                  ...buttonStyle,
+                  background: "#2a2830",
+                  color: "#ccc",
+                  border: "1px solid #666",
+                  fontSize: dense ? "0.66rem" : "0.74rem",
+                  padding: dense ? "5px 8px" : "6px 10px",
+                }}
+              >
+                Adjust camera (step 1)
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                setCatapultMode(false);
+                setCatapultPicker(null);
+                setCatapultDragOffset(null);
+              }}
+              style={{
+                ...buttonStyle,
+                background: "#664400",
+                color: "#ffeecc",
+                border: "1px solid #ffcc00",
+                fontSize: btnFs,
+                padding: dense ? "5px 10px" : "6px 12px",
+              }}
+            >
+              Cancel slingshot
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {teleportPicker ? (
+        <div
+          style={{
+            borderRadius: cardRadius,
+            padding: pad,
+            background: "linear-gradient(180deg, rgba(22,24,36,0.97) 0%, rgba(12,13,22,0.99) 100%)",
+            border: "1px solid rgba(170,102,255,0.35)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: titleFs,
+              fontWeight: 700,
+              color: "#9aa0b8",
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+            }}
+          >
+            Teleport
+          </div>
+          <p style={{ margin: dense ? "4px 0 6px" : "6px 0 8px", fontSize: bodyFs, color: "#c8cdd8", lineHeight: 1.45 }}>
+            {dense ? (
+              <>Tap highlight or Random.</>
+            ) : (
+              <>
+                Tap a highlighted cell, or <strong style={{ color: "#aa66ff" }}>Random</strong>.
+              </>
+            )}
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: dense ? 6 : 8 }}>
+            <button
+              type="button"
+              onClick={() => {
+                manualTeleportPendingRef.current = false;
+                setTeleportPicker(null);
+              }}
+              style={{ ...buttonStyle, background: "#664400", fontSize: btnFs, padding: dense ? "5px 10px" : "6px 12px" }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const opts = teleportPicker.options;
+                if (opts.length === 0) return;
+                const pick = opts[Math.floor(Math.random() * opts.length)]!;
+                handleTeleportSelect(pick[0], pick[1]);
+              }}
+              style={{
+                ...buttonStyle,
+                background: "#2a2048",
+                color: "#e8ddff",
+                border: "1px solid #8866cc",
+                fontSize: btnFs,
+                padding: dense ? "5px 10px" : "6px 12px",
+              }}
+            >
+              Random destination
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {magicPortalReady && !teleportPicker ? (
+        <div
+          style={{
+            borderRadius: cardRadius,
+            padding: pad,
+            background: "linear-gradient(180deg, rgba(22,24,36,0.97) 0%, rgba(12,13,22,0.99) 100%)",
+            border: "1px solid rgba(170,102,255,0.35)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: titleFs,
+              fontWeight: 700,
+              color: "#9aa0b8",
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+            }}
+          >
+            Magic cell
+          </div>
+          {!dense ? (
+            <p style={{ margin: "6px 0 8px", fontSize: bodyFs, color: "#c8cdd8", lineHeight: 1.45 }}>
+              Standing on a magic portal. After you consent, the teleport picker opens; in <strong style={{ color: "#c49cff" }}>3D</strong>, purple
+              beacons show valid destinations.
+            </p>
+          ) : (
+            <p style={{ margin: "4px 0 6px", fontSize: bodyFs, color: "#c8cdd8", lineHeight: 1.35 }}>
+              Magic portal — consent to open picker (3D: purple beacons).
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={handleMagicPortalOpen}
+            style={{
+              ...buttonStyle,
+              ...secondaryButtonStyle,
+              alignSelf: "flex-start",
+              fontSize: dense ? "0.72rem" : "0.78rem",
+              padding: dense ? "5px 10px" : "6px 12px",
+            }}
+          >
+            Use magic portal
+          </button>
+        </div>
+      ) : null}
+      {immersiveInventoryPick !== null && showMoveGrid ? (
+        <div
+          style={{
+            borderRadius: cardRadius,
+            padding: pad,
+            background: "linear-gradient(180deg, rgba(22,24,36,0.97) 0%, rgba(12,13,22,0.99) 100%)",
+            border: "1px solid rgba(0,255,136,0.22)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ fontSize: dense ? "0.76rem" : "0.85rem", fontWeight: 700, color: "#00ff88" }}>
+              {immersiveInventoryPick === "bomb"
+                ? "Bomb"
+                : immersiveInventoryPick === "catapultCharge"
+                  ? "Slingshot charge"
+                  : STORED_ARTIFACT_TITLE[immersiveInventoryPick]}
+            </span>
+            <button
+              type="button"
+              onClick={() => setImmersiveInventoryPick(null)}
+              style={{
+                ...secondaryButtonStyle,
+                padding: dense ? "3px 8px" : "4px 10px",
+                fontSize: dense ? "0.62rem" : "0.7rem",
+                border: "1px solid #555",
+                background: "#2a2a35",
+                color: "#aaa",
+              }}
+            >
+              Close
+            </button>
+          </div>
+          {!dense ? (
+            <p style={{ margin: "6px 0 8px", fontSize: "0.76rem", color: "#a8aeb8", lineHeight: 1.5 }}>
+              {immersiveInventoryPick === "bomb"
+                ? "Explodes a 3×3 area on the map (uses 1 move while not in combat)."
+                : immersiveInventoryPick === "catapultCharge"
+                  ? "Spend one charge to open slingshot aim from your current tile (no catapult cell required)."
+                  : STORED_ARTIFACT_TOOLTIP[immersiveInventoryPick]}
+            </p>
+          ) : (
+            <p style={{ margin: "4px 0 6px", fontSize: "0.65rem", color: "#a8aeb8", lineHeight: 1.4 }}>
+              {immersiveInventoryPick === "bomb"
+                ? "3×3 blast (1 move)."
+                : immersiveInventoryPick === "catapultCharge"
+                  ? "Opens slingshot from here."
+                  : STORED_ARTIFACT_TOOLTIP[immersiveInventoryPick]}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={applyImmersiveInventoryPick}
+            disabled={immersiveApplyDisabled}
+            style={{
+              ...buttonStyle,
+              alignSelf: "flex-start",
+              opacity: immersiveApplyDisabled ? 0.45 : 1,
+              fontSize: dense ? "0.72rem" : "0.78rem",
+              padding: dense ? "5px 12px" : "6px 14px",
+            }}
+          >
+            Use{" "}
+            {immersiveInventoryPick === "bomb"
+              ? "bomb"
+              : immersiveInventoryPick === "catapultCharge"
+                ? "slingshot"
+                : STORED_ARTIFACT_TITLE[immersiveInventoryPick]}
+          </button>
+        </div>
+      ) : null}
+    </>
+  );
+}
 
 const controlsSectionStyle: React.CSSProperties = {
   marginTop: 8,

@@ -24,10 +24,26 @@ import {
   PLAYER_3D_GLB,
   resolveMonsterAnimationClipName,
   resolvePlayerAnimationClipName,
+  resolvePlayerShieldBlockClipName,
   getPlayer3DGlb,
+  type IsoCombatPlayerMoment,
 } from "@/lib/monsterModels3d";
 
 type MiniMonster = { x: number; y: number; type?: string; draculaState?: DraculaState };
+
+export type CatapultTrajectoryPreviewResult = {
+  arcPoints: [number, number][];
+  destX: number;
+  destY: number;
+} | null;
+
+export type CatapultTrajectoryPreviewFn = (
+  fromX: number,
+  fromY: number,
+  dx: number,
+  dy: number,
+  strength: number,
+) => CatapultTrajectoryPreviewResult;
 
 type Props = {
   grid: string[][];
@@ -42,10 +58,19 @@ type Props = {
   onCellClick?: (x: number, y: number) => void;
   teleportOptions?: [number, number][];
   teleportMode?: boolean;
-  /** Slingshot / catapult aim in 3D: raised camera; trajectory preview is only on the 2D grid or as a screen aim line (parent). */
+  /** Slingshot / catapult aim in 3D: raised camera; trajectory is drawn in-scene from the launch cell. */
   catapultMode?: boolean;
   /** Slingshot source tile — yellow floor hint on the launch cell. */
   catapultFrom?: [number, number] | null;
+  /** While dragging on the parent overlay: current pointer (client coords) for floor raycast + arc preview. */
+  catapultAimClient?: { x: number; y: number } | null;
+  /** Grid-space arc preview (same rules as launch). */
+  catapultTrajectoryPreview?: CatapultTrajectoryPreviewFn;
+  /**
+   * Slingshot: when false while `catapultMode`, player may orbit the camera (step 1: frame the maze).
+   * When true, camera is locked to auto framing like teleport (step 2: pull to aim).
+   */
+  catapultLockCameraForPull?: boolean;
   /** While on magic (portal not open yet): possible teleport destinations (purple). */
   magicPortalPreviewOptions?: [number, number][] | null;
   /** Tint teleport beacons: magic = purple (2D hole style), portal = cyan. */
@@ -60,8 +85,6 @@ type Props = {
    * tilting the device (where supported) or dragging on the canvas. Parent should not wire floor taps for walking.
    */
   touchUi?: boolean;
-  /** Phone landscape: parent renders Rotate / Reset in the top control strip — hide the in-canvas overlay. */
-  hideOverlayViewButtons?: boolean;
   /** Notifies parent when temporary camera-rotate mode is active (for chrome button highlight). */
   onRotateModeChange?: (active: boolean) => void;
   /**
@@ -88,6 +111,12 @@ type Props = {
   combatRunDisabled?: boolean;
   /** Dynamic player GLB path based on selected avatar. Falls back to wasteland-drifter. */
   playerGlbPath?: string;
+  /** Last resolved strike cue (dice + shield + portrait) — read when combat pulse fires. */
+  isoCombatPlayerCue?: {
+    moment: IsoCombatPlayerMoment;
+    variant: "spell" | "skill" | "light";
+    fatalJump: boolean;
+  } | null;
 };
 
 export type MazeIsoViewImperativeHandle = {
@@ -95,8 +124,22 @@ export type MazeIsoViewImperativeHandle = {
   /** While rotate mode is active, extend the auto-exit timer (e.g. continuous minimap ring drag). */
   bumpRotateSession: () => void;
   resetCameraView: () => void;
+  /**
+   * While the mini-map orbit ring pointer is down: keeps auto-follow off. `rotateMode` from React can lag one
+   * frame after `activateRotate()` on touch, which otherwise lets auto-follow fight the ring and can snap the map.
+   */
+  setOrbitRingPointerHeld: (held: boolean) => void;
   /** Apply the same orbit deltas as dragging on the 3D canvas (e.g. mini-map ring in landscape). */
   orbitLookByPixelDelta: (dxPx: number, dyPx: number) => void;
+  /**
+   * Slingshot in 3D: map pointer to grid launch from `from` using floor raycast (orbit / tilt safe).
+   * Returns null if the ray misses the floor or pull is too small.
+   */
+  resolveCatapultLaunchAtClient: (
+    from: [number, number],
+    clientX: number,
+    clientY: number,
+  ) => { dx: number; dy: number; strength: number } | null;
 };
 
 /** Suppresses floor-tile clicks after a camera drag so releasing the mouse button doesn't trigger a move. */
@@ -108,12 +151,201 @@ const DRAG_SUPPRESS_THRESHOLD_PX = 6;
  * corridors in world space and reduces side walls eating the frustum when the camera sits behind the pawn.
  */
 const CS = 3.55;
+const FLOOR_Y = 0;
+/** Ballistic preview: max world-Y apex above floor (below typical wall height). */
+const SLING_ARC_PEAK_MAX = 2.85;
+const SLING_ARC_PEAK_MIN = 0.5;
+const SLING_ARC_PEAK_PER_CHORD = 0.36;
+
+/** Ray from screen → horizontal floor plane (y = planeY). Respects current camera / canvas rect (orbit-safe aim). */
+function intersectClientWithFloor(
+  camera: THREE.PerspectiveCamera,
+  domEl: HTMLElement,
+  clientX: number,
+  clientY: number,
+  planeY: number,
+): THREE.Vector3 | null {
+  const rect = domEl.getBoundingClientRect();
+  const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+  const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+  const clip = new THREE.Vector3(ndcX, ndcY, 0.5);
+  clip.unproject(camera);
+  const origin = camera.position;
+  const dir = clip.sub(origin).normalize();
+  if (Math.abs(dir.y) < 1e-5) return null;
+  const t = (planeY - origin.y) / dir.y;
+  if (t <= 0) return null;
+  return origin.clone().addScaledVector(dir, t);
+}
+
+const SLING_ANCHOR_MIN_WORLD = 0.09;
+const SLING_STRENGTH_MIN = 16;
+const SLING_STRENGTH_MAX = 260;
+/** Screen pull length (px) maps to trajectory strength (matches grid drag feel). */
+const SLING_STRENGTH_PER_SCREEN_PX = 2.15;
+
+function projectWorldPointToClient(
+  camera: THREE.PerspectiveCamera,
+  domEl: HTMLElement,
+  wx: number,
+  wy: number,
+  wz: number,
+): { x: number; y: number } {
+  const v = new THREE.Vector3(wx, wy, wz).project(camera);
+  const rect = domEl.getBoundingClientRect();
+  const x = (v.x * 0.5 + 0.5) * rect.width + rect.left;
+  const y = (-v.y * 0.5 + 0.5) * rect.height + rect.top;
+  return { x, y };
+}
+
+/**
+ * Slingshot aim from screen pull relative to the **on-screen** launch ring (Angry-Birds style).
+ * Launch direction = floor hit along the opposite of screen pull, so “pull down” shoots toward the top of the view.
+ */
+function computeSlingLaunchScreenPull(
+  from: [number, number],
+  fingerClientX: number,
+  fingerClientY: number,
+  camera: THREE.PerspectiveCamera,
+  domEl: HTMLElement,
+): { dx: number; dy: number; strength: number } | null {
+  const ax = from[0] * CS;
+  const az = from[1] * CS;
+  const anchorClient = projectWorldPointToClient(camera, domEl, ax, FLOOR_Y + 0.12, az);
+  const pullSx = fingerClientX - anchorClient.x;
+  const pullSy = fingerClientY - anchorClient.y;
+  const pullLen = Math.hypot(pullSx, pullSy);
+  if (pullLen < 14) return null;
+  const lux = -pullSx / pullLen;
+  const luy = -pullSy / pullLen;
+  const extendPx = Math.min(580, Math.max(100, pullLen * 2.5));
+  const tryHit = (mult: number) =>
+    intersectClientWithFloor(
+      camera,
+      domEl,
+      anchorClient.x + lux * extendPx * mult,
+      anchorClient.y + luy * extendPx * mult,
+      FLOOR_Y + 0.06,
+    );
+  const hit = tryHit(1) ?? tryHit(0.55) ?? tryHit(0.3);
+  if (!hit) return null;
+  const launchX = hit.x - ax;
+  const launchZ = hit.z - az;
+  const wlen = Math.hypot(launchX, launchZ);
+  if (wlen < SLING_ANCHOR_MIN_WORLD) return null;
+  const strength = Math.min(
+    SLING_STRENGTH_MAX,
+    Math.max(SLING_STRENGTH_MIN, pullLen * SLING_STRENGTH_PER_SCREEN_PX),
+  );
+  return { dx: launchX / CS, dy: launchZ / CS, strength };
+}
+
+function CanvasContextBridge({
+  cameraRef,
+  glDomRef,
+}: {
+  cameraRef: MutableRefObject<THREE.Camera | null>;
+  glDomRef: MutableRefObject<HTMLCanvasElement | null>;
+}) {
+  const { camera, gl } = useThree();
+  useFrame(() => {
+    cameraRef.current = camera;
+    glDomRef.current = gl.domElement;
+  });
+  return null;
+}
+
+/** World-space arc from slingshot cell, matching `getCatapultTrajectory` and current orbit. */
+function SlingshotTrajectoryArc({
+  from,
+  aimClient,
+  previewFn,
+}: {
+  from: [number, number];
+  aimClient: { x: number; y: number } | null;
+  previewFn: CatapultTrajectoryPreviewFn;
+}) {
+  const { camera, gl } = useThree();
+  const lineObj = useMemo(() => {
+    const geo = new THREE.BufferGeometry();
+    const mat = new THREE.LineBasicMaterial({
+      color: "#ffdd88",
+      transparent: true,
+      opacity: 0.95,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const line = new THREE.Line(geo, mat);
+    line.renderOrder = 920;
+    return line;
+  }, []);
+
+  useFrame(() => {
+    const line = lineObj;
+    if (!aimClient) {
+      line.visible = false;
+      return;
+    }
+    const launch = computeSlingLaunchScreenPull(
+      from,
+      aimClient.x,
+      aimClient.y,
+      camera as THREE.PerspectiveCamera,
+      gl.domElement,
+    );
+    if (!launch) {
+      line.visible = false;
+      return;
+    }
+    const traj = previewFn(from[0], from[1], launch.dx, launch.dy, launch.strength);
+    if (!traj?.arcPoints?.length) {
+      line.visible = false;
+      return;
+    }
+    line.visible = true;
+    /**
+     * `getCatapultTrajectory` adds a sideways bend in **grid X/Y** (perp offset) for a 2D map arc.
+     * Lifting those points by Y-only height yields a 3D curve that is **not** in one vertical plane, so the
+     * arc looked “tilted” vs the floor. Preview: straight chord on the floor from launch → landing, height
+     * only — one vertical plane, orthogonal to the maze surface (same landing as game logic).
+     */
+    const g0x = from[0];
+    const g0y = from[1];
+    const g1x = traj.destX;
+    const g1y = traj.destY;
+    if (g0x === g1x && g0y === g1y) {
+      line.visible = false;
+      return;
+    }
+    const horizChord = Math.hypot((g1x - g0x) * CS, (g1y - g0y) * CS);
+    const peakH = Math.min(
+      SLING_ARC_PEAK_MAX,
+      Math.max(SLING_ARC_PEAK_MIN, horizChord * SLING_ARC_PEAK_PER_CHORD),
+    );
+    const segSteps = 32;
+    const vecs: THREE.Vector3[] = [];
+    for (let i = 0; i <= segSteps; i++) {
+      const t = i / segSteps;
+      const gx = g0x + (g1x - g0x) * t;
+      const gy = g0y + (g1y - g0y) * t;
+      const wy = FLOOR_Y + 0.08 + peakH * 4 * t * (1 - t);
+      vecs.push(new THREE.Vector3(gx * CS, wy, gy * CS));
+    }
+    const geo = line.geometry as THREE.BufferGeometry;
+    geo.setFromPoints(vecs);
+    geo.computeBoundingSphere();
+  });
+
+  return <primitive object={lineObj} />;
+}
+
 /** Wall blocks fill the full cell — adjacent walls form solid continuous walls. */
 const WALL_SIZE = CS;
 const WALL_HEIGHT = 3.25;
 const WALL_TOP_COLOR = "#3a3a4c";
-const FLOOR_Y = 0;
 const ROTATE_TIMEOUT_MS = 3000;
+/** Minimap / imperative orbit: block auto-follow briefly after each apply so it does not fight finger drag (rotateMode state can lag one frame). */
+const ORBIT_RING_SUPPRESS_AUTO_FOLLOW_MS = 240;
 
 /* ------------------------------------------------------------------ */
 /*  Floor                                                              */
@@ -238,10 +470,17 @@ function PlayerAvatar3D({
   visualState,
   actionVersion = 0,
   glbPath,
+  combatPlayback,
 }: {
   visualState: "idle" | "hunt" | "attack";
   actionVersion?: number;
   glbPath?: string;
+  /** One-shot combat clip (strike / counter / shield) — overrides locomotion visualState. */
+  combatPlayback?: {
+    moment: IsoCombatPlayerMoment;
+    variant: "spell" | "skill" | "light";
+    fatalJump?: boolean;
+  } | null;
 }) {
   const url = glbPath || PLAYER_3D_GLB;
   const rootRef = useRef<THREE.Group>(null);
@@ -269,7 +508,22 @@ function PlayerAvatar3D({
   }, [clonedScene]);
 
   useEffect(() => {
-    const clip = resolvePlayerAnimationClipName(visualState, names);
+    let clip: string | null = null;
+    let loopOnce = false;
+    const pb = combatPlayback;
+    if (pb) {
+      loopOnce = true;
+      if (pb.moment === "shield") {
+        clip = resolvePlayerShieldBlockClipName(names);
+      } else if (pb.moment === "hurt") {
+        clip = resolvePlayerAnimationClipName("hurt", names, pb.variant, { fatalJumpKill: !!pb.fatalJump });
+      } else {
+        clip = resolvePlayerAnimationClipName("attack", names, pb.variant);
+      }
+    } else {
+      clip = resolvePlayerAnimationClipName(visualState, names);
+      loopOnce = visualState === "attack";
+    }
     for (const action of Object.values(actions)) {
       action?.fadeOut(0.12);
     }
@@ -277,7 +531,7 @@ function PlayerAvatar3D({
     const action = actions[clip];
     if (!action) return;
     action.reset();
-    if (visualState === "attack") {
+    if (loopOnce) {
       action.setLoop(THREE.LoopOnce, 1);
       action.clampWhenFinished = false;
     } else {
@@ -286,7 +540,7 @@ function PlayerAvatar3D({
     }
     action.fadeIn(0.16).play();
     return () => { action.fadeOut(0.12); };
-  }, [actions, names, visualState, actionVersion]);
+  }, [actions, names, visualState, actionVersion, combatPlayback]);
 
   return (
     <group ref={rootRef} scale={0.9} rotation={[0, Math.PI / 2, 0]}>
@@ -310,10 +564,21 @@ function PlayerAvatar3D({
   );
 }
 
+function combatHoldSeconds(moment: IsoCombatPlayerMoment, fatalJump: boolean): number {
+  if (moment === "hurt") return fatalJump ? 1.35 : 0.92;
+  if (moment === "shield") return 0.62;
+  return 0.78;
+}
+
 function PlayerMarker({
-  playerX, playerY, facingDx, facingDy, combatPulse = 0, playerGlbPath,
+  playerX, playerY, facingDx, facingDy, combatPulse = 0, playerGlbPath, isoCombatPlayerCue,
 }: {
   playerX: number; playerY: number; facingDx: number; facingDy: number; combatPulse?: number; playerGlbPath?: string;
+  isoCombatPlayerCue?: {
+    moment: IsoCombatPlayerMoment;
+    variant: "spell" | "skill" | "light";
+    fatalJump: boolean;
+  } | null;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const modelAnchorRef = useRef<THREE.Group>(null);
@@ -325,9 +590,18 @@ function PlayerMarker({
   const [visualState, setVisualState] = useState<"idle" | "hunt" | "attack">("idle");
   const visualStateRef = useRef<"idle" | "hunt" | "attack">("idle");
   const [actionVersion, setActionVersion] = useState(0);
+  const [combatPlayback, setCombatPlayback] = useState<{
+    moment: IsoCombatPlayerMoment;
+    variant: "spell" | "skill" | "light";
+    fatalJump: boolean;
+  } | null>(null);
+  const combatPlaybackRef = useRef(combatPlayback);
+  combatPlaybackRef.current = combatPlayback;
   const queuedCombatPulseRef = useRef(false);
   const combatAttackUntilRef = useRef(0);
   const prevCombatPulseRef = useRef(combatPulse);
+  const cueSnapshotRef = useRef(isoCombatPlayerCue);
+  cueSnapshotRef.current = isoCombatPlayerCue;
 
   useEffect(() => { targetPos.current.set(playerX * CS, FLOOR_Y + 0.02, playerY * CS); }, [playerX, playerY]);
   useEffect(() => {
@@ -357,10 +631,17 @@ function PlayerMarker({
     const tNow = performance.now() * 0.001;
     if (queuedCombatPulseRef.current) {
       queuedCombatPulseRef.current = false;
-      combatAttackUntilRef.current = tNow + 0.62;
+      const cue = cueSnapshotRef.current ?? { moment: "strike" as const, variant: "skill" as const, fatalJump: false };
+      const hold = combatHoldSeconds(cue.moment, cue.fatalJump);
+      combatAttackUntilRef.current = tNow + hold;
+      setCombatPlayback(cue);
       setActionVersion((v) => v + 1);
     }
-    const attacking = tNow < combatAttackUntilRef.current;
+    const inCombatClip = tNow < combatAttackUntilRef.current;
+    if (!inCombatClip && combatPlaybackRef.current != null) {
+      setCombatPlayback(null);
+    }
+    const attacking = inCombatClip;
     const next: "idle" | "hunt" | "attack" = attacking ? "attack" : (transit > 0.06 ? "hunt" : "idle");
     if (next !== visualStateRef.current) {
       visualStateRef.current = next;
@@ -402,7 +683,12 @@ function PlayerMarker({
             </>
           )}
         >
-          <PlayerAvatar3D visualState={visualState} actionVersion={actionVersion} glbPath={playerGlbPath} />
+          <PlayerAvatar3D
+            visualState={visualState}
+            actionVersion={actionVersion}
+            glbPath={playerGlbPath}
+            combatPlayback={combatPlayback}
+          />
         </Suspense>
       </group>
     </group>
@@ -1160,11 +1446,14 @@ function applyManualOrbitFromDelta(
 }
 
 function CameraController({
-  grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy, zoom, rotateMode, resetTick, teleportMode, catapultMode, focusVersion,
+  grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy, zoom, rotateMode, resetTick, teleportMode, catapultMode,
+  catapultLockCameraForPull,
+  focusVersion,
   touchUi,
   onTouchCameraForwardGrid,
   onIsoCameraBearingDeg,
   orbitLookApplierRef,
+  orbitRingPointerHeldRef,
 }: {
   grid: string[][];
   mapWidth: number;
@@ -1178,11 +1467,13 @@ function CameraController({
   resetTick: number;
   teleportMode: boolean;
   catapultMode: boolean;
+  catapultLockCameraForPull: boolean;
   focusVersion?: number;
   touchUi: boolean;
   onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
   onIsoCameraBearingDeg?: (deg: number) => void;
   orbitLookApplierRef: MutableRefObject<((dxPx: number, dyPx: number) => void) | null>;
+  orbitRingPointerHeldRef: MutableRefObject<boolean>;
 }) {
   const { camera, gl } = useThree();
   const controlsRef = useRef<any>(null);
@@ -1190,7 +1481,7 @@ function CameraController({
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const dragAccumRef = useRef(0);
   /** True for exactly the frame when orbitLookByPixelDelta (minimap ring) applied a delta — synchronous guard like dragRef. */
-  const externalOrbitActiveRef = useRef(false);
+  const lastOrbitRingApplyMsRef = useRef(0);
   const hasManualCameraRef = useRef(false);
   const manualOffsetRef = useRef<THREE.Vector3 | null>(null);
   const prevPlayerPosRef = useRef<{ x: number; y: number }>({ x: playerX, y: playerY });
@@ -1213,12 +1504,13 @@ function CameraController({
   /** Smoothed grid (dx,dy) for auto camera offset — eases orbit when facing/turn changes instead of snapping. */
   const smoothFollowDirRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 1 });
 
-  const teleportLikeFraming = teleportMode || catapultMode;
+  const lockCameraToAutoFraming = teleportMode || (catapultMode && catapultLockCameraForPull);
 
   useLayoutEffect(() => {
     orbitLookApplierRef.current = (dxPx: number, dyPx: number) => {
       applyManualOrbitFromDelta(camera, controlsRef, dxPx, dyPx, hasManualCameraRef, manualOffsetRef);
-      externalOrbitActiveRef.current = true;
+      lastOrbitRingApplyMsRef.current =
+        typeof performance !== "undefined" ? performance.now() : typeof Date !== "undefined" ? Date.now() : 0;
     };
     return () => {
       orbitLookApplierRef.current = null;
@@ -1252,11 +1544,12 @@ function CameraController({
     prevCatapultRef.current = catapultMode;
   }, [catapultMode]);
 
-  /* Camera orbit: left-drag (desktop) or one-finger swipe (any touch device) orbits the camera.
-     Touch sensitivity is boosted so a short swipe produces ~90° rotation. */
+  /* Camera orbit: left/right mouse-drag uses 1:1 pixels. One-finger canvas swipe: same 1:1 when not touchUi
+     (match desktop + minimap ring); boosted only in touchUi “tilt / coarse pointer” mode. */
   const TOUCH_ORBIT_SENSITIVITY = 3.2;
   useEffect(() => {
     const canvas = gl.domElement;
+    const touchSens = touchUi ? TOUCH_ORBIT_SENSITIVITY : 1;
 
     const onMouseDown = (e: MouseEvent) => {
       if (e.button === 0 || e.button === 2) {
@@ -1301,8 +1594,8 @@ function CameraController({
       const rawDx = t.clientX - dragRef.current.x;
       const rawDy = t.clientY - dragRef.current.y;
       dragAccumRef.current += Math.abs(rawDx) + Math.abs(rawDy);
-      const dx = rawDx * TOUCH_ORBIT_SENSITIVITY;
-      const dy = rawDy * TOUCH_ORBIT_SENSITIVITY;
+      const dx = rawDx * touchSens;
+      const dy = rawDy * touchSens;
       dragRef.current = { x: t.clientX, y: t.clientY };
       applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
@@ -1335,10 +1628,10 @@ function CameraController({
       canvas.removeEventListener("touchend", onTouchEnd);
       canvas.removeEventListener("touchcancel", onTouchEnd);
     };
-  }, [camera, gl]);
+  }, [camera, gl, touchUi]);
 
   useEffect(() => {
-    if (!rotateMode) {
+    if (!rotateMode || !touchUi) {
       lastOrientRef.current = null;
       return;
     }
@@ -1356,7 +1649,7 @@ function CameraController({
     };
     window.addEventListener("deviceorientation", onOrient, true);
     return () => window.removeEventListener("deviceorientation", onOrient, true);
-  }, [rotateMode, camera]);
+  }, [rotateMode, touchUi, camera]);
 
   /** Keep OrbitControls enabled only for scroll-wheel zoom; pan/rotate are handled by our manual drag. */
   useLayoutEffect(() => {
@@ -1376,6 +1669,12 @@ function CameraController({
   useFrame(() => {
     const ctrl = controlsRef.current;
     if (!ctrl) return;
+
+    const now =
+      typeof performance !== "undefined" ? performance.now() : typeof Date !== "undefined" ? Date.now() : 0;
+    const orbitRingRecently = now - lastOrbitRingApplyMsRef.current < ORBIT_RING_SUPPRESS_AUTO_FOLLOW_MS;
+    const orbitRingGesture =
+      orbitRingRecently || orbitRingPointerHeldRef.current;
 
     const isWalkable = (cx: number, cy: number) =>
       cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && grid[cy]?.[cx] !== WALL;
@@ -1442,14 +1741,14 @@ function CameraController({
 
     const prevPosForMove = prevPlayerPosRef.current;
     const movedFar = Math.hypot(playerX - prevPosForMove.x, playerY - prevPosForMove.y) > 1.01;
-    if (movedFar && !rotateMode && !dragRef.current && !externalOrbitActiveRef.current && !teleportLikeFraming) {
+    if (movedFar && !rotateMode && !dragRef.current && !orbitRingGesture && !lockCameraToAutoFraming) {
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.42);
     }
 
     const desiredOffset =
-      hasManualCameraRef.current && manualOffsetRef.current && !teleportLikeFraming
+      hasManualCameraRef.current && manualOffsetRef.current && !lockCameraToAutoFraming
         ? manualOffsetRef.current.clone()
         : autoOffset.clone();
 
@@ -1457,7 +1756,7 @@ function CameraController({
       !touchCameraBootstrappedRef.current &&
       !hasManualCameraRef.current &&
       manualOffsetRef.current == null &&
-      !teleportLikeFraming
+      !lockCameraToAutoFraming
     ) {
       touchCameraBootstrappedRef.current = true;
       smoothFollowDirRef.current = { dx: ndx, dy: ndy };
@@ -1517,7 +1816,7 @@ function CameraController({
     // Reset: explicit reset, turn/facing change, teleport/catapult framing, or a touch step to a new tile.
 
     // Auto-follow current player and orient behind movement direction unless user is actively rotating.
-    if (!rotateMode && !dragRef.current && !externalOrbitActiveRef.current) {
+    if (!rotateMode && !dragRef.current && !orbitRingGesture) {
       const transitionBlend = transitionBlendRef.current;
       let posLerp = THREE.MathUtils.lerp(CAM_POS_LERP, 0.42, transitionBlend);
       let rotLerp = THREE.MathUtils.lerp(CAM_ROT_LERP, 0.34, transitionBlend);
@@ -1536,8 +1835,8 @@ function CameraController({
     /* Walk “forward” = into the view: camera→pawn on XZ, snapped to cardinals. Touch: always. Desktop: while aiming. */
     const cameraDrivesFacingGrid =
       !!onTouchCameraForwardGridRef.current &&
-      !teleportLikeFraming &&
-      (touchUi || hasManualCameraRef.current || dragRef.current != null || externalOrbitActiveRef.current || rotateMode);
+      !lockCameraToAutoFraming &&
+      (touchUi || hasManualCameraRef.current || dragRef.current != null || orbitRingGesture || rotateMode);
     if (cameraDrivesFacingGrid) {
       const toPawn = new THREE.Vector3().subVectors(ctrl.target, camera.position);
       toPawn.y = 0;
@@ -1562,7 +1861,7 @@ function CameraController({
     }
 
     /* Mini-map: continuous bearing matches 3D orbit (touch drag, right-drag desktop, mini-map ring, etc.). */
-    if (!teleportLikeFraming && onIsoCameraBearingDegRef.current) {
+    if (!lockCameraToAutoFraming && onIsoCameraBearingDegRef.current) {
       const toB = new THREE.Vector3().subVectors(ctrl.target, camera.position);
       toB.y = 0;
       const hB = toB.length();
@@ -1571,7 +1870,7 @@ function CameraController({
         const bearingDeg = (Math.atan2(toB.z, toB.x) * 180) / Math.PI + 90;
         const prevB = lastEmittedBearingDegRef.current;
         const bearingThresh =
-          hasManualCameraRef.current || dragRef.current != null || externalOrbitActiveRef.current || rotateMode ? 0.04 : 0.12;
+          hasManualCameraRef.current || dragRef.current != null || orbitRingGesture || rotateMode ? 0.04 : 0.12;
         if (prevB == null || Math.abs(bearingDeg - prevB) > bearingThresh) {
           lastEmittedBearingDegRef.current = bearingDeg;
           onIsoCameraBearingDegRef.current(bearingDeg);
@@ -1579,7 +1878,6 @@ function CameraController({
       }
     }
 
-    externalOrbitActiveRef.current = false;
   });
 
   return (
@@ -1721,18 +2019,6 @@ function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number })
           opacity={0.35}
         />
       </mesh>
-      <Billboard position={[0, 2.1, 0]}>
-        <Text
-          fontSize={0.28}
-          color="#ffcc66"
-          outlineWidth={0.03}
-          outlineColor="#1a1206"
-          anchorX="center"
-          anchorY="bottom"
-        >
-          Slingshot — pull from center; switch Grid for exact path
-        </Text>
-      </Billboard>
     </group>
   );
 }
@@ -2312,13 +2598,16 @@ function Monsters3D({
 function MazeScene({
   grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
   zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, catapultMode,
-  catapultFrom, magicPortalPreviewOptions, teleportSourceType,
+  catapultFrom, catapultAimClient, catapultTrajectoryPreview, catapultLockCameraForPull,
+  magicPortalPreviewOptions, teleportSourceType,
   focusVersion, miniMonsters, fogIntensityMap, combatPulseVersion, combatMonster,
   touchUi = false,
   onTouchCameraForwardGrid,
   onIsoCameraBearingDeg,
   orbitLookApplierRef,
+  orbitRingPointerHeldRef,
   playerGlbPath,
+  isoCombatPlayerCue,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
   resetTick: number;
@@ -2326,12 +2615,16 @@ function MazeScene({
   teleportMode?: boolean;
   catapultMode?: boolean;
   catapultFrom?: [number, number] | null;
+  catapultAimClient?: { x: number; y: number } | null;
+  catapultTrajectoryPreview?: CatapultTrajectoryPreviewFn;
+  catapultLockCameraForPull?: boolean;
   magicPortalPreviewOptions?: [number, number][] | null;
   teleportSourceType?: "magic" | "gem" | "artifact" | null;
   combatPulseVersion?: number;
   combatMonster?: { x: number; y: number; type?: string } | null;
   onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
   orbitLookApplierRef: MutableRefObject<((dxPx: number, dyPx: number) => void) | null>;
+  orbitRingPointerHeldRef: MutableRefObject<boolean>;
 }) {
   const shadowRange = Math.max(mapWidth, mapHeight) * CS;
   return (
@@ -2391,6 +2684,7 @@ function MazeScene({
         facingDy={facingDy}
         combatPulse={combatPulseVersion}
         playerGlbPath={playerGlbPath}
+        isoCombatPlayerCue={isoCombatPlayerCue}
       />
       {magicPortalPreviewOptions &&
         magicPortalPreviewOptions.length > 0 &&
@@ -2401,6 +2695,13 @@ function MazeScene({
           </>
         )}
       {catapultFrom && <SlingshotSourceHint cellX={catapultFrom[0]} cellY={catapultFrom[1]} />}
+      {catapultFrom && catapultTrajectoryPreview && (
+        <SlingshotTrajectoryArc
+          from={catapultFrom}
+          aimClient={catapultAimClient ?? null}
+          previewFn={catapultTrajectoryPreview}
+        />
+      )}
       <CameraController
         grid={grid}
         mapWidth={mapWidth}
@@ -2414,11 +2715,13 @@ function MazeScene({
         resetTick={resetTick}
         teleportMode={!!teleportMode}
         catapultMode={!!catapultMode}
+        catapultLockCameraForPull={catapultLockCameraForPull ?? true}
         focusVersion={focusVersion}
         touchUi={touchUi}
         onTouchCameraForwardGrid={onTouchCameraForwardGrid}
         onIsoCameraBearingDeg={onIsoCameraBearingDeg}
         orbitLookApplierRef={orbitLookApplierRef}
+        orbitRingPointerHeldRef={orbitRingPointerHeldRef}
       />
       {teleportMode && !!teleportOptions?.length && (
         <TeleportTargetMarkers
@@ -2714,6 +3017,9 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     teleportMode,
     catapultMode = false,
     catapultFrom = null,
+    catapultAimClient = null,
+    catapultTrajectoryPreview,
+    catapultLockCameraForPull = true,
     magicPortalPreviewOptions = null,
     teleportSourceType = null,
     focusVersion,
@@ -2731,15 +3037,17 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     combatShieldAvailable = false,
     combatRunDisabled = false,
     playerGlbPath,
+    isoCombatPlayerCue = null,
     fillViewport = false,
     touchUi = false,
-    hideOverlayViewButtons = false,
     onRotateModeChange,
     onTouchCameraForwardGrid,
     onIsoCameraBearingDeg,
   }: Props,
   ref: Ref<MazeIsoViewImperativeHandle>,
 ) {
+  const canvasCameraRef = useRef<THREE.Camera | null>(null);
+  const canvasGlDomRef = useRef<HTMLCanvasElement | null>(null);
   const [btnRotate, setBtnRotate] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   const [resetTick, setResetTick] = useState(0);
@@ -2748,6 +3056,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
   btnRotateRef.current = btnRotate;
   const rotateMode = btnRotate || ctrlHeld;
   const orbitLookApplierRef = useRef<((dxPx: number, dyPx: number) => void) | null>(null);
+  const orbitRingPointerHeldRef = useRef(false);
 
   const resetCameraView = useCallback(() => {
     setBtnRotate(false);
@@ -2761,7 +3070,11 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       timerRef.current = setTimeout(() => setBtnRotate(false), ROTATE_TIMEOUT_MS);
     };
     btnRotateRef.current = true;
-    if (typeof window !== "undefined") {
+    /**
+     * Gyro + permission prompt only in explicit touch-first mode (`touchUi`).
+     * Otherwise minimap / canvas orbit matches desktop (no deviceorientation fighting finger drags on iOS).
+     */
+    if (typeof window !== "undefined" && touchUi) {
       const DO = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
         requestPermission?: () => Promise<"granted" | "denied">;
       };
@@ -2771,7 +3084,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       }
     }
     enable();
-  }, []);
+  }, [touchUi]);
 
   const bumpRotateSession = useCallback(() => {
     if (!btnRotateRef.current) return;
@@ -2785,8 +3098,17 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       activateRotate,
       bumpRotateSession,
       resetCameraView,
+      setOrbitRingPointerHeld: (held: boolean) => {
+        orbitRingPointerHeldRef.current = held;
+      },
       orbitLookByPixelDelta: (dxPx: number, dyPx: number) => {
         orbitLookApplierRef.current?.(dxPx, dyPx);
+      },
+      resolveCatapultLaunchAtClient: (from, clientX, clientY) => {
+        const cam = canvasCameraRef.current;
+        const el = canvasGlDomRef.current;
+        if (!cam || !el) return null;
+        return computeSlingLaunchScreenPull(from, clientX, clientY, cam as THREE.PerspectiveCamera, el);
       },
     }),
     [activateRotate, bumpRotateSession, resetCameraView],
@@ -2835,50 +3157,6 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       }}
       aria-label="Isometric 3D map view"
     >
-      {!hideOverlayViewButtons ? (
-        <div
-          style={{
-            position: "absolute",
-            top: fillViewport ? "max(8px, env(safe-area-inset-top, 0px))" : 8,
-            right: fillViewport ? "max(8px, env(safe-area-inset-right, 0px))" : 8,
-            zIndex: 10,
-            display: "flex",
-            gap: 8,
-          }}
-        >
-          <button
-            onMouseDown={activateRotate}
-            onTouchStart={activateRotate}
-            style={{
-              padding: "6px 12px", borderRadius: 6,
-              border: rotateMode ? "1px solid #00ff88" : "1px solid #555",
-              background: rotateMode ? "rgba(0,255,136,0.15)" : "rgba(20,20,30,0.85)",
-              color: rotateMode ? "#00ff88" : "#aaa",
-              fontSize: "0.75rem", fontFamily: "monospace",
-              cursor: "pointer", transition: "all 0.2s", userSelect: "none",
-            }}
-            title="Drag to orbit the camera. On devices with gyro, tilt to aim."
-          >
-            {rotateMode ? "Rotating..." : "Rotate View"}
-          </button>
-          <button
-            type="button"
-            onClick={resetCameraView}
-            style={{
-              padding: "6px 12px", borderRadius: 6,
-              border: "1px solid #555",
-              background: "rgba(20,20,30,0.85)",
-              color: "#aaa",
-              fontSize: "0.75rem", fontFamily: "monospace",
-              cursor: "pointer", transition: "all 0.2s", userSelect: "none",
-            }}
-            title="Reset camera to default 3rd-person view behind the player"
-          >
-            Reset View
-          </button>
-        </div>
-      ) : null}
-
       <Canvas
         shadows
         camera={{ position: [camDist, CAM_HEIGHT, camDist], fov: THREE.MathUtils.clamp(92 - zoom * 16, 58, 95), near: 0.1, far: 800 }}
@@ -2904,6 +3182,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           onCombatRollRequest();
         }}
       >
+        <CanvasContextBridge cameraRef={canvasCameraRef} glDomRef={canvasGlDomRef} />
         <MazeScene
           grid={grid} mapWidth={mapWidth} mapHeight={mapHeight}
           playerX={playerX} playerY={playerY}
@@ -2916,6 +3195,9 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           teleportMode={teleportMode}
           catapultMode={catapultMode}
           catapultFrom={catapultFrom}
+          catapultAimClient={catapultAimClient}
+          catapultTrajectoryPreview={catapultTrajectoryPreview}
+          catapultLockCameraForPull={catapultLockCameraForPull}
           magicPortalPreviewOptions={magicPortalPreviewOptions}
           teleportSourceType={teleportSourceType}
           focusVersion={focusVersion}
@@ -2927,7 +3209,9 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           onTouchCameraForwardGrid={onTouchCameraForwardGrid}
           onIsoCameraBearingDeg={onIsoCameraBearingDeg}
           orbitLookApplierRef={orbitLookApplierRef}
+          orbitRingPointerHeldRef={orbitRingPointerHeldRef}
           playerGlbPath={playerGlbPath}
+          isoCombatPlayerCue={isoCombatPlayerCue}
         />
       </Canvas>
       {combatActive && (
