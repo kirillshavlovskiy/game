@@ -6312,29 +6312,6 @@ export default function LabyrinthGame() {
     [lab, catapultPicker, catapultMode]
   );
 
-  /** 3D slingshot aim preview (same physics as 2D SVG preview). */
-  const isoCatapultPreviewTraj = useMemo(() => {
-    if (!lab || !catapultPicker || !catapultDragOffset) return null;
-    if (catapultDragOffset.dx === 0 && catapultDragOffset.dy === 0) return null;
-    const strength = Math.hypot(catapultDragOffset.dx, catapultDragOffset.dy);
-    if (strength < 1) return null;
-    const p = lab.players[catapultPicker.playerIndex];
-    if (!p) return null;
-    return lab.getCatapultTrajectory(
-      p.x,
-      p.y,
-      -catapultDragOffset.dx,
-      -catapultDragOffset.dy,
-      strength,
-      false
-    );
-  }, [lab, catapultPicker, catapultDragOffset]);
-
-  const isoCatapultTrajectoryStrength = useMemo(
-    () => (catapultDragOffset ? Math.hypot(catapultDragOffset.dx, catapultDragOffset.dy) : 0),
-    [catapultDragOffset]
-  );
-
   /** Purple destination beacons in 3D while magic portal is available (matches 2D hole styling). */
   const isoMagicPortalPreviewOptions = useMemo(() => {
     if (!lab || mazeMapView !== "iso" || !magicPortalReady) return null;
@@ -9058,13 +9035,14 @@ export default function LabyrinthGame() {
               const combatPlayerGlb = getPlayer3DGlb(playerAvatars[headerPi]);
 
               const playerGltfVisualState: MonsterSpriteState = (() => {
+                if (combatResult?.playerDefeated && !combatState) return "defeated";
                 if (dracula3dAwaitingRollIdle) return "idle";
                 switch (gltfVisualState) {
                   case "attack": return "hurt";
                   case "angry": return "knockdown";
                   case "hurt": return "attack";
                   case "knockdown": return "angry";
-                  case "defeated": return "angry";
+                  case "defeated": return "idle";
                   case "recover": return "idle";
                   case "rolling": return "rolling";
                   default: return "idle";
@@ -11231,15 +11209,13 @@ export default function LabyrinthGame() {
                 facingDy={playerFacing[currentPlayer]?.dy ?? 1}
                 zoom={mazeZoom}
                 visible
-                onCellClick={isMobile && !teleportPicker ? undefined : handleCellTap}
-                touchUi={isMobile}
+                onCellClick={handleCellTap}
+                touchUi={false}
                 hideOverlayViewButtons={isLandscapeCompact && isMobile && mazeMapView === "iso"}
                 onRotateModeChange={setIsoCamRotateActive}
                 teleportOptions={teleportPicker?.options ?? []}
                 teleportMode={!!teleportPicker}
                 catapultMode={!!catapultPicker}
-                catapultArcPoints={isoCatapultPreviewTraj?.arcPoints ?? null}
-                catapultTrajectoryStrength={isoCatapultTrajectoryStrength}
                 catapultFrom={catapultPicker?.from ?? null}
                 magicPortalPreviewOptions={isoMagicPortalPreviewOptions}
                 teleportSourceType={teleportPicker?.sourceType ?? null}
@@ -11261,11 +11237,60 @@ export default function LabyrinthGame() {
                     ? handleCombatRollClick
                     : undefined
                 }
+                onCombatRun={
+                  mazeMapView === "iso" && !!combatState
+                    ? handleRunAway
+                    : undefined
+                }
+                onCombatShieldToggle={
+                  mazeMapView === "iso" && !!combatState
+                    ? () => setCombatUseShield((v) => !v)
+                    : undefined
+                }
+                combatShieldOn={combatUseShield}
+                combatShieldAvailable={!!combatState && (cp?.shield ?? 0) > 0}
+                combatRunDisabled={rolling}
                 playerGlbPath={getPlayer3DGlb(playerAvatars[currentPlayer])}
                 fillViewport={mazeIsoFillViewport}
                 onTouchCameraForwardGrid={mazeMapView === "iso" ? onTouchCameraForwardGrid : undefined}
                 onIsoCameraBearingDeg={mazeMapView === "iso" ? onIsoCameraBearingDeg : undefined}
               />
+              {mazeMapView === "iso" && catapultPicker && catapultDragOffset && (() => {
+                const { dx, dy } = catapultDragOffset;
+                const pull = Math.hypot(dx, dy);
+                if (pull < 8) return null;
+                const lx = -dx / pull;
+                const ly = -dy / pull;
+                const reach = Math.min(46, 10 + pull * 0.2);
+                const cx = 50;
+                const cy = 50;
+                return (
+                  <svg
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      pointerEvents: "none",
+                      zIndex: 6,
+                    }}
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="xMidYMid meet"
+                    aria-hidden
+                  >
+                    <line
+                      x1={cx}
+                      y1={cy}
+                      x2={cx + lx * reach}
+                      y2={cy + ly * reach}
+                      stroke="#ffcc66"
+                      strokeWidth={1.1}
+                      strokeDasharray="3.2 2.1"
+                      strokeLinecap="round"
+                      opacity={0.95}
+                    />
+                    <circle cx={cx} cy={cy} r={2.4} fill="#fff3c4" opacity={0.92} />
+                  </svg>
+                );
+              })()}
               {catapultPicker && (
                 <div
                   style={{
@@ -12297,7 +12322,12 @@ export default function LabyrinthGame() {
             })()}
         </div>
         )}
-        {catapultPicker && catapultDragOffset && lab && (catapultDragOffset.dx !== 0 || catapultDragOffset.dy !== 0) && (() => {
+        {mazeMapView === "grid" &&
+        catapultPicker &&
+        catapultDragOffset &&
+        lab &&
+        (catapultDragOffset.dx !== 0 || catapultDragOffset.dy !== 0) &&
+        (() => {
           const dx = catapultDragOffset.dx;
           const dy = catapultDragOffset.dy;
           const strength = Math.sqrt(dx * dx + dy * dy);

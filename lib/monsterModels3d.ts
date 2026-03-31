@@ -438,8 +438,8 @@ export const PLAYER_3D_GLB = "/models/player/wasteland-drifter.glb";
 /** All available 3D player character models — mapped by portrait path for selection. */
 export const PLAYER_3D_GLBS: Record<string, string> = {
   "/heroes/hero-wear-1.png": "/models/player/wasteland-drifter.glb",
-  "/heroes/hero-wear-2.png": "/models/player/hooded-wraith.glb",
-  "/heroes/hero-wear-3.png": "/models/player/shadowbound-sorcerer.glb",
+  "/heroes/hero-wear-2.png": "/models/player/wasteland-drifter.glb",
+  "/heroes/hero-wear-3.png": "/models/player/wasteland-drifter.glb",
   "/heroes/hero-wear-4.png": "/models/player/wasteland-drifter.glb",
 };
 

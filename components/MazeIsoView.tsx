@@ -42,13 +42,9 @@ type Props = {
   onCellClick?: (x: number, y: number) => void;
   teleportOptions?: [number, number][];
   teleportMode?: boolean;
-  /** Slingshot / catapult aim in 3D: raised camera + trajectory overlay. */
+  /** Slingshot / catapult aim in 3D: raised camera; trajectory preview is only on the 2D grid or as a screen aim line (parent). */
   catapultMode?: boolean;
-  /** Grid-space arc samples from `Labyrinth.getCatapultTrajectory` (preview). */
-  catapultArcPoints?: [number, number][] | null;
-  /** Screen drag length (px) for arc height / parabola scale. */
-  catapultTrajectoryStrength?: number;
-  /** Slingshot source tile — yellow actionable hint. */
+  /** Slingshot source tile — yellow floor hint on the launch cell. */
   catapultFrom?: [number, number] | null;
   /** While on magic (portal not open yet): possible teleport destinations (purple). */
   magicPortalPreviewOptions?: [number, number][] | null;
@@ -85,6 +81,11 @@ type Props = {
   combatPulseVersion?: number;
   combatMonster?: { x: number; y: number; type?: string } | null;
   onCombatRollRequest?: () => void;
+  onCombatRun?: () => void;
+  onCombatShieldToggle?: () => void;
+  combatShieldOn?: boolean;
+  combatShieldAvailable?: boolean;
+  combatRunDisabled?: boolean;
   /** Dynamic player GLB path based on selected avatar. Falls back to wasteland-drifter. */
   playerGlbPath?: string;
 };
@@ -97,6 +98,10 @@ export type MazeIsoViewImperativeHandle = {
   /** Apply the same orbit deltas as dragging on the 3D canvas (e.g. mini-map ring in landscape). */
   orbitLookByPixelDelta: (dxPx: number, dyPx: number) => void;
 };
+
+/** Suppresses floor-tile clicks after a camera drag so releasing the mouse button doesn't trigger a move. */
+let _suppressNextFloorClick = false;
+const DRAG_SUPPRESS_THRESHOLD_PX = 6;
 
 /**
  * World size of one grid step. Path cells are one CS wide between wall centers, so raising CS widens
@@ -148,6 +153,10 @@ function FloorTiles({
   }, [grid, mapWidth, mapHeight]);
 
   const handleClick = useCallback((e: ThreeEvent<MouseEvent>) => {
+    if (_suppressNextFloorClick) {
+      _suppressNextFloorClick = false;
+      return;
+    }
     if (!onCellClick || e.instanceId === undefined) return;
     e.stopPropagation();
     const cell = cellMap.current[e.instanceId];
@@ -1100,120 +1109,6 @@ function FloorStains({
 }
 
 /* ------------------------------------------------------------------ */
-/*  Slingshot aim trajectory (above maze, fades before “impact”)       */
-/* ------------------------------------------------------------------ */
-const CATAPULT_TRAJ_VERT = `
-attribute float alpha;
-varying float vAlpha;
-void main() {
-  vAlpha = alpha;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}
-`;
-
-const CATAPULT_TRAJ_FRAG = `
-uniform vec3 uColor;
-varying float vAlpha;
-void main() {
-  if (vAlpha < 0.02) discard;
-  gl_FragColor = vec4(uColor, vAlpha * 0.88);
-}
-`;
-
-function densifyArcPoints2D(arcPoints: [number, number][], outCount: number): [number, number][] {
-  if (arcPoints.length < 2 || outCount < 2) return arcPoints;
-  const out: [number, number][] = [];
-  const nSeg = arcPoints.length - 1;
-  for (let s = 0; s < outCount; s++) {
-    const t = s / (outCount - 1);
-    const f = t * nSeg;
-    const i = Math.min(nSeg - 1, Math.floor(f));
-    const lt = f - i;
-    const [x0, y0] = arcPoints[i]!;
-    const [x1, y1] = arcPoints[i + 1]!;
-    out.push([x0 + (x1 - x0) * lt, y0 + (y1 - y0) * lt]);
-  }
-  return out;
-}
-
-function CatapultTrajectory3D({
-  arcPoints,
-  strength,
-}: {
-  arcPoints: [number, number][];
-  strength: number;
-}) {
-  const linePayload = useMemo(() => {
-    const dense = densifyArcPoints2D(arcPoints, 48);
-    const n = dense.length;
-    if (n < 2) return null;
-    const cum: number[] = [0];
-    for (let i = 1; i < n; i++) {
-      const [xa, ya] = dense[i - 1]!;
-      const [xb, yb] = dense[i]!;
-      const dx = (xb - xa) * CS;
-      const dz = (yb - ya) * CS;
-      cum.push(cum[i - 1]! + Math.hypot(dx, dz));
-    }
-    const pathLen = Math.max(0.001, cum[n - 1] ?? 1);
-    const H = Math.min(
-      8.8,
-      0.75 + strength * 0.034 + pathLen * 0.24
-    );
-    const positions = new Float32Array(n * 3);
-    const alphas = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      const u = (cum[i] ?? 0) / pathLen;
-      const [gx, gy] = dense[i]!;
-      const wx = gx * CS;
-      const wz = gy * CS;
-      const arch = H * 4 * u * (1 - u);
-      let wy = FLOOR_Y + 0.42 + arch;
-      if (u > 0.52) {
-        const v = (u - 0.52) / 0.48;
-        wy += v * v * (1.6 + strength * 0.018);
-      }
-      positions[i * 3] = wx;
-      positions[i * 3 + 1] = wy;
-      positions[i * 3 + 2] = wz;
-      let a = 1;
-      if (u > 0.34) {
-        a *= 1 - THREE.MathUtils.smoothstep(u, 0.34, 0.84);
-      }
-      if (u > 0.72) {
-        a *= 1 - THREE.MathUtils.smoothstep(u, 0.72, 0.95);
-      }
-      alphas[i] = Math.max(0, Math.min(1, a));
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute("alpha", new THREE.BufferAttribute(alphas, 1));
-    const material = new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      uniforms: { uColor: { value: new THREE.Color("#ffcc66") } },
-      vertexShader: CATAPULT_TRAJ_VERT,
-      fragmentShader: CATAPULT_TRAJ_FRAG,
-    });
-    const line = new THREE.Line(geometry, material);
-    line.frustumCulled = false;
-    line.renderOrder = 920;
-    return { line, geometry, material };
-  }, [arcPoints, strength]);
-
-  useEffect(() => {
-    if (!linePayload) return undefined;
-    return () => {
-      linePayload.geometry.dispose();
-      linePayload.material.dispose();
-    };
-  }, [linePayload]);
-
-  if (!linePayload) return null;
-  return <primitive object={linePayload.line} />;
-}
-
-/* ------------------------------------------------------------------ */
 /*  Camera controller: smooth follow, pan default, rotate on demand    */
 /* ------------------------------------------------------------------ */
 /** Camera height above the floor while auto-following (slightly high so side walls clear the marker in 1-wide halls). */
@@ -1293,6 +1188,7 @@ function CameraController({
   const controlsRef = useRef<any>(null);
   const prevResetTick = useRef(resetTick);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
+  const dragAccumRef = useRef(0);
   /** True for exactly the frame when orbitLookByPixelDelta (minimap ring) applied a delta — synchronous guard like dragRef. */
   const externalOrbitActiveRef = useRef(false);
   const hasManualCameraRef = useRef(false);
@@ -1336,9 +1232,6 @@ function CameraController({
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera) {
       let baseFov = THREE.MathUtils.clamp(92 - zoom * 16, 58, 95);
-      if (touchUi && !teleportMode && !catapultMode) {
-        baseFov = THREE.MathUtils.clamp(baseFov + 5, 58, 99);
-      }
       // Teleport: wide FOV. Slingshot: modest extra (camera sits near wall height, not far above).
       let fovBoost = 0;
       if (teleportMode || catapultMode) {
@@ -1348,7 +1241,7 @@ function CameraController({
         fovBoost > 0 ? THREE.MathUtils.clamp(baseFov + fovBoost, 72, 108) : baseFov;
       camera.updateProjectionMatrix();
     }
-  }, [camera, zoom, touchUi, teleportMode, catapultMode]);
+  }, [camera, zoom, teleportMode, catapultMode]);
 
   const prevCatapultRef = useRef(false);
   useEffect(() => {
@@ -1359,57 +1252,66 @@ function CameraController({
     prevCatapultRef.current = catapultMode;
   }, [catapultMode]);
 
-  /* Desktop: right-drag (or Ctrl+left) orbits and aims; left-drag stays pan. Touch: rotateMode + one-finger drag. */
+  /* Camera orbit: left-drag (desktop) or one-finger swipe (any touch device) orbits the camera.
+     Touch sensitivity is boosted so a short swipe produces ~90° rotation. */
+  const TOUCH_ORBIT_SENSITIVITY = 3.2;
   useEffect(() => {
     const canvas = gl.domElement;
 
     const onMouseDown = (e: MouseEvent) => {
-      if (touchUi) return;
-      const rightOrbit = e.button === 2;
-      const ctrlOrbit = e.button === 0 && e.ctrlKey;
-      const rotateLeftOrbit = e.button === 0 && rotateMode;
-      if (!rightOrbit && !ctrlOrbit && !rotateLeftOrbit) return;
-      dragRef.current = { x: e.clientX, y: e.clientY };
-      if (rightOrbit || ctrlOrbit || rotateLeftOrbit) e.preventDefault();
+      if (e.button === 0 || e.button === 2) {
+        dragRef.current = { x: e.clientX, y: e.clientY };
+        dragAccumRef.current = 0;
+        e.preventDefault();
+      }
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!dragRef.current) return;
       const dx = e.clientX - dragRef.current.x;
       const dy = e.clientY - dragRef.current.y;
+      dragAccumRef.current += Math.abs(dx) + Math.abs(dy);
       dragRef.current = { x: e.clientX, y: e.clientY };
       applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
-    const onMouseUp = () => { dragRef.current = null; };
-    const onContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
+    const onMouseUp = () => {
+      if (dragAccumRef.current > DRAG_SUPPRESS_THRESHOLD_PX) {
+        _suppressNextFloorClick = true;
+      }
+      dragRef.current = null;
+      dragAccumRef.current = 0;
     };
+    const onContextMenu = (e: MouseEvent) => { e.preventDefault(); };
     const onWheel = () => {
-      if (touchUi) return;
       const ctrl = controlsRef.current;
       if (!ctrl) return;
-      const target = ctrl.target;
       hasManualCameraRef.current = true;
-      manualOffsetRef.current = camera.position.clone().sub(target);
+      manualOffsetRef.current = camera.position.clone().sub(ctrl.target);
     };
 
-    /** Touch UI: one-finger drag on the canvas adjusts orbit (same as rotate mode) without tapping Rotate. */
     const onTouchStart = (e: TouchEvent) => {
-      if (!touchUi) return;
       if (e.touches.length !== 1) return;
       e.preventDefault();
       dragRef.current = { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY };
+      dragAccumRef.current = 0;
     };
     const onTouchMove = (e: TouchEvent) => {
-      if (!touchUi || !dragRef.current || e.touches.length !== 1) return;
+      if (!dragRef.current || e.touches.length !== 1) return;
       e.preventDefault();
       const t = e.touches[0]!;
-      const dx = t.clientX - dragRef.current.x;
-      const dy = t.clientY - dragRef.current.y;
+      const rawDx = t.clientX - dragRef.current.x;
+      const rawDy = t.clientY - dragRef.current.y;
+      dragAccumRef.current += Math.abs(rawDx) + Math.abs(rawDy);
+      const dx = rawDx * TOUCH_ORBIT_SENSITIVITY;
+      const dy = rawDy * TOUCH_ORBIT_SENSITIVITY;
       dragRef.current = { x: t.clientX, y: t.clientY };
       applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
     const onTouchEnd = () => {
-      if (touchUi) dragRef.current = null;
+      if (dragAccumRef.current > DRAG_SUPPRESS_THRESHOLD_PX) {
+        _suppressNextFloorClick = true;
+      }
+      dragRef.current = null;
+      dragAccumRef.current = 0;
     };
 
     const capMouse: AddEventListenerOptions = { capture: true };
@@ -1433,10 +1335,10 @@ function CameraController({
       canvas.removeEventListener("touchend", onTouchEnd);
       canvas.removeEventListener("touchcancel", onTouchEnd);
     };
-  }, [camera, gl, rotateMode, touchUi]);
+  }, [camera, gl]);
 
   useEffect(() => {
-    if (!touchUi || !rotateMode) {
+    if (!rotateMode) {
       lastOrientRef.current = null;
       return;
     }
@@ -1454,28 +1356,26 @@ function CameraController({
     };
     window.addEventListener("deviceorientation", onOrient, true);
     return () => window.removeEventListener("deviceorientation", onOrient, true);
-  }, [touchUi, rotateMode, camera]);
+  }, [rotateMode, camera]);
 
-  /** Touch play: turn off OrbitControls entirely so one/two-finger drags never pan, rotate, or pinch-zoom the camera. */
+  /** Keep OrbitControls enabled only for scroll-wheel zoom; pan/rotate are handled by our manual drag. */
   useLayoutEffect(() => {
     const apply = () => {
       const c = controlsRef.current;
       if (!c) return false;
-      c.enabled = !touchUi;
+      c.enablePan = false;
+      c.enableRotate = false;
+      c.enableZoom = true;
       return true;
     };
     if (apply()) return undefined;
-    const id = requestAnimationFrame(() => {
-      apply();
-    });
+    const id = requestAnimationFrame(() => { apply(); });
     return () => cancelAnimationFrame(id);
-  }, [touchUi]);
+  }, []);
 
   useFrame(() => {
     const ctrl = controlsRef.current;
     if (!ctrl) return;
-    const wantEnabled = !touchUi;
-    if (ctrl.enabled !== wantEnabled) ctrl.enabled = wantEnabled;
 
     const isWalkable = (cx: number, cy: number) =>
       cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && grid[cy]?.[cx] !== WALL;
@@ -1554,7 +1454,6 @@ function CameraController({
         : autoOffset.clone();
 
     if (
-      touchUi &&
       !touchCameraBootstrappedRef.current &&
       !hasManualCameraRef.current &&
       manualOffsetRef.current == null &&
@@ -1607,10 +1506,7 @@ function CameraController({
       transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.55);
     }
 
-    // Facing direction changed: ease camera behind the marker (smoothFollowDirRef does the heavy lifting).
-    // Touch UI: facing is often driven from camera→pawn cardinals; clearing manual orbit here makes the
-    // minimap ring / orbit stop after a tiny nudge. Desktop keeps the old reset-on-turn behavior.
-    if (facingChanged && !rotateMode && !touchUi) {
+    if (facingChanged && !rotateMode) {
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       autoDirRef.current = desiredDir;
@@ -1692,12 +1588,12 @@ function CameraController({
       target={[playerX * CS, catapultMode ? CATAPULT_LOOK_AT_Y : CAM_LOOK_AT_Y, playerY * CS]}
       enableDamping={false}
       enableRotate={false}
-      enablePan={!touchUi}
-      enableZoom={!touchUi}
+      enablePan={false}
+      enableZoom={true}
       minDistance={2.2}
       maxDistance={180}
       zoomSpeed={1.6}
-      mouseButtons={{ LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }}
+      mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: undefined as unknown as THREE.MOUSE }}
     />
   );
 }
@@ -1795,22 +1691,17 @@ function TeleportTargetMarkers({
   );
 }
 
-/** Yellow slingshot cue on the launch tile: floor rings + vertical START pillar. */
+/** Launch cell: floor rings only (no extra world-space “trajectory” geometry). */
 function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number }) {
   const ringRef = useRef<THREE.Mesh>(null);
-  const pillarTop = FLOOR_Y + WALL_HEIGHT + CS * 0.95;
-  const pillarH = pillarTop - FLOOR_Y - 0.06;
-  const pillarMidY = FLOOR_Y + 0.06 + pillarH * 0.5;
   useFrame(({ clock }) => {
     const m = ringRef.current;
     if (!m) return;
-    const t = clock.getElapsedTime();
-    const s = 1 + Math.sin(t * 2.6) * 0.06;
-    m.scale.setScalar(s);
+    m.scale.setScalar(1 + Math.sin(clock.getElapsedTime() * 2.6) * 0.06);
   });
   return (
-    <group position={[cellX * CS, 0, cellY * CS]}>
-      <mesh ref={ringRef} position={[0, FLOOR_Y + 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={910}>
+    <group position={[cellX * CS, FLOOR_Y + 0.08, cellY * CS]}>
+      <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]} renderOrder={910}>
         <ringGeometry args={[0.42, 0.62, 32]} />
         <meshBasicMaterial
           color="#ffcc00"
@@ -1820,7 +1711,7 @@ function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number })
           opacity={0.92}
         />
       </mesh>
-      <mesh position={[0, FLOOR_Y + 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={909}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} renderOrder={909}>
         <ringGeometry args={[0.55, 0.78, 32]} />
         <meshBasicMaterial
           color="#ffaa22"
@@ -1830,109 +1721,16 @@ function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number })
           opacity={0.35}
         />
       </mesh>
-      <mesh position={[0, pillarMidY, 0]} renderOrder={908}>
-        <cylinderGeometry args={[0.07, 0.09, pillarH, 10]} />
-        <meshStandardMaterial
-          color="#ffcc44"
-          emissive="#ffaa00"
-          emissiveIntensity={0.55}
-          transparent
-          opacity={0.82}
-          depthWrite={false}
-        />
-      </mesh>
-      <Billboard position={[0, pillarTop + 0.35, 0]}>
+      <Billboard position={[0, 2.1, 0]}>
         <Text
-          fontSize={0.38}
-          color="#fff0aa"
-          outlineWidth={0.035}
-          outlineColor="#2a1a00"
-          anchorX="center"
-          anchorY="bottom"
-        >
-          START
-        </Text>
-      </Billboard>
-      <Billboard position={[0, pillarTop - 0.15, 0]}>
-        <Text
-          fontSize={0.22}
-          color="#ffcc88"
-          outlineWidth={0.022}
+          fontSize={0.28}
+          color="#ffcc66"
+          outlineWidth={0.03}
           outlineColor="#1a1206"
           anchorX="center"
-          anchorY="top"
-        >
-          {`(${cellX}, ${cellY}) · pull on 3D`}
-        </Text>
-      </Billboard>
-    </group>
-  );
-}
-
-/**
- * Glowing point above the labyrinth: sits over map center until you aim, then over the arc’s end cell
- * so strike direction reads against a fixed sky reference.
- */
-function SlingshotStrikeSkyMarker({
-  mapWidth,
-  mapHeight,
-  arcEndCell,
-}: {
-  mapWidth: number;
-  mapHeight: number;
-  arcEndCell: [number, number] | null;
-}) {
-  const orbRef = useRef<THREE.Mesh>(null);
-  const skyY = FLOOR_Y + WALL_HEIGHT + CS * 3.35;
-  const midGx = (mapWidth - 1) / 2;
-  const midGz = (mapHeight - 1) / 2;
-  const tx = arcEndCell != null ? arcEndCell[0] * CS : midGx * CS;
-  const tz = arcEndCell != null ? arcEndCell[1] * CS : midGz * CS;
-  const colBottom = FLOOR_Y + 0.1;
-  const colH = skyY - colBottom - 0.2;
-  const hasAim = arcEndCell != null;
-  useFrame(({ clock }) => {
-    const m = orbRef.current;
-    if (!m) return;
-    const t = clock.getElapsedTime();
-    const p = 0.92 + Math.sin(t * 3.1) * 0.08;
-    m.scale.setScalar(p);
-  });
-  return (
-    <group>
-      <mesh position={[tx, colBottom + colH * 0.5, tz]} renderOrder={907}>
-        <cylinderGeometry args={[0.05, 0.06, Math.max(0.15, colH), 8]} />
-        <meshStandardMaterial
-          color={hasAim ? "#ff9944" : "#88aacc"}
-          emissive={hasAim ? "#ff6622" : "#4466aa"}
-          emissiveIntensity={0.35}
-          transparent
-          opacity={0.45}
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh ref={orbRef} position={[tx, skyY, tz]} renderOrder={911}>
-        <sphereGeometry args={[0.32, 20, 20]} />
-        <meshStandardMaterial
-          color={hasAim ? "#ffcc66" : "#aaccff"}
-          emissive={hasAim ? "#ffaa33" : "#6699ff"}
-          emissiveIntensity={1.15}
-          transparent
-          opacity={0.95}
-          depthWrite={false}
-        />
-      </mesh>
-      <Billboard position={[tx, skyY + 0.62, tz]}>
-        <Text
-          fontSize={hasAim ? 0.3 : 0.26}
-          color={hasAim ? "#ffe8aa" : "#cce0ff"}
-          outlineWidth={0.028}
-          outlineColor="#0a0a12"
-          anchorX="center"
           anchorY="bottom"
-          maxWidth={3.2}
         >
-          {hasAim ? "Approx. strike" : "Above maze — aim toward here"}
+          Slingshot — pull from center; switch Grid for exact path
         </Text>
       </Billboard>
     </group>
@@ -2513,8 +2311,8 @@ function Monsters3D({
 
 function MazeScene({
   grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
-  zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, catapultMode, catapultArcPoints,
-  catapultTrajectoryStrength, catapultFrom, magicPortalPreviewOptions, teleportSourceType,
+  zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, catapultMode,
+  catapultFrom, magicPortalPreviewOptions, teleportSourceType,
   focusVersion, miniMonsters, fogIntensityMap, combatPulseVersion, combatMonster,
   touchUi = false,
   onTouchCameraForwardGrid,
@@ -2527,8 +2325,6 @@ function MazeScene({
   teleportOptions?: [number, number][];
   teleportMode?: boolean;
   catapultMode?: boolean;
-  catapultArcPoints?: [number, number][] | null;
-  catapultTrajectoryStrength?: number;
   catapultFrom?: [number, number] | null;
   magicPortalPreviewOptions?: [number, number][] | null;
   teleportSourceType?: "magic" | "gem" | "artifact" | null;
@@ -2604,26 +2400,7 @@ function MazeScene({
             <TeleportTargetMarkers options={magicPortalPreviewOptions} accent="magic" previewOnly />
           </>
         )}
-      {catapultFrom && (
-        <>
-          <SlingshotSourceHint cellX={catapultFrom[0]} cellY={catapultFrom[1]} />
-          <SlingshotStrikeSkyMarker
-            mapWidth={mapWidth}
-            mapHeight={mapHeight}
-            arcEndCell={
-              catapultArcPoints && catapultArcPoints.length > 0
-                ? catapultArcPoints[catapultArcPoints.length - 1]!
-                : null
-            }
-          />
-        </>
-      )}
-      {catapultArcPoints && catapultArcPoints.length >= 2 && (
-        <CatapultTrajectory3D
-          arcPoints={catapultArcPoints}
-          strength={Math.max(12, catapultTrajectoryStrength ?? 0)}
-        />
-      )}
+      {catapultFrom && <SlingshotSourceHint cellX={catapultFrom[0]} cellY={catapultFrom[1]} />}
       <CameraController
         grid={grid}
         mapWidth={mapWidth}
@@ -2936,8 +2713,6 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     teleportOptions,
     teleportMode,
     catapultMode = false,
-    catapultArcPoints = null,
-    catapultTrajectoryStrength = 0,
     catapultFrom = null,
     magicPortalPreviewOptions = null,
     teleportSourceType = null,
@@ -2950,6 +2725,11 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     combatPulseVersion = 0,
     combatMonster = null,
     onCombatRollRequest,
+    onCombatRun,
+    onCombatShieldToggle,
+    combatShieldOn = false,
+    combatShieldAvailable = false,
+    combatRunDisabled = false,
     playerGlbPath,
     fillViewport = false,
     touchUi = false,
@@ -2981,7 +2761,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       timerRef.current = setTimeout(() => setBtnRotate(false), ROTATE_TIMEOUT_MS);
     };
     btnRotateRef.current = true;
-    if (touchUi && typeof window !== "undefined") {
+    if (typeof window !== "undefined") {
       const DO = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
         requestPermission?: () => Promise<"granted" | "denied">;
       };
@@ -2991,7 +2771,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       }
     }
     enable();
-  }, [touchUi]);
+  }, []);
 
   const bumpRotateSession = useCallback(() => {
     if (!btnRotateRef.current) return;
@@ -3077,11 +2857,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
               fontSize: "0.75rem", fontFamily: "monospace",
               cursor: "pointer", transition: "all 0.2s", userSelect: "none",
             }}
-            title={
-              touchUi
-                ? "Tap: then tilt the device or drag on the 3D view to aim the camera. Walking uses the dock controls only."
-                : "Right-drag on the 3D view to aim the camera (or hold Ctrl and left-drag). Optional: Rotate View then left-drag."
-            }
+            title="Drag to orbit the camera. On devices with gyro, tilt to aim."
           >
             {rotateMode ? "Rotating..." : "Rotate View"}
           </button>
@@ -3115,9 +2891,9 @@ const MazeIsoView = forwardRef(function MazeIsoView(
                 width: "100%",
                 height: "100%",
                 display: "block",
-                touchAction: touchUi ? "none" : "auto",
+                touchAction: "none",
               }
-            : { width: "100%", flex: 1, minHeight: 0, ...(touchUi ? { touchAction: "none" as const } : {}) }
+            : { width: "100%", flex: 1, minHeight: 0, touchAction: "none" as const }
         }
         gl={{ antialias: true, alpha: false }}
         dpr={[1, 1.4]}
@@ -3139,8 +2915,6 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           teleportOptions={teleportOptions}
           teleportMode={teleportMode}
           catapultMode={catapultMode}
-          catapultArcPoints={catapultArcPoints}
-          catapultTrajectoryStrength={catapultTrajectoryStrength}
           catapultFrom={catapultFrom}
           magicPortalPreviewOptions={magicPortalPreviewOptions}
           teleportSourceType={teleportSourceType}
@@ -3157,34 +2931,133 @@ const MazeIsoView = forwardRef(function MazeIsoView(
         />
       </Canvas>
       {combatActive && (
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            bottom: 14,
-            transform: "translateX(-50%)",
-            zIndex: 11,
-            pointerEvents: "none",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 4,
-            background: "rgba(6,8,14,0.74)",
-            border: "1px solid rgba(143,216,255,0.42)",
-            borderRadius: 10,
-            padding: "6px 10px",
-            boxShadow: "0 8px 22px rgba(0,0,0,0.35)",
-          }}
-        >
-          <div style={{ fontSize: "0.74rem", color: "#bde9ff", fontWeight: 700 }}>
-            {combatRolling ? "Rolling..." : "Click 3D view to roll strike"}
-          </div>
-          {combatRollFace != null && (
-            <div style={{ fontSize: "0.8rem", color: "#ffdca8" }}>
-              d6 result: <strong>{combatRollFace}</strong>
+        <>
+          {/* Top-center combat hint */}
+          <div
+            style={{
+              position: "absolute",
+              top: "max(12px, env(safe-area-inset-top, 0px))",
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 20,
+              pointerEvents: "none",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 4,
+              background: "rgba(6,8,14,0.82)",
+              border: "1px solid rgba(143,216,255,0.5)",
+              borderRadius: 12,
+              padding: "8px 16px",
+              boxShadow: "0 8px 28px rgba(0,0,0,0.5)",
+            }}
+          >
+            <div style={{ fontSize: "0.82rem", color: "#bde9ff", fontWeight: 700 }}>
+              {combatRolling ? "Rolling..." : "Tap to roll strike"}
             </div>
-          )}
-        </div>
+            {combatRollFace != null && (
+              <div style={{ fontSize: "0.9rem", color: "#ffdca8" }}>
+                d6 result: <strong>{combatRollFace}</strong>
+              </div>
+            )}
+          </div>
+          {/* Left-side combat action buttons */}
+          <div
+            style={{
+              position: "absolute",
+              left: "max(12px, env(safe-area-inset-left, 0px))",
+              top: "50%",
+              transform: "translateY(-50%)",
+              zIndex: 20,
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              pointerEvents: "auto",
+            }}
+          >
+            <button
+              type="button"
+              onClick={onCombatRollRequest}
+              disabled={combatRolling}
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: 14,
+                border: "2px solid rgba(143,216,255,0.6)",
+                background: combatRolling ? "rgba(30,40,55,0.7)" : "rgba(14,28,48,0.88)",
+                color: combatRolling ? "#6a8aa4" : "#bde9ff",
+                fontSize: "1.4rem",
+                fontWeight: 900,
+                cursor: combatRolling ? "default" : "pointer",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: combatRolling ? 0.5 : 1,
+                transition: "opacity 0.15s, background 0.15s",
+              }}
+              title="Roll strike"
+            >
+              🎲
+            </button>
+            {combatShieldAvailable && (
+              <button
+                type="button"
+                onClick={onCombatShieldToggle}
+                disabled={combatRolling}
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 14,
+                  border: combatShieldOn
+                    ? "2px solid rgba(0,255,136,0.7)"
+                    : "2px solid rgba(140,140,160,0.45)",
+                  background: combatShieldOn
+                    ? "rgba(0,60,30,0.85)"
+                    : "rgba(30,30,40,0.8)",
+                  color: combatShieldOn ? "#66ffaa" : "#999",
+                  fontSize: "1.4rem",
+                  fontWeight: 900,
+                  cursor: combatRolling ? "default" : "pointer",
+                  boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: combatRolling ? 0.5 : 1,
+                  transition: "opacity 0.15s, background 0.15s, border 0.15s",
+                }}
+                title={combatShieldOn ? "Shield ON — absorbs next hit" : "Shield OFF"}
+              >
+                🛡
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onCombatRun}
+              disabled={combatRolling || combatRunDisabled}
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: 14,
+                border: "2px solid rgba(200,140,130,0.5)",
+                background: "rgba(48,24,24,0.85)",
+                color: combatRunDisabled ? "#664444" : "#f0bbaa",
+                fontSize: "1.4rem",
+                fontWeight: 900,
+                cursor: combatRolling || combatRunDisabled ? "default" : "pointer",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: combatRolling || combatRunDisabled ? 0.4 : 1,
+                transition: "opacity 0.15s, background 0.15s",
+              }}
+              title="Run from combat"
+            >
+              🏃
+            </button>
+          </div>
+        </>
       )}
     </div>
   );

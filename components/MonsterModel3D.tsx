@@ -233,6 +233,12 @@ function GltfSubject({
     const prevState = prevVisualStateRef.current;
     prevVisualStateRef.current = visualState;
 
+    // Skip replaying a clamped one-shot clip (e.g. defeated) when re-rendered with the same state.
+    const sameAsClampedPrev =
+      prevState === visualState &&
+      !shouldLoopVisualState(visualState, !!draculaLoopAngrySkill01);
+    if (sameAsClampedPrev) return;
+
     /**
      * Connected sequences: the outgoing clip's final clamped pose must blend
      * into the incoming clip's first frame so the model doesn't jump through
@@ -367,6 +373,10 @@ function PositionedGltfSubject(
   useEffect(() => {
     const prevState = prevVisualStateRef.current;
     prevVisualStateRef.current = rest.visualState;
+    const sameAsClampedPrev =
+      prevState === rest.visualState &&
+      !shouldLoopVisualState(rest.visualState, !!rest.draculaLoopAngrySkill01);
+    if (sameAsClampedPrev) return;
     const crossFade =
       (prevState === "knockdown" && (rest.visualState === "recover" || rest.visualState === "defeated")) ||
       (prevState === "hurt" && rest.visualState === "recover") ||
