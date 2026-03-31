@@ -608,6 +608,53 @@ export function playerAttackClipPriority(variant: "spell" | "skill" | "light" = 
   return [...ordered, ...PLAYER_ATTACK_FALLBACK_TAIL];
 }
 
+/** Map d6 to strike “weight” for 3D clip choice (spell ≈ Jumping_Punch / heavy, skill ≈ combo, light ≈ quick jab). */
+export function playerStrikeVariantFromDice(d6: number): "spell" | "skill" | "light" {
+  const d = Math.min(6, Math.max(1, Math.floor(d6)));
+  if (d >= 6) return "spell";
+  if (d >= 4) return "skill";
+  return "light";
+}
+
+/** Shield absorb / block pose — barrier-like or guard motion; falls back to combat stance. */
+const PLAYER_SHIELD_BLOCK_CLIPS = [
+  "Charged_Spell_Cast_2",
+  "Double_Blade_Spin",
+  "Backflip_and_Hooks",
+  "Combat_Stance",
+] as const;
+
+export function resolvePlayerShieldBlockClipName(animationNames: readonly string[]): string | null {
+  if (animationNames.length === 0) return null;
+  const preferred = expandPlayerClipTryList([...PLAYER_SHIELD_BLOCK_CLIPS]);
+  for (const n of preferred) {
+    const hit = matchAnimationNameInsensitive(animationNames, n);
+    if (hit) return hit;
+  }
+  return resolvePlayerAnimationClipName("idle", animationNames);
+}
+
+export type IsoCombatPlayerMoment = "strike" | "hurt" | "shield";
+
+/** Derive in-maze player clip family from the same strike math as the combat footer (dice, shield, portrait, Dracula segment). */
+export function mapIsoCombatPlayerAnimCue(args: {
+  dice: number;
+  strikePortrait: string;
+  draculaAttackSegment?: "spell" | "skill" | "light";
+  shieldWouldAbsorb: boolean;
+  playerFatalJumpKill: boolean;
+}): { moment: IsoCombatPlayerMoment; variant: "spell" | "skill" | "light"; fatalJump: boolean } {
+  if (args.shieldWouldAbsorb || args.strikePortrait === "shield") {
+    return { moment: "shield", variant: "light", fatalJump: false };
+  }
+  if (args.strikePortrait === "monsterHit") {
+    const variant = args.draculaAttackSegment ?? playerStrikeVariantFromDice(args.dice);
+    return { moment: "hurt", variant, fatalJump: args.playerFatalJumpKill };
+  }
+  const variant = args.draculaAttackSegment ?? playerStrikeVariantFromDice(args.dice);
+  return { moment: "strike", variant, fatalJump: false };
+}
+
 function playerHurtClipPriority(variant: "spell" | "skill" | "light" = "light"): string[] {
   if (variant === "spell") return [...PLAYER_HURT_HEAVY];
   if (variant === "skill") return [...PLAYER_HURT_MEDIUM];
