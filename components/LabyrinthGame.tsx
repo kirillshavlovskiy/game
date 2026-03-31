@@ -78,7 +78,13 @@ import {
 } from "react";
 import { flushSync, createPortal } from "react-dom";
 import dynamic from "next/dynamic";
-import { getMonsterGltfPath, isMonster3DEnabled, PLAYER_3D_GLB, getPlayer3DGlb } from "@/lib/monsterModels3d";
+import {
+  getMonsterGltfPath,
+  isMonster3DEnabled,
+  PLAYER_3D_GLB,
+  getPlayer3DGlb,
+  mapIsoCombatPlayerAnimCue,
+} from "@/lib/monsterModels3d";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import MazeIsoView, { type MazeIsoViewImperativeHandle } from "@/components/MazeIsoView";
 
@@ -305,12 +311,12 @@ const ISO_IMMERSIVE_Z = 10000;
 const ISO_IMMERSIVE_HUD_Z = 10050;
 /** Victory / game-over — above immersive 3D, movement dice, combat, and settings so it is never hidden. */
 const GAME_OVER_OVERLAY_Z = 10200;
-/** Full-screen 3D HUD: circular minimap + joystick (fits both in one disc) */
-const ISO_HUD_MOVE_RING_PX = Math.round(196 / 1.5);
-const ISO_HUD_JOYSTICK_PAD_PX = Math.round(112 / 1.5);
-const ISO_HUD_KNOB_MAX_PX = Math.round(36 / 1.5);
-const ISO_HUD_KNOB_HANDLE_PX = Math.round(44 / 1.5);
-const ISO_HUD_KNOB_ICON_PX = Math.round(22 / 1.5);
+/** Full-screen 3D HUD: same outer size for minimap+orbit and move ring (touch targets, all viewports). */
+const ISO_HUD_MOVE_RING_PX = 168;
+const ISO_HUD_JOYSTICK_PAD_PX = Math.round(112 * (ISO_HUD_MOVE_RING_PX / 196));
+const ISO_HUD_KNOB_MAX_PX = Math.round(36 * (ISO_HUD_MOVE_RING_PX / 196));
+const ISO_HUD_KNOB_HANDLE_PX = Math.round(44 * (ISO_HUD_MOVE_RING_PX / 196));
+const ISO_HUD_KNOB_ICON_PX = Math.round(22 * (ISO_HUD_MOVE_RING_PX / 196));
 /** Joystick: no move below this radius (px). */
 const MOVE_KNOB_DEAD_PX = Math.max(6, Math.round(10 / 1.5));
 /** Legacy inner ring radius when `onJoystickLookGrid` is passed (unused in move+map HUD). */
@@ -321,10 +327,10 @@ const MOVE_KNOB_REPEAT_MS_FAST = 352;
 const MOVE_KNOB_REPEAT_MS_SLOW = 400;
 /** After first step, wait this long before auto-repeat starts (hold = “delayed” repeat from center). */
 const MOVE_KNOB_HOLD_DELAY_MS = 420;
-/** Drag band between mini map disc and compass (easier touch target). */
-const MINIMAP_ORBIT_RING_PX = 18;
+/** Drag band between mini map disc and compass (tuned so inner map stays large vs joystick for same outer diameter). */
+const MINIMAP_ORBIT_RING_PX = 15;
 /** Space outside orbit for N/E/S/W labels and ticks (fixed = global map north). */
-const MINIMAP_COMPASS_PAD_PX = 13;
+const MINIMAP_COMPASS_PAD_PX = 9;
 /** Extra orbit sensitivity when dragging the mini-map ring (vs canvas drag). */
 const MINIMAP_ORBIT_POINTER_SENS = 4.1;
 /** Yaw on the ring uses tangential Δangle × radius; boost so small arcs still spin the view quickly. */
@@ -1162,7 +1168,7 @@ function minimapOrbitDonutPath(cx: number, cy: number, rInner: number, rOuter: n
   ].join(" ");
 }
 
-/** Phone landscape: fixed N/E/S/W compass (global map) + green orbit band; center mini map rotates under the player dot. */
+/** N/E/S/W compass + green orbit band; centered mini-map (player in the middle). Desktop + mobile landscape. */
 function MobileLandscapeMinimapOrbitWrap({
   mazeIsoViewRef,
   diameter,
@@ -1321,7 +1327,7 @@ function MobileLandscapeMinimapOrbitWrap({
         height: wrap,
         flexShrink: 0,
       }}
-      title="Green band: drag around the ring to turn the view (map yaw); drag toward/away from center for pitch · center follows you"
+      title="Green band: drag to orbit the 3D view; tap band for 90° step · mini-map stays centered on you"
     >
       <div
         style={{
@@ -2759,6 +2765,11 @@ export default function LabyrinthGame() {
   /** ISO-only in-scene combat feedback (click-to-roll + animation pulses). */
   const [isoCombatRollFace, setIsoCombatRollFace] = useState<number | null>(null);
   const [isoCombatPulseVersion, setIsoCombatPulseVersion] = useState(0);
+  const [isoCombatPlayerCue, setIsoCombatPlayerCue] = useState<{
+    moment: "strike" | "hurt" | "shield";
+    variant: "spell" | "skill" | "light";
+    fatalJump: boolean;
+  } | null>(null);
   const isoCombatPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Monster sprite phase after taking damage: hurt → recover → ready (before next roll) */
   const [combatRecoveryPhase, setCombatRecoveryPhase] = useState<"hurt" | "recover" | "ready">("ready");
@@ -2800,6 +2811,10 @@ export default function LabyrinthGame() {
   const [isoMiniMapZoom, setIsoMiniMapZoom] = useState(ISO_MINIMAP_ZOOM_BASELINE);
   /** `grid` = playable CSS map; `iso` = 3D isometric view. Magic teleport can switch to iso; slingshot stays in current view. */
   const [mazeMapView, setMazeMapView] = useState<"grid" | "iso">("iso");
+  const mazeMapViewRef = useRef(mazeMapView);
+  useEffect(() => {
+    mazeMapViewRef.current = mazeMapView;
+  }, [mazeMapView]);
   const [playerFacing, setPlayerFacing] = useState<Record<number, { dx: number; dy: number }>>({});
   const [isMobile, setIsMobile] = useState(false);
   /** Landscape + short viewport: tighter combat face-off (sprites/grid); full mobile UI comes from `isMobile` (includes this case). */
@@ -3311,6 +3326,7 @@ export default function LabyrinthGame() {
   useEffect(() => {
     if (combatState || combatResult) return;
     setIsoCombatRollFace(null);
+    setIsoCombatPlayerCue(null);
   }, [combatState, combatResult]);
   useEffect(() => () => {
     if (isoCombatPulseTimerRef.current) clearTimeout(isoCombatPulseTimerRef.current);
@@ -3893,10 +3909,6 @@ export default function LabyrinthGame() {
     const revealStrikeDiceToPlayer = (v: number) => {
       setLastCombatStrikeDiceFace(v);
       setIsoCombatRollFace(v);
-      if (isoCombatPulseTimerRef.current) clearTimeout(isoCombatPulseTimerRef.current);
-      isoCombatPulseTimerRef.current = setTimeout(() => {
-        setIsoCombatPulseVersion((x) => x + 1);
-      }, 120);
     };
 
     if (value === 6) {
@@ -4140,6 +4152,27 @@ export default function LabyrinthGame() {
         !shieldWouldAbsorb &&
         missDmgPre > 0 &&
         playerHpBeforeRoll - missDmgPre <= 0;
+
+      if (typeof window !== "undefined" && mazeMapViewRef.current === "iso") {
+        const cue = mapIsoCombatPlayerAnimCue({
+          dice: value,
+          strikePortrait,
+          draculaAttackSegment,
+          shieldWouldAbsorb,
+          playerFatalJumpKill,
+        });
+        setIsoCombatPlayerCue(cue);
+        if (isoCombatPulseTimerRef.current) clearTimeout(isoCombatPulseTimerRef.current);
+        isoCombatPulseTimerRef.current = setTimeout(() => {
+          setIsoCombatPulseVersion((x) => x + 1);
+        }, 120);
+      } else {
+        if (isoCombatPulseTimerRef.current) {
+          clearTimeout(isoCombatPulseTimerRef.current);
+          isoCombatPulseTimerRef.current = null;
+        }
+        setIsoCombatPlayerCue(null);
+      }
 
       const staggerLabCommitMs =
         isMonster3DEnabled() &&
@@ -6821,16 +6854,14 @@ export default function LabyrinthGame() {
 
   useEffect(() => {
     if (!isoImmersiveUi || isMobile) return;
-    if (combatState || combatResult) {
-      void leaveIsoImmersiveOnly();
-      return;
-    }
     if (
       showDiceModal &&
       winner === null &&
       lab &&
       movesLeft <= 0 &&
-      diceResult === null
+      diceResult === null &&
+      !combatState &&
+      !combatResult
     ) {
       void leaveIsoImmersiveOnly();
     }
@@ -7308,6 +7339,25 @@ export default function LabyrinthGame() {
   /** Map pinned one side of the bar / screen, joystick the other (landscape phone or desktop iso + moves). */
   const splitIsoHudOppositeScreen =
     splitIsoHudMapAndMove || (!isMobile && !!lab && mazeMapView === "iso" && showMoveGrid);
+  /** Mobile iso uses edge / immersive HUD; windowed desktop 3D needs the bottom dock (fullscreen uses the immersive bar instead). */
+  const showUnifiedDockInDesktopIso =
+    !isMobile && mazeMapView === "iso" && !!lab && !isoImmersiveUi;
+  /** Windowed desktop 3D: mini-map left, artifacts + turn center, move ring right (not immersive). */
+  const desktopWindowedIsoThreeColumnDock =
+    showUnifiedDockInDesktopIso && splitIsoHudOppositeScreen && !pendingCombatOffer;
+  /** Desktop grid with moves: same three-zone strip (map left, center, move right). */
+  const desktopGridThreeColumnDock =
+    !isMobile && !pendingCombatOffer && mazeMapView === "grid" && !!lab && showMoveGrid;
+  const desktopDockThreeColumn = desktopWindowedIsoThreeColumnDock || desktopGridThreeColumnDock;
+  /** Full-width collapsible bar; narrowed + centered while monster ambush / fight-offer is open. */
+  const desktopDockFullWidthBar = !isMobile && !pendingCombatOffer && !!lab;
+  /** Collapsed desktop dock: still show mini-map + move (artifacts / turn stay hidden until expand). */
+  const desktopDockCollapsedMapMoveStrip =
+    !isMobile &&
+    desktopControlsCollapsed &&
+    !!lab &&
+    !pendingCombatOffer &&
+    (mazeMapView === "grid" || showUnifiedDockInDesktopIso);
   const inCombatDock = !!combatState;
   const totalDiamondsDock = lab.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
   const bombUseDisabled = !cp || (cp?.bombs ?? 0) <= 0 || (moveDisabled && !combatState);
@@ -11019,7 +11069,7 @@ export default function LabyrinthGame() {
                 +
               </button>
           </div>
-            {isLandscapeCompact && mazeMapView === "iso" && lab && !isoImmersiveUi ? (
+            {mazeMapView === "iso" && lab && !isoImmersiveUi && (isLandscapeCompact || !isMobile) ? (
               <>
                 <button
                   type="button"
@@ -11050,7 +11100,7 @@ export default function LabyrinthGame() {
                     padding: "0 8px",
                     fontSize: "0.68rem",
                   }}
-                  title="Tilt device or drag on 3D to aim camera"
+                  title="Drag on 3D (or use the mini-map green ring) to orbit; tilt device where supported"
                 >
                   {isoCamRotateActive ? "Rotating" : "Rotate"}
                 </button>
@@ -11250,6 +11300,7 @@ export default function LabyrinthGame() {
                 combatShieldOn={combatUseShield}
                 combatShieldAvailable={!!combatState && (cp?.shield ?? 0) > 0}
                 combatRunDisabled={rolling}
+                isoCombatPlayerCue={isoCombatPlayerCue}
                 playerGlbPath={getPlayer3DGlb(playerAvatars[currentPlayer])}
                 fillViewport={mazeIsoFillViewport}
                 onTouchCameraForwardGrid={mazeMapView === "iso" ? onTouchCameraForwardGrid : undefined}
@@ -11601,42 +11652,23 @@ export default function LabyrinthGame() {
                           </div>
                         )}
                         {splitIsoHudOppositeScreen && showMoveGrid && lab && mazeMapView === "iso" ? (
-                          isMobile && splitIsoHudMapAndMove ? (
-                            <MobileLandscapeMinimapOrbitWrap
-                              mazeIsoViewRef={mazeIsoViewRef}
-                              diameter={ISO_HUD_MOVE_RING_PX}
-                              lab={lab}
-                              currentPlayer={currentPlayer}
-                              playerFacing={playerFacing}
-                              fogIntensityMap={fogIntensityMap}
-                              playerCells={playerCells}
-                              isoMiniMapZoom={isoMiniMapZoom}
-                              setIsoMiniMapZoom={setIsoMiniMapZoom}
-                              isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-                              onOpenGrid={() => {
-                                if (!isMobile) void leaveIsoImmersiveOnly();
-                                switchToGridAndFocusCurrentPlayer();
-                              }}
-                              bearingAngleDeg={isoCameraBearingDeg}
-                            />
-                          ) : (
-                            <IsoHudMinimapCircle
-                              diameter={ISO_HUD_MOVE_RING_PX}
-                              lab={lab}
-                              currentPlayer={currentPlayer}
-                              playerFacing={playerFacing}
-                              fogIntensityMap={fogIntensityMap}
-                              playerCells={playerCells}
-                              isoMiniMapZoom={isoMiniMapZoom}
-                              setIsoMiniMapZoom={setIsoMiniMapZoom}
-                              isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
-                              onOpenGrid={() => {
-                                if (!isMobile) void leaveIsoImmersiveOnly();
-                                switchToGridAndFocusCurrentPlayer();
-                              }}
-                              bearingAngleDeg={isoCameraBearingDeg}
-                            />
-                          )
+                          <MobileLandscapeMinimapOrbitWrap
+                            mazeIsoViewRef={mazeIsoViewRef}
+                            diameter={ISO_HUD_MOVE_RING_PX}
+                            lab={lab}
+                            currentPlayer={currentPlayer}
+                            playerFacing={playerFacing}
+                            fogIntensityMap={fogIntensityMap}
+                            playerCells={playerCells}
+                            isoMiniMapZoom={isoMiniMapZoom}
+                            setIsoMiniMapZoom={setIsoMiniMapZoom}
+                            isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                            onOpenGrid={() => {
+                              if (!isMobile) void leaveIsoImmersiveOnly();
+                              switchToGridAndFocusCurrentPlayer();
+                            }}
+                            bearingAngleDeg={isoCameraBearingDeg}
+                          />
                         ) : null}
                       </div>
                       <div
@@ -12596,7 +12628,7 @@ export default function LabyrinthGame() {
             >
               <MobileLandscapeMinimapOrbitWrap
                 mazeIsoViewRef={mazeIsoViewRef}
-                diameter={Math.min(ISO_HUD_MOVE_RING_PX, 168)}
+                diameter={ISO_HUD_MOVE_RING_PX}
                 lab={lab}
                 currentPlayer={currentPlayer}
                 playerFacing={playerFacing}
@@ -12626,7 +12658,7 @@ export default function LabyrinthGame() {
             >
             <IsoHudJoystickMoveRing
               outerRef={mobileDockExpandedMovePadRef}
-              diameter={Math.min(ISO_HUD_MOVE_RING_PX, 168)}
+              diameter={ISO_HUD_MOVE_RING_PX}
               dimPadOverMinimap={false}
               placement="standalone"
               canMoveUp={canMoveUp}
@@ -12662,7 +12694,7 @@ export default function LabyrinthGame() {
         >
           <CircularIsoMinimapMoveHud
             outerRef={mobileDockExpandedMovePadRef}
-            diameter={Math.min(ISO_HUD_MOVE_RING_PX, 168)}
+            diameter={ISO_HUD_MOVE_RING_PX}
             showMinimap={mazeMapView === "iso"}
             lab={lab}
             currentPlayer={currentPlayer}
@@ -12834,15 +12866,17 @@ export default function LabyrinthGame() {
             : {
                 /** In document flow so the maze scroll area shrinks and controls sit below the map (no viewport overlap). */
                 position: "relative",
-                alignSelf: "center",
+                alignSelf: desktopDockFullWidthBar ? ("stretch" as const) : "center",
                 marginTop: 12,
                 marginBottom: 4,
-                width: "min(760px, 100%)",
-                maxWidth: 760,
+                width: desktopDockFullWidthBar ? "100%" : "min(760px, 100%)",
+                maxWidth: desktopDockFullWidthBar ? "none" : 760,
+                paddingLeft: desktopDockFullWidthBar ? "max(12px, env(safe-area-inset-left, 0px))" : undefined,
+                paddingRight: desktopDockFullWidthBar ? "max(12px, env(safe-area-inset-right, 0px))" : undefined,
                 boxSizing: "border-box",
                 zIndex: 1,
               }),
-          ...(mazeMapView !== "grid"
+          ...(mazeMapView !== "grid" && !showUnifiedDockInDesktopIso
             ? {
                 display: "none",
                 height: 0,
@@ -13015,18 +13049,168 @@ export default function LabyrinthGame() {
               <span style={{ fontSize: "0.75rem", color: "#666" }}>{desktopControlsCollapsed ? "▲ Expand" : "▼ Collapse"}</span>
             </div>
 
+            {desktopDockCollapsedMapMoveStrip ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "row",
+                  alignItems: "flex-end",
+                  justifyContent: "space-between",
+                  gap: 16,
+                  width: "100%",
+                  marginTop: 8,
+                  boxSizing: "border-box",
+                }}
+              >
+                <div style={{ flexShrink: 0 }}>
+                  <div
+                    style={{
+                      ...controlsSectionStyle,
+                      borderColor: "#554466",
+                      marginTop: 0,
+                      padding: 6,
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff" }}>2D mini map</div>
+                    {mazeMapView === "iso" ? (
+                      <MobileLandscapeMinimapOrbitWrap
+                        mazeIsoViewRef={mazeIsoViewRef}
+                        diameter={ISO_HUD_MOVE_RING_PX}
+                        lab={lab}
+                        currentPlayer={currentPlayer}
+                        playerFacing={playerFacing}
+                        fogIntensityMap={fogIntensityMap}
+                        playerCells={playerCells}
+                        isoMiniMapZoom={isoMiniMapZoom}
+                        setIsoMiniMapZoom={setIsoMiniMapZoom}
+                        isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                        onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                        bearingAngleDeg={isoCameraBearingDeg}
+                      />
+                    ) : (
+                      <IsoHudMinimapCircle
+                        diameter={ISO_HUD_MOVE_RING_PX}
+                        lab={lab}
+                        currentPlayer={currentPlayer}
+                        playerFacing={playerFacing}
+                        fogIntensityMap={fogIntensityMap}
+                        playerCells={playerCells}
+                        isoMiniMapZoom={isoMiniMapZoom}
+                        setIsoMiniMapZoom={setIsoMiniMapZoom}
+                        isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                        onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                        playerCenteredRotate
+                        bearingAngleDeg={isoCameraBearingDeg}
+                      />
+                    )}
+                  </div>
+                </div>
+                <div style={{ flexShrink: 0 }}>
+                  <div
+                    style={{
+                      ...controlsSectionStyle,
+                      borderColor: "#554466",
+                      marginTop: 0,
+                      padding: 6,
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff" }}>Move</div>
+                    <IsoHudJoystickMoveRing
+                      diameter={ISO_HUD_MOVE_RING_PX}
+                      dimPadOverMinimap={false}
+                      placement="standalone"
+                      canMoveUp={canMoveUp}
+                      canMoveDown={canMoveDown}
+                      canMoveLeft={canMoveLeft}
+                      canMoveRight={canMoveRight}
+                      relativeForward={relativeForward}
+                      relativeBackward={relativeBackward}
+                      relativeLeft={relativeLeft}
+                      relativeRight={relativeRight}
+                      doMove={doMoveStrafe}
+                      scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+                      focusDisabled={
+                        winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
             {!desktopControlsCollapsed && (
               <div
                 style={{
                   display: "flex",
                   flexDirection: "row",
-                  alignItems: "flex-start",
-                  gap: 12,
+                  alignItems: desktopDockThreeColumn && lab ? ("flex-end" as const) : "flex-start",
+                  gap: desktopDockThreeColumn && lab ? 16 : 12,
                   width: "100%",
                   marginTop: 6,
+                  boxSizing: "border-box",
+                  ...(desktopDockThreeColumn && lab ? { justifyContent: "space-between" } : {}),
                 }}
               >
-                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+                {desktopDockThreeColumn && lab ? (
+                  <div style={{ flexShrink: 0 }}>
+                    <div
+                      style={{
+                        ...controlsSectionStyle,
+                        borderColor: "#554466",
+                        marginTop: 0,
+                        padding: 6,
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff" }}>2D mini map</div>
+                      {mazeMapView === "iso" ? (
+                        <MobileLandscapeMinimapOrbitWrap
+                          mazeIsoViewRef={mazeIsoViewRef}
+                          diameter={ISO_HUD_MOVE_RING_PX}
+                          lab={lab}
+                          currentPlayer={currentPlayer}
+                          playerFacing={playerFacing}
+                          fogIntensityMap={fogIntensityMap}
+                          playerCells={playerCells}
+                          isoMiniMapZoom={isoMiniMapZoom}
+                          setIsoMiniMapZoom={setIsoMiniMapZoom}
+                          isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                          onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                          bearingAngleDeg={isoCameraBearingDeg}
+                        />
+                      ) : (
+                        <IsoHudMinimapCircle
+                          diameter={ISO_HUD_MOVE_RING_PX}
+                          lab={lab}
+                          currentPlayer={currentPlayer}
+                          playerFacing={playerFacing}
+                          fogIntensityMap={fogIntensityMap}
+                          playerCells={playerCells}
+                          isoMiniMapZoom={isoMiniMapZoom}
+                          setIsoMiniMapZoom={setIsoMiniMapZoom}
+                          isoMiniMapPinchStartRef={isoMiniMapPinchStartRef}
+                          onOpenGrid={switchToGridAndFocusCurrentPlayer}
+                          playerCenteredRotate
+                          bearingAngleDeg={isoCameraBearingDeg}
+                        />
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                    ...(desktopDockThreeColumn && lab
+                      ? { flex: "1 1 0", minWidth: 200, maxWidth: 560, alignSelf: "stretch" }
+                      : {}),
+                  }}
+                >
                   <div style={{ ...controlsSectionStyle, borderColor: "#554466", marginTop: 0 }}>
                     <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff" }}>Bomb &amp; artifacts</div>
                     <div
@@ -13132,55 +13316,149 @@ export default function LabyrinthGame() {
               )}
             </div>
                   </div>
-                  <div style={{ display: "flex", gap: 8, width: "100%" }}>
-                    <button
-                      type="button"
-                      onClick={scrollToCurrentPlayerOnMap}
-                      disabled={
-                        winner !== null ||
-                        !lab ||
-                        (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
-                      }
+                  {desktopDockThreeColumn && lab ? (
+                    <div
                       style={{
-                        ...buttonStyle,
-                        ...secondaryButtonStyle,
-                        flex: 1,
-                        minWidth: 0,
-                        fontSize: "0.85rem",
-                        padding: "8px 12px",
+                        ...controlsSectionStyle,
+                        borderColor: "#3a3d52",
+                        marginTop: 0,
+                        padding: "8px 10px",
                       }}
-                      title="Scroll the maze so the active player’s cell is centered"
                     >
-                      Locate player
-                    </button>
-                    <button
-                      type="button"
-                      onClick={endTurn}
-                      className="secondary"
-                      disabled={
-                        winner !== null ||
-                        !!catapultPicker ||
-                        !!teleportPicker ||
-                        !!combatState ||
-                        !!pendingCombatOffer
-                      }
-                      style={{
-                        ...buttonStyle,
-                        ...secondaryButtonStyle,
-                        flex: 1,
-                        minWidth: 0,
-                        fontSize: "0.85rem",
-                        padding: "8px 12px",
-                      }}
-                      title={
-                        combatState ? "Cannot end turn during combat — fight or run first" : undefined
-                      }
-                    >
-                      End turn
-                    </button>
-                  </div>
+                      <div style={{ ...controlsSectionLabelStyle, color: "#9aa4b8", fontSize: "0.68rem" }}>
+                        Turn
+                      </div>
+                      <div style={{ display: "flex", gap: 8, width: "100%", marginTop: 6 }}>
+                        <button
+                          type="button"
+                          onClick={scrollToCurrentPlayerOnMap}
+                          disabled={
+                            winner !== null ||
+                            !lab ||
+                            (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+                          }
+                          style={{
+                            ...buttonStyle,
+                            ...secondaryButtonStyle,
+                            flex: 1,
+                            minWidth: 0,
+                            fontSize: "0.85rem",
+                            padding: "8px 12px",
+                          }}
+                          title="Scroll the maze so the active player’s cell is centered"
+                        >
+                          Locate player
+                        </button>
+                        <button
+                          type="button"
+                          onClick={endTurn}
+                          className="secondary"
+                          disabled={
+                            winner !== null ||
+                            !!catapultPicker ||
+                            !!teleportPicker ||
+                            !!combatState ||
+                            !!pendingCombatOffer
+                          }
+                          style={{
+                            ...buttonStyle,
+                            ...secondaryButtonStyle,
+                            flex: 1,
+                            minWidth: 0,
+                            fontSize: "0.85rem",
+                            padding: "8px 12px",
+                          }}
+                          title={
+                            combatState ? "Cannot end turn during combat — fight or run first" : undefined
+                          }
+                        >
+                          End turn
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 8, width: "100%" }}>
+                      <button
+                        type="button"
+                        onClick={scrollToCurrentPlayerOnMap}
+                        disabled={
+                          winner !== null ||
+                          !lab ||
+                          (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+                        }
+                        style={{
+                          ...buttonStyle,
+                          ...secondaryButtonStyle,
+                          flex: 1,
+                          minWidth: 0,
+                          fontSize: "0.85rem",
+                          padding: "8px 12px",
+                        }}
+                        title="Scroll the maze so the active player’s cell is centered"
+                      >
+                        Locate player
+                      </button>
+                      <button
+                        type="button"
+                        onClick={endTurn}
+                        className="secondary"
+                        disabled={
+                          winner !== null ||
+                          !!catapultPicker ||
+                          !!teleportPicker ||
+                          !!combatState ||
+                          !!pendingCombatOffer
+                        }
+                        style={{
+                          ...buttonStyle,
+                          ...secondaryButtonStyle,
+                          flex: 1,
+                          minWidth: 0,
+                          fontSize: "0.85rem",
+                          padding: "8px 12px",
+                        }}
+                        title={
+                          combatState ? "Cannot end turn during combat — fight or run first" : undefined
+                        }
+                      >
+                        End turn
+                      </button>
+                    </div>
+                  )}
                 </div>
-                {(lab && mazeMapView === "iso") || (showMoveGrid && lab) ? (
+                {desktopDockThreeColumn && lab ? (
+                  <div style={{ flexShrink: 0 }}>
+                    <div
+                      style={{
+                        ...controlsSectionStyle,
+                        borderColor: "#554466",
+                        marginTop: 0,
+                        padding: 6,
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff" }}>Move</div>
+                      <IsoHudJoystickMoveRing
+                        diameter={ISO_HUD_MOVE_RING_PX}
+                        dimPadOverMinimap={false}
+                        placement="standalone"
+                        canMoveUp={canMoveUp}
+                        canMoveDown={canMoveDown}
+                        canMoveLeft={canMoveLeft}
+                        canMoveRight={canMoveRight}
+                        relativeForward={relativeForward}
+                        relativeBackward={relativeBackward}
+                        relativeLeft={relativeLeft}
+                        relativeRight={relativeRight}
+                        doMove={doMoveStrafe}
+                        scrollToCurrentPlayerOnMap={scrollToCurrentPlayerOnMap}
+                        focusDisabled={
+                          winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
+                        }
+                      />
+                    </div>
+                  </div>
+                ) : (lab && mazeMapView === "iso") || (showMoveGrid && lab) ? (
                   <div
                     style={{
                       display: "flex",
@@ -13193,12 +13471,12 @@ export default function LabyrinthGame() {
                       maxWidth: splitIsoHudOppositeScreen && !isMobile ? "min(560px, 100%)" : undefined,
                     }}
                   >
-                  <div
-                    style={{
-                      ...controlsSectionStyle,
-                      marginTop: 0,
-                      padding: 6,
-                      flexShrink: 0,
+                    <div
+                      style={{
+                        ...controlsSectionStyle,
+                        marginTop: 0,
+                        padding: 6,
+                        flexShrink: 0,
                         width: splitIsoHudOppositeScreen && !isMobile ? "100%" : undefined,
                         boxSizing: "border-box",
                       }}
@@ -13212,17 +13490,18 @@ export default function LabyrinthGame() {
                       </div>
                       {splitIsoHudOppositeScreen && !isMobile ? (
                         <div
-                      style={{
-                          display: "flex",
+                          style={{
+                            display: "flex",
                             flexDirection: "row",
                             justifyContent: "space-between",
-                          alignItems: "center",
+                            alignItems: "center",
                             gap: 16,
                             width: "100%",
                           }}
                         >
                           {mazeMapView === "iso" ? (
-                            <IsoHudMinimapCircle
+                            <MobileLandscapeMinimapOrbitWrap
+                              mazeIsoViewRef={mazeIsoViewRef}
                               diameter={ISO_HUD_MOVE_RING_PX}
                               lab={lab!}
                               currentPlayer={currentPlayer}
@@ -13256,7 +13535,7 @@ export default function LabyrinthGame() {
                               winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false)
                             }
                           />
-                    </div>
+                        </div>
                       ) : (
                         <CircularIsoMinimapMoveHud
                           diameter={ISO_HUD_MOVE_RING_PX}
