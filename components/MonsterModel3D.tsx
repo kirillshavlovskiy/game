@@ -21,18 +21,19 @@ import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
 import { glbSlugFromPathOrUrl, resolveMonsterAnimationClipName, resolvePlayerAnimationClipName } from "@/lib/monsterModels3d";
 
 /**
- * World X half-separation (|playerX| = |monsterX|). Armature root translation is locked, but jump/attack
- * clips still move the mesh via bones. `Jumping_Punch`-style spell lunges need a much tighter baseline
- * than light melee or the attacker lands in front of the defender instead of into their standing point.
+ * World X half-separation (|playerX| = |monsterX|). Looping stances lock armature root; one-shot attacks
+ * keep baked root motion. Spell/jump clips (Jumping_Punch, spins) travel forward in authoring space —
+ * if this half-gap is too large, the swing peaks short of the defender; too small, overshoot / interpenetrate.
+ * Tuned against merged player + monster GLBs in the face-off box.
  */
 const COMBAT_IDLE_SEPARATION_HALF = 1.38;
 const COMBAT_STRIKE_PICK_SEPARATION_HALF = 0.92;
 
 function combatContactHalfXForVariant(variant: "spell" | "skill" | "light" | undefined): number {
   const v = variant ?? "light";
-  if (v === "spell") return 0.18;
-  if (v === "skill") return 0.46;
-  return 0.42;
+  if (v === "spell") return 0.11;
+  if (v === "skill") return 0.34;
+  return 0.32;
 }
 
 function combatFaceOffPositions(args: {
@@ -78,7 +79,7 @@ function combatFaceOffPositions(args: {
       combatContactHalfXForVariant(draculaAttackVariant)
     );
   } else {
-    half = 0.42;
+    half = 0.32;
   }
   return { playerPosX: -half, monsterPosX: half };
 }
@@ -215,15 +216,18 @@ function GltfSubject({
   const onFinishedRef = useRef(onOneShotAnimationFinished);
   onFinishedRef.current = onOneShotAnimationFinished;
   const prevVisualStateRef = useRef<Monster3DSpriteState>(visualState);
+  const draculaVariantRef = useRef(draculaAttackVariant);
+  draculaVariantRef.current = draculaAttackVariant;
+  const draculaHurtRef = useRef(draculaHurtHp);
+  draculaHurtRef.current = draculaHurtHp;
+  const playerJumpKillRef = useRef(playerFatalJumpKill);
+  playerJumpKillRef.current = playerFatalJumpKill;
 
   useRootMotionLock(scene, shouldLockRootMotionForState(visualState, !!draculaLoopAngrySkill01));
 
   useEffect(() => {
     useGLTF.preload(url);
   }, [url]);
-
-  const hurtHp = draculaHurtHp?.hp;
-  const hurtMaxHp = draculaHurtHp?.maxHp;
 
   useEffect(() => {
     const prevState = prevVisualStateRef.current;
@@ -249,16 +253,17 @@ function GltfSubject({
     }
 
     const glbSlug = glbSlugFromPathOrUrl(url);
+    const dHurt = draculaHurtRef.current;
     const hurtCtx =
-      hurtHp != null && hurtMaxHp != null ? { hp: hurtHp, maxHp: hurtMaxHp } : draculaHurtHp ?? null;
+      dHurt?.hp != null && dHurt?.maxHp != null ? { hp: dHurt.hp, maxHp: dHurt.maxHp } : dHurt ?? null;
     const pick = isPlayerModel
-      ? resolvePlayerAnimationClipName(visualState, names, draculaAttackVariant, {
-          fatalJumpKill: playerFatalJumpKill,
+      ? resolvePlayerAnimationClipName(visualState, names, draculaVariantRef.current, {
+          fatalJumpKill: playerJumpKillRef.current,
         })
       : resolveMonsterAnimationClipName(visualState, names, {
       monsterType,
       glbSlug,
-      draculaAttackVariant,
+      draculaAttackVariant: draculaVariantRef.current,
       draculaHurtHp: hurtCtx,
       draculaAngryLockSkill01: draculaLoopAngrySkill01 && visualState === "angry",
     });
@@ -310,7 +315,7 @@ function GltfSubject({
         a?.fadeOut(0.12);
       }
     };
-  }, [actions, names, mixer, url, visualState, monsterType, draculaAttackVariant, hurtHp, hurtMaxHp, draculaLoopAngrySkill01, isPlayerModel, playerFatalJumpKill]);
+  }, [actions, names, mixer, url, visualState, monsterType, draculaLoopAngrySkill01, isPlayerModel]);
 
   useEffect(() => {
     invalidate();
@@ -348,13 +353,16 @@ function PositionedGltfSubject(
   const onFinishedRef = useRef(rest.onOneShotAnimationFinished);
   onFinishedRef.current = rest.onOneShotAnimationFinished;
   const prevVisualStateRef = useRef<Monster3DSpriteState>(rest.visualState);
+  const draculaVariantRef = useRef(rest.draculaAttackVariant);
+  draculaVariantRef.current = rest.draculaAttackVariant;
+  const draculaHurtRef = useRef(rest.draculaHurtHp);
+  draculaHurtRef.current = rest.draculaHurtHp;
+  const playerJumpKillRef = useRef(rest.playerFatalJumpKill);
+  playerJumpKillRef.current = rest.playerFatalJumpKill;
 
   useRootMotionLock(scene, shouldLockRootMotionForState(rest.visualState, !!rest.draculaLoopAngrySkill01));
 
   useEffect(() => { useGLTF.preload(rest.url); }, [rest.url]);
-
-  const hurtHp = rest.draculaHurtHp?.hp;
-  const hurtMaxHp = rest.draculaHurtHp?.maxHp;
 
   useEffect(() => {
     const prevState = prevVisualStateRef.current;
@@ -367,15 +375,17 @@ function PositionedGltfSubject(
     if (!crossFade) mixer.stopAllAction();
 
     const glbSlug = glbSlugFromPathOrUrl(rest.url);
-    const hurtCtx = hurtHp != null && hurtMaxHp != null ? { hp: hurtHp, maxHp: hurtMaxHp } : rest.draculaHurtHp ?? null;
+    const dHurt = draculaHurtRef.current;
+    const hurtCtx =
+      dHurt?.hp != null && dHurt?.maxHp != null ? { hp: dHurt.hp, maxHp: dHurt.maxHp } : dHurt ?? null;
     const pick = rest.isPlayerModel
-      ? resolvePlayerAnimationClipName(rest.visualState, names, rest.draculaAttackVariant, {
-          fatalJumpKill: rest.playerFatalJumpKill,
+      ? resolvePlayerAnimationClipName(rest.visualState, names, draculaVariantRef.current, {
+          fatalJumpKill: playerJumpKillRef.current,
         })
       : resolveMonsterAnimationClipName(rest.visualState, names, {
           monsterType: rest.monsterType,
           glbSlug,
-          draculaAttackVariant: rest.draculaAttackVariant,
+          draculaAttackVariant: draculaVariantRef.current,
           draculaHurtHp: hurtCtx,
           draculaAngryLockSkill01: rest.draculaLoopAngrySkill01 && rest.visualState === "angry",
         });
@@ -399,7 +409,7 @@ function PositionedGltfSubject(
     }
     invalidate();
     return () => { if (actForListener) { mixer.removeEventListener("finished", onFin); actForListener = null; } for (const a of Object.values(actions)) { a?.fadeOut(0.12); } };
-  }, [actions, names, mixer, rest.url, rest.visualState, rest.monsterType, rest.draculaAttackVariant, hurtHp, hurtMaxHp, rest.draculaLoopAngrySkill01, rest.isPlayerModel, rest.playerFatalJumpKill]);
+  }, [actions, names, mixer, rest.url, rest.visualState, rest.monsterType, rest.draculaLoopAngrySkill01, rest.isPlayerModel]);
 
   const scale = (rest.tightFraming ? 1.14 : 1) * (rest.isPlayerModel ? 0.9 : (rest.monsterType === "V" || rest.monsterType === "K" || rest.monsterType === "Z" || rest.monsterType === "S" || rest.monsterType === "L" ? 0.9 : 1));
 

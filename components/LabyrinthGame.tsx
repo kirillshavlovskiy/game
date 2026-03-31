@@ -543,7 +543,7 @@ const COMBAT_STRIKE_LAB_COMMIT_DELAY_MS_MERGED_MESHY_3D = 3200;
 /** 2D combat portraits only need short pose beats between rolls (`MonsterModel3D` uses mixer `finished` when 3D is on). */
 const COMBAT_RECOVERY_HURT_MS_2D = 450;
 const COMBAT_RECOVERY_RECOVER_MS_2D = 550;
-/** Post-win banner: 2D short beat before "defeated" pose; 3D uses clip completion on the win portrait. */
+/** Post-win banner: 2D short beat before "defeated" pose. */
 const COMBAT_VICTORY_HURT_TO_DEFEATED_MS_2D = 1400;
 /** Drop duplicate Three.js `finished` / restart bursts so we do not skip the recover phase in one frame. */
 const COMBAT_3D_CLIP_FINISH_DEBOUNCE_MS = 120;
@@ -2718,6 +2718,8 @@ export default function LabyrinthGame() {
         playerDefeated?: boolean;
         /** Snapshot after lethal hit — lab is respawned so bars must not read live player HP */
         playerHpAtEnd?: number;
+        /** Last strike tier on the killing blow — 3D death fall direction after footer snapshot clears */
+        finishingStrikeSegment?: "spell" | "skill" | "light";
       })
     | null
   >(null);
@@ -2728,6 +2730,8 @@ export default function LabyrinthGame() {
     (combatResult.bonusRewardOptions?.length ?? 0) > 0 &&
     combatResult.bonusRewardApplied !== true;
   const [combatVictoryPhase, setCombatVictoryPhase] = useState<"hurt" | "defeated">("hurt");
+  /** Win: false until monster death clip (3D) or defeated phase beat (2D) finishes — bonus loot waits on this. Loss: treated ready immediately. */
+  const [combatVictoryDeathAnimReady, setCombatVictoryDeathAnimReady] = useState(false);
   const [bonusLootRevealed, setBonusLootRevealed] = useState(false);
   const [bonusLootSelectedIndex, setBonusLootSelectedIndex] = useState(0);
   /** Surprise stance for this combat roll (idle/hunt/attack/angry) — drives sprites + defense modifier; synced with combatSurpriseRef */
@@ -2759,9 +2763,7 @@ export default function LabyrinthGame() {
   /** Monster sprite phase after taking damage: hurt → recover → ready (before next roll) */
   const [combatRecoveryPhase, setCombatRecoveryPhase] = useState<"hurt" | "recover" | "ready">("ready");
   const combatRecoveryPhaseRef = useRef(combatRecoveryPhase);
-  const combatVictoryPhaseRef = useRef(combatVictoryPhase);
   const lastCombatRecoveryClipFinishMs = useRef(0);
-  const lastCombatVictoryClipFinishMs = useRef(0);
   /** Temporary combat toast — `seq` invalidates older timeouts when a new toast is shown */
   const [combatToast, setCombatToast] = useState<{
     seq: number;
@@ -2877,16 +2879,25 @@ export default function LabyrinthGame() {
   const pendingArtifactRerollRef = useRef<{ result: CombatResult } | null>(null);
   const [combatArtifactRerollPrompt, setCombatArtifactRerollPrompt] = useState(false);
   const combatStrikeTargetDuringRollRef = useRef<StrikeTarget | null>(null);
+  /** Set true the instant the strike d6 value is applied — before UI reveal — so aim cannot be changed after the roll is locked in. */
+  const combatStrikeDiceOutcomeKnownRef = useRef(false);
   const rollingRef = useRef(false);
   /** While dice roll: 0–1 advance fighters toward each other in 3D. */
-  const [combatRollApproachT, setCombatRollApproachT] = useState(0);
   const combatMonsterStrike3d =
     combatState != null && getMonsterGltfPath(combatState.monsterType, "idle") != null;
   const combatStrikePick3dDuringRoll =
     combatMonsterStrike3d && rolling && !combatArtifactRerollPrompt;
-  /** Sprite / non-GLB fights: head-body-legs buttons only while dice are rolling (no pick after the value resolves). */
-  const combatStrikePick2dDuringRoll =
-    combatState != null && rolling && !combatArtifactRerollPrompt && !combatMonsterStrike3d;
+  /** While the strike die rolls, lerp fighters from idle spacing toward strike-pick range so the snap to contact range on hit is smaller (better jump/spin alignment). */
+  const combat3dRollingApproachBlend =
+    combatMonsterStrike3d && combatState != null && combatResult == null && rolling && !combatArtifactRerollPrompt
+      ? 1
+      : 0;
+  /** Head-body-legs row only when not using 3D tap-to-aim (no duplicate controls). */
+  const combatStrikePickButtonsDuringRoll =
+    combatState != null &&
+    rolling &&
+    !combatArtifactRerollPrompt &&
+    !combatStrikePick3dDuringRoll;
   const applyCombatPostResolveRef = useRef<(result: CombatResult) => void>(() => {});
   const currentPlayerRef = useRef(currentPlayer);
   const playerFacingRef = useRef<Record<number, { dx: number; dy: number }>>({});
@@ -3426,42 +3437,25 @@ export default function LabyrinthGame() {
     rollingRef.current = rolling;
   }, [rolling]);
 
-  const COMBAT_ROLL_APPROACH_MS = 2600;
-  useEffect(() => {
-    if (!rolling) {
-      setCombatRollApproachT(0);
-      return;
-    }
-    const t0 = performance.now();
-    let raf = 0;
-    const tick = () => {
-      const u = Math.min(1, (performance.now() - t0) / COMBAT_ROLL_APPROACH_MS);
-      setCombatRollApproachT(u);
-      if (u < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [rolling]);
-
-  // Victory phase: hurt → defeated only after a win when NOT in an active fight (avoids stuck "defeated" during combat)
+  // Victory phase: 2D uses a short hurt beat then defeated sprite. 3D merged monsters already played kill + fall on the last strike — stay on `defeated` only (no second hurt→fall sequence on the result screen).
   useEffect(() => {
     if (combatState) {
       setCombatVictoryPhase("hurt");
-      lastCombatVictoryClipFinishMs.current = 0;
       return;
     }
     if (!combatResult?.won) {
       setCombatVictoryPhase("hurt");
-      lastCombatVictoryClipFinishMs.current = 0;
       return;
     }
     const use3dVictory =
       isMonster3DEnabled() &&
       combatResult.monsterType != null &&
       getMonsterGltfPath(combatResult.monsterType, "idle") != null;
-    setCombatVictoryPhase(use3dVictory ? "defeated" : "hurt");
-    lastCombatVictoryClipFinishMs.current = 0;
-    if (use3dVictory) return;
+    if (use3dVictory) {
+      setCombatVictoryPhase("defeated");
+      return;
+    }
+    setCombatVictoryPhase("hurt");
     const t = setTimeout(() => setCombatVictoryPhase("defeated"), COMBAT_VICTORY_HURT_TO_DEFEATED_MS_2D);
     return () => clearTimeout(t);
   }, [combatState, combatResult?.won, combatResult?.monsterType]);
@@ -3576,19 +3570,53 @@ export default function LabyrinthGame() {
     return () => clearTimeout(t);
   }, [diceBonusApplied]);
 
-  // Reveal bonus loot only after monster shows defeated/collapsed sprite (hurt→defeated is 1400ms)
+  /** Win: gate on death anim; then reveal bonus picker (still no UI until `bonusLootRevealed`). */
   useEffect(() => {
     if (!pendingCombatBonusPick) {
       setBonusLootRevealed(false);
       return;
     }
-    if (combatVictoryPhase !== "defeated") {
+    if (!combatVictoryDeathAnimReady) {
       setBonusLootRevealed(false);
       return;
     }
-    const t = setTimeout(() => setBonusLootRevealed(true), 500);
+    const t = setTimeout(() => setBonusLootRevealed(true), 220);
     return () => clearTimeout(t);
-  }, [pendingCombatBonusPick, combatVictoryPhase]);
+  }, [pendingCombatBonusPick, combatVictoryDeathAnimReady]);
+
+  useEffect(() => {
+    if (combatResult == null) {
+      setCombatVictoryDeathAnimReady(false);
+      return;
+    }
+    if (!combatResult.won) {
+      setCombatVictoryDeathAnimReady(true);
+      return;
+    }
+    const use3dWin =
+      isMonster3DEnabled() &&
+      combatResult.monsterType != null &&
+      getMonsterGltfPath(combatResult.monsterType, "idle") != null;
+    setCombatVictoryDeathAnimReady(use3dWin);
+  }, [
+    combatResult == null,
+    combatResult?.won,
+    combatResult?.monsterType,
+    combatResult?.playerIndex,
+    combatResult?.playerDefeated,
+  ]);
+
+  useEffect(() => {
+    if (!combatResult?.won) return;
+    const is3d =
+      isMonster3DEnabled() &&
+      combatResult.monsterType != null &&
+      getMonsterGltfPath(combatResult.monsterType, "idle") != null;
+    if (is3d) return;
+    if (combatVictoryPhase !== "defeated") return;
+    const t = setTimeout(() => setCombatVictoryDeathAnimReady(true), 480);
+    return () => clearTimeout(t);
+  }, [combatResult?.won, combatResult?.monsterType, combatVictoryPhase]);
 
   useEffect(() => {
     if (healingGained === null) return;
@@ -3861,14 +3889,19 @@ export default function LabyrinthGame() {
     const skeletonHasShield = combat.monsterType === "K" && (monster?.hasShield ?? true);
     const surpriseState = combatSurpriseRef.current;
     const surpriseModifier = getSurpriseDefenseModifier(surpriseState);
-    setLastCombatStrikeDiceFace(value);
-    setIsoCombatRollFace(value);
-    if (isoCombatPulseTimerRef.current) clearTimeout(isoCombatPulseTimerRef.current);
-    isoCombatPulseTimerRef.current = setTimeout(() => {
-      setIsoCombatPulseVersion((v) => v + 1);
-    }, 120);
+
+    const revealStrikeDiceToPlayer = (v: number) => {
+      setLastCombatStrikeDiceFace(v);
+      setIsoCombatRollFace(v);
+      if (isoCombatPulseTimerRef.current) clearTimeout(isoCombatPulseTimerRef.current);
+      isoCombatPulseTimerRef.current = setTimeout(() => {
+        setIsoCombatPulseVersion((x) => x + 1);
+      }, 120);
+    };
 
     if (value === 6) {
+      combatStrikeDiceOutcomeKnownRef.current = true;
+      revealStrikeDiceToPlayer(value);
       combatLog("dice 6 → instant kill, bypassing strike selection");
       combatStrikeTargetDuringRollRef.current = null;
       const result = resolveCombat(effectiveRoll, 0, combat.monsterType, false, surpriseModifier, value, surpriseState, undefined, false);
@@ -3885,6 +3918,9 @@ export default function LabyrinthGame() {
     combatLog("dice 1-5 → strike resolve", { value, effectiveRoll });
     const pickedDuringRoll = combatStrikeTargetDuringRollRef.current;
     combatStrikeTargetDuringRollRef.current = null;
+    combatStrikeDiceOutcomeKnownRef.current = true;
+
+    revealStrikeDiceToPlayer(value);
 
     if (pickedDuringRoll != null) {
       const result = resolveCombat(
@@ -3936,6 +3972,7 @@ export default function LabyrinthGame() {
 
   const handleStrikeTargetPick = useCallback((target: StrikeTarget) => {
     if (!rollingRef.current) return;
+    if (combatStrikeDiceOutcomeKnownRef.current) return;
     combatStrikeTargetDuringRollRef.current = target;
   }, []);
 
@@ -4065,8 +4102,11 @@ export default function LabyrinthGame() {
             combat.monsterType === "L"
           ) {
             draculaAttackSegment = draculaStrikeAttackVariantRef.current;
-            draculaStrikeAttackVariantRef.current =
-              draculaStrikeAttackVariantRef.current === "spell" ? "skill" : "spell";
+            {
+              const cur = draculaStrikeAttackVariantRef.current;
+              draculaStrikeAttackVariantRef.current =
+                cur === "spell" ? "skill" : cur === "skill" ? "light" : "spell";
+            }
           }
         } else {
           strikePortrait = "other";
@@ -4372,6 +4412,7 @@ export default function LabyrinthGame() {
               bonusRewardOptions,
               bonusRewardApplied: bonusRewardOptions.length === 0,
               ...(glanceKilled ? { monsterEffect: "glancing_kill" as const } : {}),
+              ...(draculaAttackSegment ? { finishingStrikeSegment: draculaAttackSegment } : {}),
             };
           });
           // Apply primary monster reward immediately; bonus is chosen in modal
@@ -4524,6 +4565,7 @@ export default function LabyrinthGame() {
     setCombatDiceRerollReserved(false);
     combatStrikeIsRerollRef.current = true;
     combatStrikeTargetDuringRollRef.current = null;
+    combatStrikeDiceOutcomeKnownRef.current = false;
     const combat = combatStateRef.current;
     if (!combat) return;
     setLab((prev) => {
@@ -4941,6 +4983,7 @@ export default function LabyrinthGame() {
     if (rolling || combatStrikeHpHold != null) return;
     if (combatDicePhysicsInFlightRef.current) return;
     combatStrikeTargetDuringRollRef.current = null;
+    combatStrikeDiceOutcomeKnownRef.current = false;
     combatDicePhysicsInFlightRef.current = true;
     const c = combatStateRef.current;
     if (c) {
@@ -5122,16 +5165,6 @@ export default function LabyrinthGame() {
       if (p === "recover") return "ready";
       return p;
     });
-  }, []);
-
-  const handleCombatVictoryClipFinished = useCallback(() => {
-    if (!isMonster3DEnabled()) return;
-    if (combatVictoryPhaseRef.current !== "hurt") return;
-    if (!combatResultRef.current?.won) return;
-    const now = performance.now();
-    if (now - lastCombatVictoryClipFinishMs.current < COMBAT_3D_CLIP_FINISH_DEBOUNCE_MS) return;
-    lastCombatVictoryClipFinishMs.current = now;
-    setCombatVictoryPhase((p) => (p === "hurt" ? "defeated" : p));
   }, []);
 
   const triggerRoundEnd = useCallback(() => {
@@ -7284,7 +7317,6 @@ export default function LabyrinthGame() {
   winnerRef.current = winner;
   combatFooterSnapshotRef.current = combatFooterSnapshot;
   combatRecoveryPhaseRef.current = combatRecoveryPhase;
-  combatVictoryPhaseRef.current = combatVictoryPhase;
   movesLeftRef.current = movesLeft;
   diceResultRef.current = diceResult;
 
@@ -7349,6 +7381,11 @@ export default function LabyrinthGame() {
   const combatLandscapePostFight = combatResult !== null;
   const showCombatLandscapeVersus =
     combatState !== null || combatResult !== null;
+  /** After death clip (or loss): show outcome + bonus in a centered modal layer, not the bottom strip. */
+  const showCombatOutcomeCenterOverlay =
+    combatResult !== null &&
+    combatVictoryDeathAnimReady &&
+    (!pendingCombatBonusPick || bonusLootRevealed);
   /** Mobile live fight — extra chrome (dice strip height, title) only on small screens. */
   const mobileCompactActiveCombat =
     isMobile && combatState !== null && combatResult === null;
@@ -8939,6 +8976,8 @@ export default function LabyrinthGame() {
               const headerPi = combatState?.playerIndex ?? combatResult?.playerIndex ?? 0;
               const headerMt = combatState?.monsterType ?? combatResult?.monsterType;
               const headerMonsterName = headerMt ? getMonsterName(headerMt) : "Monster";
+              const combatDraculaStrikeSegment =
+                combatFooterSnapshot?.draculaAttackSegment ?? combatResult?.finishingStrikeSegment;
               /** Live fight: use maze stances. Post-fight / loss banner only: hurt/defeated from result. */
               const headerSurpriseVisible =
                 !!combatState && !combatResult && combatHasRolledRef.current;
@@ -9008,7 +9047,7 @@ export default function LabyrinthGame() {
               const monsterGltfPath =
                 headerMt && isMonster3DEnabled()
                   ? getMonsterGltfPath(headerMt, gltfVisualState, {
-                      draculaAttackVariant: combatFooterSnapshot?.draculaAttackSegment,
+                      draculaAttackVariant: combatDraculaStrikeSegment,
                     })
                   : null;
               const combatArmourPath = (() => {
@@ -9067,16 +9106,7 @@ export default function LabyrinthGame() {
                 combatRecoveryPhase !== "ready" &&
                 getMonsterGltfPath(combatState.monsterType, "idle") != null
                   ? handleCombatRecoveryClipFinished
-                  : isMonster3DEnabled() &&
-                      !!monsterGltfPath &&
-                      !!headerMt &&
-                      !combatState &&
-                      combatResult?.won === true &&
-                      combatVictoryPhase === "hurt" &&
-                      combatResult.monsterType != null &&
-                      getMonsterGltfPath(combatResult.monsterType, "idle") != null
-                    ? handleCombatVictoryClipFinished
-                    : undefined;
+                  : undefined;
               const combat3dInstanceKey =
                 headerMt != null ? `c3d-h-${headerPi}-${headerMt}` : "c3d";
               let monsterMaxHp = 1;
@@ -9218,27 +9248,27 @@ export default function LabyrinthGame() {
                     : COMBAT_DRACULA_3D_VIEWPORT_H
                 : lsSpritePx;
               /** Fit 3D from short viewport edge — portrait uses tall chrome reserve; landscape uses small height − tight chrome. */
+              /** Same 3D height while the die rolls as after — shrinking during `rolling` made the fight look zoomed-out and shoved upward. */
               const mobileFaceoff3dH =
                 isMobile &&
                 showCombatLandscapeVersus &&
-                !combatLandscapePostFight &&
                 monsterGltfPath
                   ? isLandscapeCompact
                     ? Math.max(
-                        rolling ? 100 : 118,
+                        118,
                         Math.min(
-                          rolling ? 172 : 198,
+                          198,
                           Math.round(
-                            (typeof window !== "undefined" ? window.innerHeight : 400) - (rolling ? 218 : 198)
+                            (typeof window !== "undefined" ? window.innerHeight : 400) - 198
                           )
                         )
                       )
                     : Math.max(
-                        rolling ? 168 : 210,
+                        210,
                         Math.min(
-                          rolling ? 280 : 448,
+                          448,
                           Math.round(
-                            (typeof window !== "undefined" ? window.innerHeight : 812) - (rolling ? 374 : 278)
+                            (typeof window !== "undefined" ? window.innerHeight : 812) - 278
                           )
                         )
                       )
@@ -9246,14 +9276,13 @@ export default function LabyrinthGame() {
               const desktopFaceoff3dH =
                 !isMobile &&
                 showCombatLandscapeVersus &&
-                !combatLandscapePostFight &&
                 monsterGltfPath
                   ? Math.max(
-                      rolling ? 260 : 280,
+                      280,
                       Math.min(
                         540,
                         Math.round(
-                          (typeof window !== "undefined" ? window.innerHeight : 900) - (rolling ? 312 : 272)
+                          (typeof window !== "undefined" ? window.innerHeight : 900) - 272
                         )
                       )
                     )
@@ -9524,8 +9553,9 @@ export default function LabyrinthGame() {
                         }}
                       >
                         <span
-                        style={{
-                          flex: 1,
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
                             color: "#f0e6cc",
                             fontSize: "0.7rem",
                             fontWeight: 500,
@@ -9534,7 +9564,7 @@ export default function LabyrinthGame() {
                           }}
                         >
                           {combatMonsterHintFullText}
-                            </span>
+                        </span>
                         <button
                           type="button"
                           aria-label="Close hint"
@@ -9560,38 +9590,18 @@ export default function LabyrinthGame() {
                     {monsterGltfPath && headerMonsterSprite ? (
                       <div
                         style={{
+                          position: "relative",
                           display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
                           justifyContent: "center",
                           width: "100%",
                           marginBottom: combatActiveFitViewport ? 2 : 4,
                           ...(useCombatLandscapeFaceoff
-                            ? { flex: "0 0 auto", minHeight: 0, alignItems: "center" }
+                            ? { flex: "0 0 auto", minHeight: 0 }
                             : {}),
                         }}
                       >
-                        {rolling && !combatArtifactRerollPrompt ? (
-                          <div
-                            style={{
-                              width: "100%",
-                              maxWidth: 520,
-                              marginBottom: 6,
-                              textAlign: "center",
-                              padding: "4px 8px",
-                              boxSizing: "border-box",
-                              fontSize: "0.68rem",
-                              color: "#e8d4b0",
-                              lineHeight: 1.4,
-                              borderRadius: 8,
-                              background: "rgba(40,28,18,0.55)",
-                              border: "1px solid rgba(255,180,80,0.35)",
-                            }}
-                            role="status"
-                            aria-live="polite"
-                          >
-                            Fighters advance while the dice roll — <strong>tap the monster</strong> (high / middle / low) or press{" "}
-                            <strong>1</strong> / <strong>2</strong> / <strong>3</strong> to aim. No target = whiff — <strong>heavy</strong> damage.
-                          </div>
-                        ) : null}
                         <CombatScene3D
                           key={combat3dInstanceKey}
                           monsterGltfPath={monsterGltfPath}
@@ -9600,16 +9610,16 @@ export default function LabyrinthGame() {
                           monsterVisualState={gltfVisualState}
                           playerVisualState={playerGltfVisualState}
                           monsterType={headerMt}
-                          draculaAttackVariant={combatFooterSnapshot?.draculaAttackSegment}
+                          draculaAttackVariant={combatDraculaStrikeSegment}
                           playerAttackVariant={playerAttackVariant}
                           playerFatalJumpKill={playerFatalJumpKill3d}
                           draculaHurtHp={draculaHurtHpFor3d}
                           draculaLoopAngrySkill01={draculaLossMenaceLoop3d}
                           compactCombatViewport
                           strikePickActive={combatStrikePick3dDuringRoll}
-                          rollingApproachBlend={rolling ? combatRollApproachT : 0}
                           onStrikeTargetPick={handleStrikeTargetPick}
                           onOneShotAnimationFinished={combat3dOneShotFinished}
+                          rollingApproachBlend={combat3dRollingApproachBlend}
                           width={COMBAT_MODAL_WIDTH_LANDSCAPE_PX}
                           height={combatScene3dHeightFaceoff}
                           fallback={
@@ -9625,6 +9635,35 @@ export default function LabyrinthGame() {
                             />
                           }
                         />
+                        {rolling && !combatArtifactRerollPrompt ? (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: 0,
+                              left: "50%",
+                              transform: "translateX(-50%)",
+                              zIndex: 105,
+                              width: "min(520px, calc(100% - 12px))",
+                              textAlign: "center",
+                              padding: "4px 8px",
+                              boxSizing: "border-box",
+                              fontSize: "0.68rem",
+                              color: "#e8d4b0",
+                              lineHeight: 1.35,
+                              borderRadius: 8,
+                              background: "rgba(28,22,16,0.82)",
+                              border: "1px solid rgba(255,180,80,0.45)",
+                              boxShadow: "0 4px 16px rgba(0,0,0,0.45)",
+                              pointerEvents: "none",
+                            }}
+                            role="status"
+                            aria-live="polite"
+                          >
+                            Commit your aim <strong>while the die is still rolling</strong> — <strong>tap the monster</strong> (high / middle / low) or press{" "}
+                            <strong>1</strong> / <strong>2</strong> / <strong>3</strong>. After the strike die locks in, further taps and keys do not count — no
+                            valid aim = whiff, <strong>heavy</strong> damage.
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                     <div
@@ -9765,8 +9804,8 @@ export default function LabyrinthGame() {
                               width: "100%",
                               minWidth: 0,
                               minHeight: landscapeFaceoffDiceViewportH,
-                              height: combatStrikePick2dDuringRoll ? "auto" : landscapeFaceoffDiceViewportH,
-                              maxHeight: combatStrikePick2dDuringRoll ? "none" : landscapeFaceoffDiceViewportH,
+                              height: combatStrikePickButtonsDuringRoll ? "auto" : landscapeFaceoffDiceViewportH,
+                              maxHeight: combatStrikePickButtonsDuringRoll ? "none" : landscapeFaceoffDiceViewportH,
                               flexShrink: 0,
                               boxSizing: "border-box",
                               background: "linear-gradient(145deg, #1a1a24 0%, #0d0d12 100%)",
@@ -9780,8 +9819,8 @@ export default function LabyrinthGame() {
                           >
                             <div
                               style={{
-                                flex: combatStrikePick2dDuringRoll ? "1 1 auto" : 1,
-                                minHeight: combatStrikePick2dDuringRoll ? Math.max(72, landscapeFaceoffDiceViewportH - 108) : 0,
+                                flex: combatStrikePickButtonsDuringRoll ? "1 1 auto" : 1,
+                                minHeight: combatStrikePickButtonsDuringRoll ? Math.max(72, landscapeFaceoffDiceViewportH - 108) : 0,
                                 width: "100%",
                                 display: "flex",
                                 flexDirection: "column",
@@ -9795,7 +9834,7 @@ export default function LabyrinthGame() {
                                 hideHint
                               />
                             </div>
-                            {combatStrikePick2dDuringRoll ? (
+                            {combatStrikePickButtonsDuringRoll ? (
                               <div
                                 style={{
                                   flexShrink: 0,
@@ -9818,8 +9857,8 @@ export default function LabyrinthGame() {
                                   }}
                                   aria-live="polite"
                                 >
-                                  <strong>While the dice roll</strong>, pick head, body, or legs (or keys <strong>1</strong> / <strong>2</strong> /{" "}
-                                  <strong>3</strong>). No pick before they stop = whiff — <strong>heavy</strong> damage.
+                                  Pick head, body, or legs (or <strong>1</strong> / <strong>2</strong> / <strong>3</strong>) <strong>before the strike die
+                                  locks in</strong>. Aiming after the roll has finished does not count — whiff = <strong>heavy</strong> damage.
                                 </span>
                                 <div style={{ display: "flex", flexDirection: "row", gap: 6, width: "100%", maxWidth: 480 }}>
                                   <button
@@ -9988,55 +10027,6 @@ export default function LabyrinthGame() {
                         )}
                       </div>
                     </div>
-                    {combatLandscapePostFight && combatResult
-                      ? (() => {
-                          const landscapeOutcomePopoverPanelStyle: React.CSSProperties = {
-                            maxHeight: "min(72dvh, 420px)",
-                            overflowY: "auto",
-                            WebkitOverflowScrolling: "touch",
-                            boxSizing: "border-box",
-                            padding: "10px 12px",
-                            borderRadius: 12,
-                            background: "rgba(12, 12, 20, 0.97)",
-                            border: "2px solid rgba(255, 204, 0, 0.55)",
-                            boxShadow: "0 12px 40px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.06)",
-                          };
-                          /** `fixed` + viewport center: absolute % was relative to the short portrait-row box, not the modal. */
-                          const landscapeOutcomePopoverWrapStyle: React.CSSProperties = {
-                            position: "fixed",
-                            left: "50%",
-                            top: "50%",
-                            transform: "translate(-50%, -50%)",
-                            zIndex: COMBAT_MODAL_Z + 30,
-                            width: "min(340px, calc(100vw - 40px))",
-                            maxWidth: "92%",
-                            maxHeight: "min(72dvh, 420px)",
-                            pointerEvents: "auto",
-                            boxSizing: "border-box",
-                          };
-                          if (pendingCombatBonusPick && bonusLootRevealed) {
-                            return (
-                              <div style={landscapeOutcomePopoverWrapStyle}>
-                                <div className="combat-bonus-loot-overlay" style={landscapeOutcomePopoverPanelStyle}>
-                                  {renderCombatBonusLootPicker()}
-                                </div>
-                              </div>
-                            );
-                          }
-                          const landscapeOutcomeEl = renderCombatOutcome(true);
-                          if (!landscapeOutcomeEl) return null;
-                          return (
-                            <div style={landscapeOutcomePopoverWrapStyle}>
-                              <div
-                                className="combat-landscape-outcome-popover"
-                                style={landscapeOutcomePopoverPanelStyle}
-                              >
-                                {landscapeOutcomeEl}
-                              </div>
-                            </div>
-                          );
-                        })()
-                      : null}
                     </div>
                     <div
                       style={{
@@ -10368,8 +10358,9 @@ export default function LabyrinthGame() {
                       style={{
                         position: "relative",
                         display: "flex",
+                        flexDirection: "column",
                         alignItems: "center",
-                        justifyContent: "center",
+                        justifyContent: "flex-start",
                         minHeight: combatPortraitCellMinH,
                         overflow: "visible",
                         width: "100%",
@@ -10383,7 +10374,8 @@ export default function LabyrinthGame() {
                             left: "50%",
                             transform: "translateX(-50%)",
                             zIndex: 120,
-                            width: "min(480px, calc(100% - 16px))",
+                            width: "min(560px, calc(100vw - 48px))",
+                            maxWidth: "calc(100% - 8px)",
                             boxSizing: "border-box",
                             display: "flex",
                             alignItems: "flex-start",
@@ -10396,7 +10388,17 @@ export default function LabyrinthGame() {
                             pointerEvents: "auto",
                           }}
                         >
-                          <span style={{ flex: 1, color: "#f0e6cc", fontSize: "0.68rem", fontWeight: 500, lineHeight: 1.35, textAlign: "left" }}>
+                          <span
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              color: "#f0e6cc",
+                              fontSize: "0.68rem",
+                              fontWeight: 500,
+                              lineHeight: 1.35,
+                              textAlign: "left",
+                            }}
+                          >
                             {combatMonsterHintFullText}
                           </span>
                           <button
@@ -10410,29 +10412,18 @@ export default function LabyrinthGame() {
                         </div>
                       )}
                       {monsterGltfPath && headerMonsterSprite ? (
-                        <>
-                          {rolling && !combatArtifactRerollPrompt ? (
-                            <div
-                              style={{
-                                width: "min(480px, calc(100% - 16px))",
-                                margin: "0 auto 6px",
-                                textAlign: "center",
-                                padding: "6px 10px",
-                                boxSizing: "border-box",
-                                fontSize: "0.66rem",
-                                color: "#e8d4b0",
-                                lineHeight: 1.4,
-                                borderRadius: 8,
-                                background: "rgba(40,28,18,0.55)",
-                                border: "1px solid rgba(255,180,80,0.35)",
-                              }}
-                              role="status"
-                              aria-live="polite"
-                            >
-                              While they close in, <strong>tap the monster</strong> (high / mid / low) or <strong>1–3</strong> to aim.
-                              No pick = whiff — <strong>heavy</strong> damage.
-                            </div>
-                          ) : null}
+                        <div
+                          style={{
+                            position: "relative",
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: "100%",
+                            flex: "1 1 auto",
+                            minHeight: 0,
+                          }}
+                        >
                           <CombatScene3D
                             key={combat3dInstanceKey}
                             monsterGltfPath={monsterGltfPath}
@@ -10441,16 +10432,16 @@ export default function LabyrinthGame() {
                             monsterVisualState={gltfVisualState}
                             playerVisualState={playerGltfVisualState}
                             monsterType={headerMt}
-                            draculaAttackVariant={combatFooterSnapshot?.draculaAttackSegment}
+                            draculaAttackVariant={combatDraculaStrikeSegment}
                             playerAttackVariant={playerAttackVariant}
                             playerFatalJumpKill={playerFatalJumpKill3d}
                             draculaHurtHp={draculaHurtHpFor3d}
                             draculaLoopAngrySkill01={draculaLossMenaceLoop3d}
                             compactCombatViewport
                             strikePickActive={combatStrikePick3dDuringRoll}
-                            rollingApproachBlend={rolling ? combatRollApproachT : 0}
                             onStrikeTargetPick={handleStrikeTargetPick}
                             onOneShotAnimationFinished={combat3dOneShotFinished}
+                            rollingApproachBlend={combat3dRollingApproachBlend}
                             width={COMBAT_MODAL_WIDTH}
                             height={combatMonster3dHeight}
                             fallback={
@@ -10472,7 +10463,36 @@ export default function LabyrinthGame() {
                               />
                             }
                           />
-                        </>
+                          {rolling && !combatArtifactRerollPrompt ? (
+                            <div
+                              style={{
+                                position: "absolute",
+                                top: 0,
+                                left: "50%",
+                                transform: "translateX(-50%)",
+                                zIndex: 105,
+                                width: "min(520px, calc(100vw - 40px))",
+                                maxWidth: "calc(100% - 8px)",
+                                textAlign: "center",
+                                padding: "5px 8px",
+                                boxSizing: "border-box",
+                                fontSize: "0.66rem",
+                                color: "#e8d4b0",
+                                lineHeight: 1.35,
+                                borderRadius: 8,
+                                background: "rgba(28,22,16,0.82)",
+                                border: "1px solid rgba(255,180,80,0.45)",
+                                boxShadow: "0 4px 16px rgba(0,0,0,0.45)",
+                                pointerEvents: "none",
+                              }}
+                              role="status"
+                              aria-live="polite"
+                            >
+                              While they close in, <strong>tap the monster</strong> (high / mid / low) or <strong>1–3</strong> to aim.
+                              No pick = whiff — <strong>heavy</strong> damage.
+                            </div>
+                          ) : null}
+                        </div>
                       ) : headerMonsterSprite ? (
                         <img
                           key={headerMonsterSprite}
@@ -10599,475 +10619,6 @@ export default function LabyrinthGame() {
                     </div>
                     </div>
                   )}
-                  {combatState && !useCombatLandscapeFaceoff && (
-                    <div
-                      style={{
-                        width: "100%",
-                        padding: "2px 8px 0",
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "center",
-                        gap: 3,
-                        flexShrink: 0,
-                        boxSizing: "border-box",
-                      }}
-                    >
-                      {rolling && lab && !useCombatLandscapeFaceoff ? (
-                        <div
-                          className="combat-dice combat-dice-rolling-slot"
-                          style={{
-                            width: "100%",
-                            maxWidth: 420,
-                            minWidth: 0,
-                            minHeight: COMBAT_SKILLS_HINT_STACK_TOTAL_PX,
-                            height: combatStrikePick2dDuringRoll ? "auto" : COMBAT_SKILLS_HINT_STACK_TOTAL_PX,
-                            maxHeight: combatStrikePick2dDuringRoll ? "none" : COMBAT_SKILLS_HINT_STACK_TOTAL_PX,
-                            flexShrink: 0,
-                            boxSizing: "border-box",
-                            background: "linear-gradient(145deg, #1a1a24 0%, #0d0d12 100%)",
-                            borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                            overflow: "hidden",
-                            display: "flex",
-                            flexDirection: "column",
-                            border: "2px solid #ffcc00",
-                            boxShadow: "inset 0 0 24px rgba(255,204,0,0.12)",
-                          }}
-                        >
-                          <div
-                            style={{
-                              flex: 1,
-                              minHeight: combatStrikePick2dDuringRoll ? Math.max(100, COMBAT_SKILLS_HINT_STACK_TOTAL_PX - 120) : 0,
-                              width: "100%",
-                              display: "flex",
-                              flexDirection: "column",
-                            }}
-                          >
-                            <Dice3D
-                              ref={combatDiceRef}
-                              onRollComplete={handleCombatRollComplete}
-                              disabled={rolling}
-                              fitContainer
-                              hideHint
-                            />
-                          </div>
-                          {combatStrikePick2dDuringRoll ? (
-                            <div
-                              style={{
-                                flexShrink: 0,
-                                width: "100%",
-                                padding: "6px 4px 8px",
-                                boxSizing: "border-box",
-                                borderTop: "1px solid rgba(255,204,0,0.28)",
-                                display: "flex",
-                                flexDirection: "column",
-                                gap: 6,
-                                alignItems: "center",
-                              }}
-                            >
-                              <span
-                                style={{
-                                  fontSize: "0.68rem",
-                                  color: "#c8c8d0",
-                                  textAlign: "center",
-                                  lineHeight: 1.35,
-                                }}
-                                aria-live="polite"
-                              >
-                                <strong>While the dice roll</strong>, pick head, body, or legs (or <strong>1</strong> / <strong>2</strong> /{" "}
-                                <strong>3</strong>). No pick before they stop = whiff — <strong>heavy</strong> damage.
-                              </span>
-                              <div style={{ display: "flex", flexDirection: "row", gap: 6, width: "100%", maxWidth: 420 }}>
-                                <button
-                                  type="button"
-                                  onClick={() => handleStrikeTargetPick("head")}
-                                  style={{
-                                    ...buttonStyle,
-                                    flex: 1,
-                                    fontSize: "0.72rem",
-                                    padding: "8px 4px",
-                                    background: "linear-gradient(180deg, rgba(180,40,40,0.5) 0%, rgba(90,15,15,0.85) 100%)",
-                                    color: "#ffcccc",
-                                    border: "2px solid rgba(255,100,100,0.6)",
-                                    borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                    fontWeight: 700,
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    alignItems: "center",
-                                    gap: 2,
-                                    lineHeight: 1.2,
-                                  }}
-                                >
-                                  <span style={{ fontSize: "1.1rem" }}>💀</span>
-                                  <span>Head</span>
-                                  <span style={{ fontSize: "0.6rem", opacity: 0.75, fontWeight: 500 }}>ATK+2 / DEF+2</span>
-                                  <span style={{ fontSize: "0.58rem", opacity: 0.6 }}>High Risk [1]</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleStrikeTargetPick("body")}
-                                  style={{
-                                    ...buttonStyle,
-                                    flex: 1,
-                                    fontSize: "0.72rem",
-                                    padding: "8px 4px",
-                                    background: "linear-gradient(180deg, rgba(180,140,20,0.45) 0%, rgba(80,60,10,0.85) 100%)",
-                                    color: "#ffeeaa",
-                                    border: "2px solid rgba(255,204,0,0.55)",
-                                    borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                    fontWeight: 700,
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    alignItems: "center",
-                                    gap: 2,
-                                    lineHeight: 1.2,
-                                  }}
-                                >
-                                  <span style={{ fontSize: "1.1rem" }}>🛡️</span>
-                                  <span>Body</span>
-                                  <span style={{ fontSize: "0.6rem", opacity: 0.75, fontWeight: 500 }}>Balanced</span>
-                                  <span style={{ fontSize: "0.58rem", opacity: 0.6 }}>Standard [2]</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleStrikeTargetPick("legs")}
-                                  style={{
-                                    ...buttonStyle,
-                                    flex: 1,
-                                    fontSize: "0.72rem",
-                                    padding: "8px 4px",
-                                    background: "linear-gradient(180deg, rgba(30,140,60,0.45) 0%, rgba(10,70,25,0.85) 100%)",
-                                    color: "#bbffcc",
-                                    border: "2px solid rgba(80,200,100,0.55)",
-                                    borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                    fontWeight: 700,
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    alignItems: "center",
-                                    gap: 2,
-                                    lineHeight: 1.2,
-                                  }}
-                                >
-                                  <span style={{ fontSize: "1.1rem" }}>🦵</span>
-                                  <span>Legs</span>
-                                  <span style={{ fontSize: "0.6rem", opacity: 0.75, fontWeight: 500 }}>ATK+1 / DEF-1</span>
-                                  <span style={{ fontSize: "0.58rem", opacity: 0.6 }}>Safe [3]</span>
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <>
-                          {/* Skills & artifacts above the hint so they stay visible when the modal scrolls (tall face-off + maxHeight). */}
-                          {lab &&
-                            (() => {
-                              const pi = combatState.playerIndex;
-                              const cp = lab.players[pi] ?? lab.players[headerPi];
-                              if (combatArtifactRerollPrompt && useCombatLandscapeFaceoff) {
-                                return null;
-                              }
-                              if (combatArtifactRerollPrompt) {
-                                return (
-                                  <div
-                          style={{
-                            width: "100%",
-                                      maxWidth: 420,
-                                      flexShrink: 0,
-                            boxSizing: "border-box",
-                                    }}
-                                  >
-                                    <div
-                                      role="dialog"
-                                      aria-label="Dice artifact reroll"
-                                      aria-live="polite"
-                                      style={{
-                                        width: "100%",
-                                        padding: "8px 10px",
-                                        boxSizing: "border-box",
-                                        borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                        border: "2px solid #aa66ff",
-                                        background: "linear-gradient(180deg, rgba(58,32,96,0.55) 0%, rgba(20,12,32,0.95) 100%)",
-                            display: "flex",
-                                        flexDirection: "column",
-                                        gap: 6,
-                                        minHeight: 0,
-                                      }}
-                                    >
-                                      <span
-                                        style={{
-                                          fontSize: "0.72rem",
-                                          color: "#e8ddff",
-                                          lineHeight: 1.3,
-                            textAlign: "center",
-                          }}
-                        >
-                                        🎲 <strong>Roll again?</strong> Spend <strong>1 Dice</strong> — one reroll only; the new strike
-                                        replaces the first, then HP updates.
-                                      </span>
-                                      {lastCombatStrikeDiceFace != null &&
-                                      lastCombatStrikeDiceFace >= 1 &&
-                                      lastCombatStrikeDiceFace <= 6 ? (
-                                        <span
-                                          style={{
-                                            fontSize: "0.72rem",
-                                            fontWeight: 800,
-                                            color: "#00ff88",
-                                            letterSpacing: "0.04em",
-                                            lineHeight: 1.2,
-                                            textAlign: "center",
-                                            textShadow: "0 0 12px rgba(0, 255, 136, 0.35)",
-                                          }}
-                                          aria-label={`Last strike roll ${lastCombatStrikeDiceFace}`}
-                                        >
-                                          Last roll: {COMBAT_STRIKE_DICE_FACE_CHARS[lastCombatStrikeDiceFace - 1]}{" "}
-                                          <span style={{ fontWeight: 700, opacity: 0.95 }}>({lastCombatStrikeDiceFace})</span>
-                                        </span>
-                                      ) : null}
-                                      <div
-                                        style={{
-                                          display: "flex",
-                                          flexDirection: isMobile ? "column" : "row",
-                                          gap: 6,
-                                          width: "100%",
-                                        }}
-                                      >
-                                        <button
-                                          type="button"
-                                          onClick={handleCombatArtifactRerollDecline}
-                                          style={{
-                                            ...buttonStyle,
-                                            flex: 1,
-                                            fontSize: "0.72rem",
-                                            padding: "6px 8px",
-                                            background: "#2a2a32",
-                                            color: "#ddd",
-                                            border: "1px solid #555",
-                                            borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                            fontWeight: 700,
-                                          }}
-                                        >
-                                          No — keep first roll
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={handleCombatArtifactRerollAccept}
-                                          style={{
-                                            ...buttonStyle,
-                                            flex: 1,
-                                            fontSize: "0.72rem",
-                                            padding: "6px 8px",
-                                            background: "#3a2060",
-                                            color: "#e8ddff",
-                                            border: "2px solid #aa66ff",
-                                            borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                            fontWeight: 700,
-                                          }}
-                                        >
-                                          Yes — roll again
-                                        </button>
-                        </div>
-                      </div>
-                                  </div>
-                                );
-                              }
-                              const hasShield = cp ? (cp.shield ?? 0) > 0 : false;
-                              const hasStored = hasCombatVisibleStoredArtifacts(cp);
-                              const hasSkillRow = hasShield || hasStored;
-                              return (
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "center",
-                            gap: 4,
-                            width: "100%",
-                            maxWidth: 420,
-                                    height: COMBAT_SKILLS_PANEL_PX,
-                                    minHeight: COMBAT_SKILLS_PANEL_PX,
-                                    maxHeight: COMBAT_SKILLS_PANEL_PX,
-                            padding: "4px 8px 6px",
-                            background: "rgba(0,0,0,0.45)",
-                                    borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                            border: "1px solid rgba(170,102,255,0.45)",
-                            boxSizing: "border-box",
-                                    overflow: "hidden",
-                                    flexShrink: 0,
-                          }}
-                        >
-                          <div style={{ color: "#b8a0e8", fontSize: "0.72rem", fontWeight: 700 }}>Skills &amp; Artifacts</div>
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      flexWrap: "wrap",
-                                      justifyContent: "center",
-                                      alignItems: "center",
-                                      gap: 6,
-                                      minHeight: 28,
-                                      width: "100%",
-                                    }}
-                                  >
-                                    {hasSkillRow ? (
-                                      <>
-                                        {hasShield && (
-                              <CombatSkillItemIcon
-                                mode="toggle"
-                                variant="shield"
-                                selected={combatUseShield}
-                                            disabled={rolling || combatArtifactRerollPrompt || combatStrikeLabPending}
-                                            onClick={() => !rolling && !combatArtifactRerollPrompt && setCombatUseShield((v) => !v)}
-                                title="Shield: tap to use / not use on this roll (blocks damage if you lose)"
-                              />
-                            )}
-                            {STORED_ARTIFACT_ORDER.map((kind) => {
-                                          const n = storedArtifactCount(cp, kind);
-                              if (n <= 0) return null;
-                              if (isStoredArtifactMapOnly(kind)) return null;
-                              if (kind === "dice") {
-                                return (
-                                  <CombatSkillItemIcon
-                                    key={kind}
-                                                mode="toggle"
-                                    variant="dice"
-                                                selected={combatDiceRerollReserved}
-                                                disabled={rolling || combatArtifactRerollPrompt || combatStrikeLabPending}
-                                                onClick={() => !rolling && !combatArtifactRerollPrompt && handleCombatDiceArtifactRerollToggle()}
-                                                title={`${STORED_ARTIFACT_LINE.dice} — before you roll: tap to mark a reroll. After the roll, choose whether to spend 1 dice artifact for a second strike roll (only that reroll).`}
-                                    stackCount={n}
-                                  />
-                                );
-                              }
-                              if (kind === "shield") {
-                                return (
-                                  <CombatSkillItemIcon
-                                    key={kind}
-                                    mode="consume"
-                                    variant="shield"
-                                    disabled={rolling}
-                                    onClick={() => !rolling && handleUseArtifact("shield")}
-                                    title={`${STORED_ARTIFACT_LINE.shield}. ${STORED_ARTIFACT_TOOLTIP.shield}`}
-                                    stackCount={n}
-                                  />
-                                );
-                              }
-                                          if (kind === "holySword") {
-                                            return (
-                                              <CombatSkillItemIcon
-                                                key={kind}
-                                                mode="consume"
-                                                variant="holySword"
-                                                disabled={rolling}
-                                                onClick={() => !rolling && handleUseArtifact("holySword")}
-                                                title={`${STORED_ARTIFACT_LINE.holySword}. ${STORED_ARTIFACT_TOOLTIP.holySword}`}
-                                                stackCount={n}
-                                              />
-                                            );
-                                          }
-                                          if (kind === "holyCross") {
-                                            return (
-                                              <CombatSkillItemIcon
-                                                key={kind}
-                                                mode="consume"
-                                                variant="holyCross"
-                                                disabled={rolling}
-                                                onClick={() => !rolling && handleUseArtifact("holyCross")}
-                                                title={`${STORED_ARTIFACT_LINE.holyCross}. ${STORED_ARTIFACT_TOOLTIP.holyCross}`}
-                                                stackCount={n}
-                                              />
-                                            );
-                                          }
-                              return null;
-                            })}
-                                      </>
-                                    ) : cp && (cp.artifacts ?? 0) > 0 ? (
-                                      <span
-                                        style={{
-                                          fontSize: "0.68rem",
-                                          color: "#9a9aaa",
-                                          textAlign: "center",
-                                          lineHeight: 1.35,
-                                          padding: "0 4px",
-                                        }}
-                                      >
-                                        Artifact inventory {(cp.artifacts ?? 0)}/3 — use on the map after this fight
-                                      </span>
-                                    ) : (
-                                      <span
-                                        style={{
-                                          fontSize: "0.68rem",
-                                          color: "#666",
-                                          textAlign: "center",
-                                          lineHeight: 1.35,
-                                          padding: "0 4px",
-                                        }}
-                                      >
-                                        {cp ? "No combat skills or stored artifacts" : "—"}
-                                      </span>
-                        )}
-                          </div>
-                        </div>
-                              );
-                            })()}
-                              {showCombatHintText ? (
-                              <div
-                                style={{
-                                  width: "100%",
-                                  maxWidth: 420,
-                                  height: COMBAT_HINT_STRIP_PX,
-                                  minHeight: COMBAT_HINT_STRIP_PX,
-                                  maxHeight: COMBAT_HINT_STRIP_PX,
-                                  flexShrink: 0,
-                                  boxSizing: "border-box",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                }}
-                              >
-                                <div
-                                  role="alert"
-                                  aria-live="polite"
-                                  style={{
-                                    width: "100%",
-                                    height: "100%",
-                                    boxSizing: "border-box",
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    padding: "4px 8px",
-                                    borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                    overflow: "hidden",
-                                    border: "2px solid rgba(255,204,0,0.38)",
-                                    background: "rgba(255,204,0,0.08)",
-                                    color: "#eeccaa",
-                                    fontSize: "0.76rem",
-                                    fontWeight: 500,
-                                    textAlign: "center",
-                                    lineHeight: 1.28,
-                                  }}
-                                >
-                                    <span
-                                      style={{
-                                        display: "-webkit-box",
-                                        WebkitLineClamp: 2,
-                                        WebkitBoxOrient: "vertical" as const,
-                                        overflow: "hidden",
-                                        wordBreak: "break-word",
-                                      }}
-                                    >
-                                      {combatToast
-                                        ? combatToast.message
-                                        : combatFooterSnapshot
-                                          ? combatFooterSnapshot.summary
-                                          : lab && combatState
-                                            ? `💡 ${getMonsterHint(combatState.monsterType, lab?.monsters[combatState.monsterIndex]?.hasShield)}`
-                                            : ""}
-                                    </span>
-                                </div>
-                              </div>
-                              ) : null}
-                          </>
-                      )}
-                    </div>
-                  )}
                 </div>
               );
             })()}
@@ -11097,155 +10648,66 @@ export default function LabyrinthGame() {
                 pointerEvents: useCombatLandscapeFaceoff ? ("none" as const) : "auto",
               }}
             >
-            {/* Fixed-height slot: result banner/bonus OR roll controls — never jumps */}
-            {combatState ? (
-              useCombatLandscapeFaceoff ? (
-                <div style={{ width: "100%", minHeight: 8 }} aria-hidden />
-              ) : (
-              <div style={{ ...combatRollSectionStyle, flex: 0, width: "100%", justifyContent: "center" }}>
-                {(() => {
-                  /** Same on all breakpoints: lower dice viewport height 0 until roll; while rolling, Dice3D only in upper Skills/hint slot. */
-                  const combatDiceInLowerSlot = !rolling;
-                  const combatDiceViewportHidden = !rolling;
-                  return (
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: 0,
-                    width: "100%",
-                    maxWidth: "100%",
-                    minHeight: combatDiceViewportHidden ? 0 : COMBAT_ROLL_ROW_MIN_PX,
-                    paddingTop: COMBAT_ROLL_ROW_PAD_Y,
-                    paddingBottom: COMBAT_ROLL_ROW_PAD_Y,
-                    paddingLeft: isMobile ? 6 : 8,
-                    paddingRight: isMobile ? 6 : 8,
-                    boxSizing: "border-box",
-                    flexShrink: 0,
-                  }}
-                >
-                  {combatDiceInLowerSlot ? (
-                  <div
-                    className="combat-dice"
-                    onClick={combatDiceViewportHidden ? undefined : handleCombatRollClick}
-                    style={{
-                      cursor: combatDiceViewportHidden ? "default" : rolling ? "default" : "pointer",
-                      width: "100%",
-                      maxWidth: 420,
-                      alignSelf: "center",
-                      minWidth: 0,
-                      height: combatDiceViewportHidden
-                        ? 0
-                        : `clamp(${COMBAT_ROLL_DICE_VIEWPORT_MIN_H}px, min(32vw, 28vh), ${COMBAT_ROLL_DICE_VIEWPORT_MAX_H}px)`,
-                      minHeight: combatDiceViewportHidden ? 0 : COMBAT_ROLL_DICE_VIEWPORT_MIN_H,
-                      maxHeight: combatDiceViewportHidden ? 0 : COMBAT_ROLL_DICE_VIEWPORT_MAX_H,
-                      flexShrink: 0,
-                      boxSizing: "border-box",
-                      background: combatDiceViewportHidden ? "transparent" : "linear-gradient(145deg, #1a1a24 0%, #0d0d12 100%)",
-                      borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                      overflow: "hidden",
-                      display: "flex",
-                      flexDirection: "column",
-                      border: combatDiceViewportHidden ? "2px solid transparent" : "2px solid #ffcc00",
-                      boxShadow: combatDiceViewportHidden ? "none" : "inset 0 0 24px rgba(255,204,0,0.12)",
-                      pointerEvents: combatDiceViewportHidden ? "none" : "auto",
-                    }}
-                  >
-                    <div style={{ flex: 1, minHeight: 0, width: "100%", display: "flex", flexDirection: "column" }}>
-                    <Dice3D
-                      ref={combatDiceRef}
-                      onRollComplete={handleCombatRollComplete}
-                        disabled={rolling || combatArtifactRerollPrompt || combatStrikeLabPending}
-                      fitContainer
-                      hideHint
-                    />
-                  </div>
-                  </div>
-                  ) : (
-                    <div style={{ height: 0, overflow: "hidden", flexShrink: 0 }} aria-hidden />
-                  )}
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: isMobile ? "column" : "row",
-                      alignItems: "stretch",
-                      justifyContent: "space-between",
-                      gap: isMobile ? 5 : 6,
-                      width: "100%",
-                      maxWidth: isMobile ? undefined : 420,
-                      alignSelf: isMobile ? "stretch" : "center",
-                      boxSizing: "border-box",
-                    }}
-                  >
-                  <button
-                      type="button"
-                      onClick={handleCombatRollClick}
-                      disabled={rolling || combatArtifactRerollPrompt || combatStrikeLabPending}
-                      style={{
-                        ...buttonStyle,
-                        flex: isMobile ? "none" : 1,
-                        minWidth: 0,
-                        width: isMobile ? "100%" : "auto",
-                        boxSizing: "border-box",
-                        minHeight: isMobile ? 40 : COMBAT_ROLL_BUTTON_H_PX,
-                        padding: "0 clamp(6px, 1.5vw, 12px)",
-                        fontSize: isMobile ? "0.78rem" : "0.8rem",
-                        lineHeight: 1.2,
-                        background: "#ffcc00",
-                        color: "#111",
-                        border: "2px solid #cc9900",
-                        borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                        fontWeight: "bold",
-                      }}
-                    >
-                      {rolling ? "Rolling…" : "Roll dice"}
-                    </button>
-                    <button
-                      type="button"
-                    onClick={handleRunAway}
-                      disabled={rolling || combatArtifactRerollPrompt || combatStrikeLabPending}
-                    style={{
-                      ...buttonStyle,
-                        flex: isMobile ? "none" : 1,
-                        minWidth: 0,
-                        width: isMobile ? "100%" : "auto",
-                      boxSizing: "border-box",
-                        minHeight: isMobile ? 40 : COMBAT_ROLL_BUTTON_H_PX,
-                        padding: "0 clamp(6px, 1.5vw, 12px)",
-                        fontSize: isMobile ? "0.78rem" : "0.8rem",
-                      lineHeight: 1.2,
-                        background: "#666",
-                      color: "#fff",
-                      border: "1px solid #888",
-                        borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                        opacity: 1,
-                      }}
-                      title={
-                        rolling
-                          ? "Wait for roll to finish"
-                          : movesLeft > 0
-                            ? "Retreat to a safe adjacent cell (costs 1 move)"
-                            : "Retreat — ends combat even with 0 moves (you used your last move to enter the fight)"
-                      }
-                  >
-                    🏃 Run away
-                  </button>
-                </div>
-              </div>
-              );
-            })()}
-              </div>
-              )
-            ) : combatResult ? (
-              combatLandscapePostFight ? (
-                <div style={{ width: "100%", minHeight: 0, flexShrink: 0 }} aria-hidden />
-              ) : (
-                renderCombatOutcome()
-              )
+            {/* Outcome + bonus loot render in centered overlay (`showCombatOutcomeCenterOverlay`), not here. */}
+            {combatState || combatResult ? (
+              <div
+                style={{
+                  width: "100%",
+                  minHeight: showCombatOutcomeCenterOverlay ? 0 : 8,
+                  flexShrink: 0,
+                }}
+                aria-hidden
+              />
             ) : null}
             </div>
-            {combatState && lab && !useCombatLandscapeFaceoff && (() => {
+            {showCombatOutcomeCenterOverlay ? (
+              <div
+                role="presentation"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 220,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding:
+                    "max(10px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px))",
+                  boxSizing: "border-box",
+                  pointerEvents: "auto",
+                  background: "rgba(5, 5, 10, 0.55)",
+                  backdropFilter: "blur(3px)",
+                }}
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <div
+                  key={`co-${combatResult.playerIndex ?? 0}-${combatResult.monsterType ?? "?"}-${combatResult.won ? "w" : "l"}-${pendingCombatBonusPick ? (bonusLootRevealed ? "br1" : "br0") : "nb"}`}
+                  className="combat-outcome-center-card"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Combat result"
+                  onClick={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  style={{
+                    width: "min(100%, 440px)",
+                    maxWidth: "100%",
+                    maxHeight: "min(82dvh, calc(100% - 20px))",
+                    overflowY: "auto",
+                    WebkitOverflowScrolling: "touch",
+                    boxSizing: "border-box",
+                    padding: "14px 16px 16px",
+                    borderRadius: 14,
+                    background: "linear-gradient(180deg, rgba(26, 24, 32, 0.98) 0%, rgba(10, 10, 14, 0.99) 100%)",
+                    border: "2px solid rgba(255, 200, 80, 0.38)",
+                    boxShadow:
+                      "0 28px 64px rgba(0,0,0,0.58), 0 0 0 1px rgba(255,255,255,0.06), inset 0 1px 0 rgba(255,255,255,0.07)",
+                  }}
+                >
+                  {renderCombatOutcome(false)}
+                </div>
+              </div>
+            ) : null}
+            {combatState && lab && useCombatLandscapeFaceoff && (() => {
               const [dMin, dMax] = getMonsterDamageRange(combatState.monsterType);
               return (
                 <div style={combatModalFooterDiceStyle}>

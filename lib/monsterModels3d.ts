@@ -1025,7 +1025,7 @@ export const MONSTER_CLIP_PRIORITY_BY_GLB_SLUG: Record<
   Partial<Record<Monster3DSpriteState, readonly string[]>>
 > = {
   "dracula-dead": {
-    defeated: ["Armature|Shot_and_Fall_Backward|baselayer", "Armature|Dead|baselayer", "Dead", "dead", "Death", "death", "Dying", "dying"],
+    defeated: ["Armature|Dead|baselayer", "Dead", "dead", "Death", "death", "Armature|Shot_and_Fall_Forward|baselayer", "Dying", "dying"],
   },
 };
 
@@ -1074,7 +1074,7 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
       "Face_Punch_Reaction_2",
     ]),
     knockdown: expandZombieClipTryList(["Shot_and_Fall_Backward", "falling_down"]),
-    defeated: expandZombieClipTryList(["Shot_and_Fall_Backward", "Shot_and_Fall_Forward", "Dead"]),
+    defeated: expandZombieClipTryList(["Dead", "Shot_and_Fall_Forward", "Shot_and_Fall_Backward"]),
     recover: expandZombieClipTryList(["Arise", "Walking"]),
   },
   /** Merged `lava.glb` — Lava Golem biped, 21 clips including Charged_Ground_Slam and multiple skills. */
@@ -1097,7 +1097,7 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
       "Face_Punch_Reaction_2",
     ]),
     knockdown: expandLavaClipTryList(["Shot_and_Fall_Backward", "falling_down"]),
-    defeated: expandLavaClipTryList(["Shot_and_Fall_Backward", "Shot_and_Fall_Forward", "Dead"]),
+    defeated: expandLavaClipTryList(["Dead", "Shot_and_Fall_Forward", "Shot_and_Fall_Backward"]),
     recover: expandLavaClipTryList(["Arise", "Walking"]),
   },
   /** Merged `dracula.glb` — names match `animations[].name` in the file; aliases appended via `expandDraculaClipTryList`. */
@@ -1113,7 +1113,7 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
     /** Default hurt order when no HP tier: light flinch → harder reactions (contrast with `attack` strikes). */
     hurt: expandDraculaClipTryList(["Face_Punch_Reaction", "Face_Punch_Reaction_2", "Hit_Reaction_to_Waist"]),
     knockdown: expandDraculaClipTryList(["Shot_and_Fall_Backward", "falling_down"]),
-    defeated: expandDraculaClipTryList(["Shot_and_Fall_Backward", "Shot_and_Fall_Forward", "Dead"]),
+    defeated: expandDraculaClipTryList(["Dead", "Shot_and_Fall_Forward", "Shot_and_Fall_Backward"]),
     recover: expandDraculaClipTryList(["Arise", "Stand_Up1", "Walking"]),
   },
   /** Merged Meshy skeleton biped — clip titles aligned with Dracula where the animation name matches. */
@@ -1139,55 +1139,66 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
       "Hit_Reaction_to_Waist",
     ]),
     knockdown: expandSkeletonClipTryList(["Shot_and_Fall_Backward", "falling_down"]),
-    defeated: expandSkeletonClipTryList(["Shot_and_Fall_Backward", "Shot_and_Fall_Forward", "Dead"]),
+    defeated: expandSkeletonClipTryList(["Dead", "Shot_and_Fall_Forward", "Shot_and_Fall_Backward"]),
     recover: expandSkeletonClipTryList(["Arise", "Stand_Up1", "Walking"]),
   },
 };
 
+/**
+ * Non-lethal crumple — fall only (no `Dead`), direction from strike tier:
+ * spell (head / jump punch) → backward; skill+light → forward first.
+ */
 function mergedMonsterKnockdownClipPriority(attackVariant?: "spell" | "skill" | "light"): readonly string[] {
-  if (attackVariant === "spell") {
-    return ["Shot_and_Fall_Backward", "Shot_and_Fall_Forward", "falling_down"];
+  const v = attackVariant ?? "skill";
+  if (v === "spell") {
+    return ["Shot_and_Fall_Backward", "Shot_and_Slow_Fall_Backward", "falling_down", "Shot_and_Fall_Forward"];
   }
-  return ["Shot_and_Fall_Forward", "falling_down", "Shot_and_Fall_Backward"];
+  return ["Shot_and_Fall_Forward", "falling_down", "Shot_and_Slow_Fall_Backward", "Shot_and_Fall_Backward"];
 }
 
+/**
+ * Lethal finish — merged Meshy GLBs include a primary **`Dead`** clip (authored fall-to-corpse, often forward).
+ * `resolveMonsterAnimationClipName` picks the **first** name that exists in the file, so **`Dead` must be first**
+ * or we never play it when `Shot_and_Fall_*` clips are also present. Directional shot-falls stay as fallbacks.
+ */
 function mergedMonsterDefeatedClipPriority(attackVariant?: "spell" | "skill" | "light"): readonly string[] {
-  if (attackVariant === "spell") {
-    return ["Shot_and_Fall_Backward", "Shot_and_Fall_Forward", "Dead"];
+  const v = attackVariant ?? "skill";
+  if (v === "spell") {
+    return ["Dead", "Shot_and_Fall_Backward", "Shot_and_Slow_Fall_Backward", "Shot_and_Fall_Forward", "falling_down"];
   }
-  return ["Shot_and_Fall_Forward", "Dead", "Shot_and_Fall_Backward"];
+  return ["Dead", "Shot_and_Fall_Forward", "Shot_and_Fall_Backward", "Shot_and_Slow_Fall_Backward", "falling_down"];
 }
 
-function zombieKnockdownClipPriority(): readonly string[] {
-  return ["falling_down", "Shot_and_Slow_Fall_Backward", "Shot_and_Fall_Backward", "Shot_and_Fall_Forward"];
+function zombieKnockdownClipPriority(variant?: "spell" | "skill" | "light"): readonly string[] {
+  return mergedMonsterKnockdownClipPriority(variant);
 }
 
-function zombieDefeatedClipPriority(): readonly string[] {
-  return ["Dead", "Shot_and_Fall_Backward", "Shot_and_Fall_Forward"];
+function zombieDefeatedClipPriority(variant?: "spell" | "skill" | "light"): readonly string[] {
+  return mergedMonsterDefeatedClipPriority(variant);
 }
 
-function lavaKnockdownClipPriority(): readonly string[] {
-  return ["falling_down", "Shot_and_Slow_Fall_Backward", "Shot_and_Fall_Backward", "Shot_and_Fall_Forward"];
+function lavaKnockdownClipPriority(variant?: "spell" | "skill" | "light"): readonly string[] {
+  return mergedMonsterKnockdownClipPriority(variant);
 }
 
-function lavaDefeatedClipPriority(): readonly string[] {
-  return ["Dead", "Shot_and_Fall_Backward", "Shot_and_Fall_Forward"];
+function lavaDefeatedClipPriority(variant?: "spell" | "skill" | "light"): readonly string[] {
+  return mergedMonsterDefeatedClipPriority(variant);
 }
 
-function draculaKnockdownClipPriority(): readonly string[] {
-  return ["falling_down", "Shot_and_Slow_Fall_Backward", "Shot_and_Fall_Backward", "Shot_and_Fall_Forward"];
+function draculaKnockdownClipPriority(variant?: "spell" | "skill" | "light"): readonly string[] {
+  return mergedMonsterKnockdownClipPriority(variant);
 }
 
-function draculaDefeatedClipPriority(): readonly string[] {
-  return ["Dead", "Shot_and_Fall_Backward", "Shot_and_Fall_Forward"];
+function draculaDefeatedClipPriority(variant?: "spell" | "skill" | "light"): readonly string[] {
+  return mergedMonsterDefeatedClipPriority(variant);
 }
 
-function skeletonKnockdownClipPriority(): readonly string[] {
-  return ["falling_down", "Shot_and_Slow_Fall_Backward", "Shot_and_Fall_Backward", "Shot_and_Fall_Forward"];
+function skeletonKnockdownClipPriority(variant?: "spell" | "skill" | "light"): readonly string[] {
+  return mergedMonsterKnockdownClipPriority(variant);
 }
 
-function skeletonDefeatedClipPriority(): readonly string[] {
-  return ["Dead", "Shot_and_Fall_Backward", "Shot_and_Fall_Forward"];
+function skeletonDefeatedClipPriority(variant?: "spell" | "skill" | "light"): readonly string[] {
+  return mergedMonsterDefeatedClipPriority(variant);
 }
 
 function baseClipNamesForState(state: Monster3DSpriteState): string[] {
@@ -1200,7 +1211,7 @@ function baseClipNamesForState(state: Monster3DSpriteState): string[] {
     case "knockdown":
       return ["Fall", "fall", "Down", "down", "Knockdown", "knockdown"];
     case "defeated":
-      return ["Shot_and_Fall_Backward", "Shot_and_Fall_Forward", "Death", "death", "Defeated", "defeated", "Die", "die", "Down", "down"];
+      return ["Dead", "dead", "Death", "death", "Shot_and_Fall_Forward", "Shot_and_Fall_Backward", "Defeated", "defeated", "Die", "die", "Down", "down"];
     case "recover":
       return ["Recover", "recover", "Weak", "weak", "Tired", "tired", "Idle", "idle"];
     case "hunt":
@@ -1240,13 +1251,14 @@ export function getPreferredClipNamesForState(
   const isZombieMerged = monsterType === "Z" && glbSlug === "zombie";
   const isSpiderMerged = monsterType === "S" && glbSlug === "spider";
   const isLavaMerged = monsterType === "L" && glbSlug === "lava";
+  const strikeVariant = draculaAttackVariant ?? "skill";
   push(fromSlug);
   if (isDraculaMerged && state === "attack") {
     push(draculaMergedAttackClipPriority(draculaAttackVariant ?? "spell"));
   } else if (isDraculaMerged && state === "knockdown") {
-    push(expandDraculaClipTryList(draculaKnockdownClipPriority()));
+    push(expandDraculaClipTryList(draculaKnockdownClipPriority(strikeVariant)));
   } else if (isDraculaMerged && state === "defeated") {
-    push(expandDraculaClipTryList(draculaDefeatedClipPriority()));
+    push(expandDraculaClipTryList(draculaDefeatedClipPriority(strikeVariant)));
   } else if (isDraculaMerged && state === "angry") {
     push(expandDraculaClipTryList(DRACULA_ANGRY_CLIPS));
   } else if (isDraculaMerged && state === "hurt" && draculaHurtHp && draculaHurtHp.maxHp >= 1) {
@@ -1254,9 +1266,9 @@ export function getPreferredClipNamesForState(
   } else if (isSkeletonMerged && state === "attack") {
     push(skeletonMergedAttackClipPriority(draculaAttackVariant ?? "spell"));
   } else if (isSkeletonMerged && state === "knockdown") {
-    push(expandSkeletonClipTryList(skeletonKnockdownClipPriority()));
+    push(expandSkeletonClipTryList([...skeletonKnockdownClipPriority(strikeVariant)]));
   } else if (isSkeletonMerged && state === "defeated") {
-    push(expandSkeletonClipTryList(skeletonDefeatedClipPriority()));
+    push(expandSkeletonClipTryList([...skeletonDefeatedClipPriority(strikeVariant)]));
   } else if (isSkeletonMerged && state === "angry") {
     push(expandSkeletonClipTryList(SKELETON_ANGRY_CLIPS));
   } else if (isSkeletonMerged && state === "hurt" && draculaHurtHp && draculaHurtHp.maxHp >= 1) {
@@ -1264,9 +1276,9 @@ export function getPreferredClipNamesForState(
   } else if (isZombieMerged && state === "attack") {
     push(zombieMergedAttackClipPriority(draculaAttackVariant ?? "spell"));
   } else if (isZombieMerged && state === "knockdown") {
-    push(expandZombieClipTryList(zombieKnockdownClipPriority()));
+    push(expandZombieClipTryList([...zombieKnockdownClipPriority(strikeVariant)]));
   } else if (isZombieMerged && state === "defeated") {
-    push(expandZombieClipTryList(zombieDefeatedClipPriority()));
+    push(expandZombieClipTryList([...zombieDefeatedClipPriority(strikeVariant)]));
   } else if (isZombieMerged && state === "angry") {
     push(expandZombieClipTryList(ZOMBIE_ANGRY_CLIPS));
   } else if (isZombieMerged && state === "hurt" && draculaHurtHp && draculaHurtHp.maxHp >= 1) {
@@ -1277,12 +1289,16 @@ export function getPreferredClipNamesForState(
     push(expandSpiderClipTryList(SPIDER_ANGRY_CLIPS));
   } else if (isSpiderMerged && state === "hurt" && draculaHurtHp && draculaHurtHp.maxHp >= 1) {
     push(spiderHurtClipPriority(draculaHurtIntensityFromHp(draculaHurtHp.hp, draculaHurtHp.maxHp)));
+  } else if (isSpiderMerged && state === "knockdown") {
+    push(expandSpiderClipTryList([...mergedMonsterKnockdownClipPriority(strikeVariant)]));
+  } else if (isSpiderMerged && state === "defeated") {
+    push(expandSpiderClipTryList([...mergedMonsterDefeatedClipPriority(strikeVariant)]));
   } else if (isLavaMerged && state === "attack") {
     push(lavaMergedAttackClipPriority(draculaAttackVariant ?? "spell"));
   } else if (isLavaMerged && state === "knockdown") {
-    push(expandLavaClipTryList(lavaKnockdownClipPriority()));
+    push(expandLavaClipTryList([...lavaKnockdownClipPriority(strikeVariant)]));
   } else if (isLavaMerged && state === "defeated") {
-    push(expandLavaClipTryList(lavaDefeatedClipPriority()));
+    push(expandLavaClipTryList([...lavaDefeatedClipPriority(strikeVariant)]));
   } else if (isLavaMerged && state === "angry") {
     push(expandLavaClipTryList(LAVA_ANGRY_CLIPS));
   } else if (isLavaMerged && state === "hurt" && draculaHurtHp && draculaHurtHp.maxHp >= 1) {
@@ -1309,7 +1325,7 @@ function heuristicRegexesForState(state: Monster3DSpriteState): RegExp[] {
     case "knockdown":
       return [/fall|down|knock|stagger|collapse|trip|stumble/i, /hurt|hit/i];
     case "defeated":
-      return [/death|die|drown|collapse|defeat|knockdown|downed|fall\d|fall_|shot.*fall|hang|\bdead\b/i, /hurt|hit/i];
+      return [/death|die|drown|collapse|defeat|downed|fall\d|fall_|shot.*fall|hang|\bdead\b/i, /hurt|hit/i];
     case "recover":
       return [
         /stand_up|stand up|get_up|get up|crouch|wall_support|injured|weak|limp|recover|backward|support|step/i,
@@ -1332,6 +1348,7 @@ function heuristicRegexesForState(state: Monster3DSpriteState): RegExp[] {
 function draculaMergedCanonicalFallback(
   state: Monster3DSpriteState,
   animationNames: readonly string[],
+  attackVariant: "spell" | "skill" | "light" = "skill",
 ): string | null {
   const tries: Partial<Record<Monster3DSpriteState, readonly string[]>> = {
     idle: [...DRACULA_IDLE_CLIPS],
@@ -1344,8 +1361,8 @@ function draculaMergedCanonicalFallback(
     ],
     rolling: ["Mummy_Stagger", "Jumping_Punch", "Charged_Spell_Cast_2"],
     hurt: ["Face_Punch_Reaction", "Face_Punch_Reaction_2", "Hit_Reaction_to_Waist"],
-    knockdown: [...draculaKnockdownClipPriority()],
-    defeated: [...draculaDefeatedClipPriority()],
+    knockdown: [...draculaKnockdownClipPriority(attackVariant)],
+    defeated: [...draculaDefeatedClipPriority(attackVariant)],
     recover: ["Arise", "Stand_Up1", "Walking"],
   };
   const list = tries[state];
@@ -1381,6 +1398,7 @@ function skeletonAbsoluteLastResort(state: Monster3DSpriteState, animationNames:
 function skeletonMergedCanonicalFallback(
   state: Monster3DSpriteState,
   animationNames: readonly string[],
+  attackVariant: "spell" | "skill" | "light" = "skill",
 ): string | null {
   const tries: Partial<Record<Monster3DSpriteState, readonly string[]>> = {
     idle: [...SKELETON_IDLE_CLIPS],
@@ -1393,8 +1411,8 @@ function skeletonMergedCanonicalFallback(
     ],
     rolling: ["Mummy_Stagger", "Left_Slash", "Alert_Quick_Turn_Right", "Triple_Combo_Attack", "Charged_Spell_Cast_2"],
     hurt: ["Hit_Reaction_to_Waist","Face_Punch_Reaction_1", "Face_Punch_Reaction_2"],
-    knockdown: [...skeletonKnockdownClipPriority()],
-    defeated: [...skeletonDefeatedClipPriority()],
+    knockdown: [...skeletonKnockdownClipPriority(attackVariant)],
+    defeated: [...skeletonDefeatedClipPriority(attackVariant)],
     recover: ["Arise", "Stand_Up1", "Walking"],
   };
   const list = tries[state];
@@ -1410,6 +1428,7 @@ function skeletonMergedCanonicalFallback(
 function zombieMergedCanonicalFallback(
   state: Monster3DSpriteState,
   animationNames: readonly string[],
+  attackVariant: "spell" | "skill" | "light" = "skill",
 ): string | null {
   const tries: Partial<Record<Monster3DSpriteState, readonly string[]>> = {
     idle: [...ZOMBIE_IDLE_CLIPS],
@@ -1422,8 +1441,8 @@ function zombieMergedCanonicalFallback(
     ],
     rolling: ["Zombie_Scream", "Alert", "Alert_Quick_Turn_Right", "Jumping_Punch"],
     hurt: ["Hit_Reaction_to_Waist", "Face_Punch_Reaction_2"],
-    knockdown: [...zombieKnockdownClipPriority()],
-    defeated: [...zombieDefeatedClipPriority()],
+    knockdown: [...zombieKnockdownClipPriority(attackVariant)],
+    defeated: [...zombieDefeatedClipPriority(attackVariant)],
     recover: ["Arise", "Walking"],
   };
   const list = tries[state];
@@ -1458,6 +1477,7 @@ function zombieAbsoluteLastResort(state: Monster3DSpriteState, animationNames: r
 function lavaMergedCanonicalFallback(
   state: Monster3DSpriteState,
   animationNames: readonly string[],
+  attackVariant: "spell" | "skill" | "light" = "skill",
 ): string | null {
   const tries: Partial<Record<Monster3DSpriteState, readonly string[]>> = {
     idle: [...LAVA_IDLE_CLIPS],
@@ -1470,8 +1490,8 @@ function lavaMergedCanonicalFallback(
     ],
     rolling: ["Alert", "Charged_Upward_Slash", "Jumping_Punch", "Skill_03"],
     hurt: ["Hit_Reaction_to_Waist", "Face_Punch_Reaction_2"],
-    knockdown: [...lavaKnockdownClipPriority()],
-    defeated: [...lavaDefeatedClipPriority()],
+    knockdown: [...lavaKnockdownClipPriority(attackVariant)],
+    defeated: [...lavaDefeatedClipPriority(attackVariant)],
     recover: ["Arise", "Walking"],
   };
   const list = tries[state];
@@ -1506,6 +1526,7 @@ function lavaAbsoluteLastResort(state: Monster3DSpriteState, animationNames: rea
 function spiderMergedCanonicalFallback(
   state: Monster3DSpriteState,
   animationNames: readonly string[],
+  attackVariant: "spell" | "skill" | "light" = "skill",
 ): string | null {
   const tries: Partial<Record<Monster3DSpriteState, readonly string[]>> = {
     idle: [...SPIDER_IDLE_CLIPS],
@@ -1518,8 +1539,8 @@ function spiderMergedCanonicalFallback(
     ],
     rolling: ["Zombie_Scream", "Alert", "Jumping_Punch", "Left_Slash"],
     hurt: ["Hit_Reaction_to_Waist", "Face_Punch_Reaction_2"],
-    knockdown: ["Shot_and_Fall_Backward", "falling_down"],
-    defeated: ["Shot_and_Fall_Backward", "Shot_and_Fall_Forward", "Dead"],
+    knockdown: [...mergedMonsterKnockdownClipPriority(attackVariant)],
+    defeated: [...mergedMonsterDefeatedClipPriority(attackVariant)],
     recover: ["Arise", "Walking"],
   };
   const list = tries[state];
@@ -1611,6 +1632,7 @@ export function resolveMonsterAnimationClipName(
     options?.draculaHurtHp ?? null,
   );
   const available = new Set(animationNames);
+  const strikeVariantFallback = options?.draculaAttackVariant ?? "skill";
 
   for (const n of preferred) {
     if (available.has(n)) return n;
@@ -1619,7 +1641,7 @@ export function resolveMonsterAnimationClipName(
   if (options?.glbSlug === "dracula") {
     const ci = firstPreferredMatchingInsensitive(preferred, animationNames);
     if (ci) return ci;
-    const fb = draculaMergedCanonicalFallback(state, animationNames);
+    const fb = draculaMergedCanonicalFallback(state, animationNames, strikeVariantFallback);
     if (fb) return fb;
     return draculaAbsoluteLastResort(state, animationNames);
   }
@@ -1627,7 +1649,7 @@ export function resolveMonsterAnimationClipName(
   if (options?.glbSlug === "skeleton") {
     const ci = firstPreferredMatchingInsensitive(preferred, animationNames);
     if (ci) return ci;
-    const fb = skeletonMergedCanonicalFallback(state, animationNames);
+    const fb = skeletonMergedCanonicalFallback(state, animationNames, strikeVariantFallback);
     if (fb) return fb;
     return skeletonAbsoluteLastResort(state, animationNames);
   }
@@ -1635,7 +1657,7 @@ export function resolveMonsterAnimationClipName(
   if (options?.glbSlug === "zombie") {
     const ci = firstPreferredMatchingInsensitive(preferred, animationNames);
     if (ci) return ci;
-    const fb = zombieMergedCanonicalFallback(state, animationNames);
+    const fb = zombieMergedCanonicalFallback(state, animationNames, strikeVariantFallback);
     if (fb) return fb;
     return zombieAbsoluteLastResort(state, animationNames);
   }
@@ -1643,7 +1665,7 @@ export function resolveMonsterAnimationClipName(
   if (options?.glbSlug === "spider") {
     const ci = firstPreferredMatchingInsensitive(preferred, animationNames);
     if (ci) return ci;
-    const fb = spiderMergedCanonicalFallback(state, animationNames);
+    const fb = spiderMergedCanonicalFallback(state, animationNames, strikeVariantFallback);
     if (fb) return fb;
     return spiderAbsoluteLastResort(state, animationNames);
   }
@@ -1651,7 +1673,7 @@ export function resolveMonsterAnimationClipName(
   if (options?.glbSlug === "lava") {
     const ci = firstPreferredMatchingInsensitive(preferred, animationNames);
     if (ci) return ci;
-    const fb = lavaMergedCanonicalFallback(state, animationNames);
+    const fb = lavaMergedCanonicalFallback(state, animationNames, strikeVariantFallback);
     if (fb) return fb;
     return lavaAbsoluteLastResort(state, animationNames);
   }

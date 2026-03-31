@@ -139,7 +139,7 @@ export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
       return `🧟 Zombie: Dice 6 = instant win! Dice 5 = −4 HP. Dice 3–4 = half max HP (−${half}). Dice 1–2 = −1 HP. Miss: glancing by die; you take 2 HP (+Attack/Angry) unless shield blocks.`;
     }
     case "V":
-      return "🧛 Dracula: High defense (5). Defeat: +1 on movement dice (map, max 6). When you start this fight, your HP is set to full (map bites don’t carry in). Combat: d6 + holy sword/cross only. Miss: 1 HP (+Attack/Angry; head strike +extra) unless shield blocks.";
+      return "🧛 Dracula: High defense (5). Defeat: +1 on movement dice (map, max 6). When you start this fight, your HP is set to full (map bites don’t carry in). Combat: d6 + holy sword/cross only. Miss: 1 HP (+Attack/Angry); head aim still hurts on hit (×2 monster HP) but not extra on miss. 3D whiff: a bit harder than a normal miss, not a huge spike. Shield blocks.";
     case "S":
       return "🕷 Spider: Defense (4). Dice 6 = instant win! Die 1–3 = spider attacks you (heavy/medium/light). Die 4 = spider takes a hit. Miss: you take 1 HP unless shield blocks.";
     case "L":
@@ -155,10 +155,13 @@ export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
  *   Body: balanced — current behavior (no modifier).
  *   Legs: safe — easier to hit, less damage.
  */
-function getStrikeTargetModifiers(target: StrikeTarget | undefined) {
+function getStrikeTargetModifiers(target: StrikeTarget | undefined, monsterType: MonsterType) {
   switch (target) {
-    case "head":
-      return { atkBonus: 2, defBonus: 2, hpMultiplier: 2, extraMissDmg: 1 };
+    case "head": {
+      /** Dracula: head is still high risk on defense / big hit reward, but miss counter matches body (no +1 jump-tier tax). */
+      const extraMissDmg = monsterType === "V" ? 0 : 1;
+      return { atkBonus: 2, defBonus: 2, hpMultiplier: 2, extraMissDmg };
+    }
     case "legs":
       return { atkBonus: 1, defBonus: -1, hpMultiplier: 1, extraMissDmg: -0.5 };
     case "body":
@@ -245,7 +248,8 @@ export function resolveCombat(
     const effDef = monsterDefense + surpriseModifier;
     const isAggressive = surpriseState === "attack" || surpriseState === "angry";
     const counterBonus = isAggressive ? (surpriseState === "angry" ? 2 : 1) : 0;
-    const whiffPenalty = 3;
+    /** 3D whiff: still harsher than a normal miss (no glancing), but Dracula base damage is 1 — +3 was routinely 4–6 HP. */
+    const whiffPenalty = monsterType === "V" ? 1 : 3;
     const maxMissDmg = monsterDamage + counterBonus + whiffPenalty;
     return {
       won: false,
@@ -265,7 +269,7 @@ export function resolveCombat(
     };
   }
 
-  const strikeMod = getStrikeTargetModifiers(strikeTarget);
+  const strikeMod = getStrikeTargetModifiers(strikeTarget, monsterType);
   const effectiveDefense = Math.max(0, monsterDefense + surpriseModifier + strikeMod.defBonus);
   const attackTotal = playerRoll + attackBonus + strikeMod.atkBonus;
   const hit = attackTotal >= effectiveDefense;

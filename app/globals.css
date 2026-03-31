@@ -656,3 +656,27 @@ button {
   min-height: 100vh;
   min-height: 100dvh;
 }
+
+/* Combat: win/loss + bonus — centered card after death clip (delay + ease-out). */
+@keyframes combat-outcome-center-in {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.93);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.combat-outcome-center-card {
+  animation: combat-outcome-center-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.36s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .combat-outcome-center-card {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
