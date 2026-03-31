@@ -588,7 +588,7 @@ const BOTTOM_DOCK_INVENTORY_CHIP_MIN_WIDTH = 84;
 /** Magic / gem teleport picker — enough candidates; must match open-portal button. */
 const MAGIC_TELEPORT_PICKER_OPTIONS = 20;
 /** If the destination picker stays open this long without a tap — only when you still have moves left (not last move). Last move: no auto-pick. */
-const MAGIC_TELEPORT_PICK_IDLE_MS = 3000;
+const MAGIC_TELEPORT_PICK_IDLE_MS = 5000;
 
 /** Spider web: same asset as ArtifactIcon web variant */
 const SPIDER_WEB_SPRITE = "artifacts/spider web.PNG";
@@ -4310,10 +4310,12 @@ export default function LabyrinthGame() {
           playerFatalJumpKill,
         });
         setIsoCombatPlayerCue(cue);
-        if (isoCombatPulseTimerRef.current) clearTimeout(isoCombatPulseTimerRef.current);
-        isoCombatPulseTimerRef.current = setTimeout(() => {
-          setIsoCombatPulseVersion((x) => x + 1);
-        }, 120);
+        if (isoCombatPulseTimerRef.current) {
+          clearTimeout(isoCombatPulseTimerRef.current);
+          isoCombatPulseTimerRef.current = null;
+        }
+        // Same frame as cue so maze avatar strikes with the combat beat (no 120ms idle lag).
+        setIsoCombatPulseVersion((x) => x + 1);
       } else {
         if (isoCombatPulseTimerRef.current) {
           clearTimeout(isoCombatPulseTimerRef.current);
@@ -7867,15 +7869,17 @@ export default function LabyrinthGame() {
               flexDirection: "column",
               alignItems: "center",
               gap: 8,
-              borderColor: (combatResult.draculaWeakened || combatResult.monsterWeakened)
-                ? "#ff6600"
-                : combatResult.monsterEffect === "skeleton_shield" || combatResult.monsterEffect === "ghost_evade"
-                  ? "#ffcc00"
-                  : combatResult.shieldAbsorbed
-                    ? "#44ff88"
-                    : combatResult.won
-                      ? "#00ff88"
-                      : "#ff4444",
+              border: `2px solid ${
+                (combatResult.draculaWeakened || combatResult.monsterWeakened)
+                  ? "#ff6600"
+                  : combatResult.monsterEffect === "skeleton_shield" || combatResult.monsterEffect === "ghost_evade"
+                    ? "#ffcc00"
+                    : combatResult.shieldAbsorbed
+                      ? "#44ff88"
+                      : combatResult.won
+                        ? "#00ff88"
+                        : "#ff4444"
+              }`,
               background: (combatResult.draculaWeakened || combatResult.monsterWeakened)
                 ? "rgba(255,102,0,0.2)"
                 : combatResult.monsterEffect === "skeleton_shield" || combatResult.monsterEffect === "ghost_evade"
@@ -8634,7 +8638,7 @@ export default function LabyrinthGame() {
                 manualTeleportPendingRef.current = false;
                 setTeleportPicker(null);
               }}
-            style={{ ...buttonStyle, ...headerButtonStyle, background: "#664400", borderColor: "#aa66ff" }}
+            style={{ ...buttonStyle, ...headerButtonStyle, background: "#664400", border: "1px solid #aa66ff" }}
           >
             Cancel teleport
           </button>
@@ -8646,11 +8650,11 @@ export default function LabyrinthGame() {
                 const pick = opts[Math.floor(Math.random() * opts.length)]!;
                 handleTeleportSelect(pick[0], pick[1]);
               }}
-              style={{ ...buttonStyle, ...headerButtonStyle, background: "#2a2048", borderColor: "#8866cc", color: "#e8ddff" }}
+              style={{ ...buttonStyle, ...headerButtonStyle, background: "#2a2048", border: "1px solid #8866cc", color: "#e8ddff" }}
               title={
                 movesLeft <= 0
                   ? "Last move: tap a highlighted cell or pick random — no automatic teleport."
-                  : `Pick a random valid destination now, or wait ${MAGIC_TELEPORT_PICK_IDLE_MS / 1000}s after opening for an auto-pick among closest valid cells`
+                  : `Pick a random valid destination now, or wait ${MAGIC_TELEPORT_PICK_IDLE_MS / 1000}s for an auto-pick among highlighted magic cells`
               }
             >
               Random destination
@@ -8683,7 +8687,7 @@ export default function LabyrinthGame() {
               )}{" "}
               Start combat?
             </span>
-            <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, ...headerButtonStyle, background: "#6b1010", borderColor: "#ff4444" }}>
+            <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, ...headerButtonStyle, background: "#6b1010", border: "1px solid #ff4444" }}>
               Fight
             </button>
             {(pendingCombatOffer.source === "player" ||
@@ -8691,7 +8695,7 @@ export default function LabyrinthGame() {
               <button
                 type="button"
                 onClick={declinePendingCombat}
-                style={{ ...buttonStyle, ...headerButtonStyle, background: "#2a2830", borderColor: "#666", color: "#ccc" }}
+                style={{ ...buttonStyle, ...headerButtonStyle, background: "#2a2830", border: "1px solid #666", color: "#ccc" }}
               >
                 {pendingCombatOffer.source === "player" ? "Step back" : "It slips away"}
               </button>
@@ -8741,7 +8745,7 @@ export default function LabyrinthGame() {
                   manualTeleportPendingRef.current = false;
                   setTeleportPicker(null);
                 }}
-                style={{ ...buttonStyle, ...headerButtonStyle, background: "#664400", borderColor: "#aa66ff" }}
+                style={{ ...buttonStyle, ...headerButtonStyle, background: "#664400", border: "1px solid #aa66ff" }}
               >
                 Cancel teleport
               </button>
@@ -8753,11 +8757,11 @@ export default function LabyrinthGame() {
                   const pick = opts[Math.floor(Math.random() * opts.length)]!;
                   handleTeleportSelect(pick[0], pick[1]);
                 }}
-                style={{ ...buttonStyle, ...headerButtonStyle, background: "#2a2048", borderColor: "#8866cc", color: "#e8ddff" }}
+                style={{ ...buttonStyle, ...headerButtonStyle, background: "#2a2048", border: "1px solid #8866cc", color: "#e8ddff" }}
                 title={
                   movesLeft <= 0
                     ? "Last move: tap a highlighted cell or pick random — no automatic teleport."
-                    : `Pick a random valid destination now, or wait ${MAGIC_TELEPORT_PICK_IDLE_MS / 1000}s after opening for an auto-pick among closest valid cells`
+                    : `Pick a random valid destination now, or wait ${MAGIC_TELEPORT_PICK_IDLE_MS / 1000}s for an auto-pick among highlighted magic cells`
                 }
               >
                 Random destination
@@ -8788,7 +8792,7 @@ export default function LabyrinthGame() {
                 <strong style={{ color: "#ffaa88" }}>{getMonsterName(pendingCombatOffer.monsterType)}</strong>
                 . Fight?
               </span>
-              <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, fontSize: "0.72rem", padding: "6px 10px", background: "#6b1010", borderColor: "#ff4444" }}>
+              <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, fontSize: "0.72rem", padding: "6px 10px", background: "#6b1010", border: "1px solid #ff4444" }}>
                 Fight
               </button>
               {(pendingCombatOffer.source === "player" ||
@@ -8796,7 +8800,7 @@ export default function LabyrinthGame() {
                 <button
                   type="button"
                   onClick={declinePendingCombat}
-                  style={{ ...buttonStyle, fontSize: "0.72rem", padding: "6px 10px", background: "#2a2830", borderColor: "#666", color: "#ccc" }}
+                  style={{ ...buttonStyle, fontSize: "0.72rem", padding: "6px 10px", background: "#2a2830", border: "1px solid #666", color: "#ccc" }}
                 >
                   {pendingCombatOffer.source === "player" ? "Step back" : "It slips away"}
                 </button>
@@ -9354,7 +9358,13 @@ export default function LabyrinthGame() {
                   case "angry": return "knockdown";
                   case "hurt": return "attack";
                   case "knockdown": return "angry";
-                  case "defeated": return "idle";
+                  /**
+                   * Lethal strike: monster plays defeat / fall during `combatRecoveryPhase === "hurt"`.
+                   * Player must show the finisher (attack) in that same beat — not idle “watching” the fall.
+                   * After the clip finishes we jump to `ready` (see `handleCombatRecoveryClipFinished`); then idle is correct.
+                   */
+                  case "defeated":
+                    return combatRecoveryPhase === "hurt" ? "attack" : "idle";
                   case "recover": return "idle";
                   case "rolling": return "rolling";
                   default: return "idle";
@@ -11560,7 +11570,7 @@ export default function LabyrinthGame() {
                     <div
                       style={{
                         ...controlsSectionStyle,
-                        borderColor: "#554466",
+                        border: "1px solid #554466",
                         marginTop: 0,
                         padding: 6,
                         boxSizing: "border-box",
@@ -11598,7 +11608,7 @@ export default function LabyrinthGame() {
                     <div
                       style={{
                         ...controlsSectionStyle,
-                        borderColor: "#554466",
+                        border: "1px solid #554466",
                         marginTop: 0,
                         padding: 6,
                         boxSizing: "border-box",
@@ -11717,7 +11727,7 @@ export default function LabyrinthGame() {
                             Start the fight?
                           </p>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                            <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, background: "#6b1010", borderColor: "#ff4444", fontSize: "0.78rem", padding: "6px 12px" }}>
+                            <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, background: "#6b1010", border: "1px solid #ff4444", fontSize: "0.78rem", padding: "6px 12px" }}>
                               Fight
                             </button>
                             {(pendingCombatOffer.source === "player" ||
@@ -11725,7 +11735,7 @@ export default function LabyrinthGame() {
                               <button
                                 type="button"
                                 onClick={declinePendingCombat}
-                                style={{ ...buttonStyle, background: "#2a2830", borderColor: "#666", color: "#ccc", fontSize: "0.78rem", padding: "6px 12px" }}
+                                style={{ ...buttonStyle, background: "#2a2830", border: "1px solid #666", color: "#ccc", fontSize: "0.78rem", padding: "6px 12px" }}
                               >
                                 {pendingCombatOffer.source === "player" ? "Step back" : "It slips away"}
                               </button>
@@ -13123,7 +13133,7 @@ export default function LabyrinthGame() {
             )}{" "}
             Start combat?
           </span>
-          <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, background: "#6b1010", borderColor: "#ff4444", fontSize: "0.82rem", padding: "8px 14px" }}>
+          <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, background: "#6b1010", border: "1px solid #ff4444", fontSize: "0.82rem", padding: "8px 14px" }}>
             Fight
                 </button>
           {(pendingCombatOffer.source === "player" ||
@@ -13131,7 +13141,7 @@ export default function LabyrinthGame() {
             <button
               type="button"
               onClick={declinePendingCombat}
-              style={{ ...buttonStyle, background: "#2a2830", borderColor: "#666", color: "#ccc", fontSize: "0.82rem", padding: "8px 14px" }}
+              style={{ ...buttonStyle, background: "#2a2830", border: "1px solid #666", color: "#ccc", fontSize: "0.82rem", padding: "8px 14px" }}
             >
               {pendingCombatOffer.source === "player" ? "Step back" : "It slips away"}
             </button>
@@ -13177,7 +13187,7 @@ export default function LabyrinthGame() {
               </>
             )}
           </span>
-          <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, background: "#6b1010", borderColor: "#ff4444", fontSize: "0.78rem", padding: "8px 12px" }}>
+          <button type="button" onClick={acceptPendingCombat} style={{ ...buttonStyle, background: "#6b1010", border: "1px solid #ff4444", fontSize: "0.78rem", padding: "8px 12px" }}>
             Fight
           </button>
           {(pendingCombatOffer.source === "player" ||
@@ -13185,7 +13195,7 @@ export default function LabyrinthGame() {
             <button
               type="button"
               onClick={declinePendingCombat}
-              style={{ ...buttonStyle, background: "#2a2830", borderColor: "#666", color: "#ccc", fontSize: "0.78rem", padding: "8px 12px" }}
+              style={{ ...buttonStyle, background: "#2a2830", border: "1px solid #666", color: "#ccc", fontSize: "0.78rem", padding: "8px 12px" }}
             >
               {pendingCombatOffer.source === "player" ? "Step back" : "It slips away"}
             </button>
@@ -13422,7 +13432,7 @@ export default function LabyrinthGame() {
                 title="Swipe up to show controls"
                 style={{
                   ...controlsSectionStyle,
-                  borderColor: "#554466",
+                  border: "1px solid #554466",
                   marginTop: 0,
                   cursor: "grab",
                   touchAction: "none",
@@ -13512,7 +13522,7 @@ export default function LabyrinthGame() {
               title={desktopControlsCollapsed ? "Expand controls" : "Collapse controls"}
               style={{
                 ...controlsSectionStyle,
-                borderColor: "#554466",
+                border: "1px solid #554466",
                 marginTop: 0,
                 cursor: "pointer",
                 flexDirection: "row",
@@ -13543,7 +13553,7 @@ export default function LabyrinthGame() {
                   <div
                     style={{
                       ...controlsSectionStyle,
-                      borderColor: "#554466",
+                      border: "1px solid #554466",
                       marginTop: 0,
                       padding: 6,
                       boxSizing: "border-box",
@@ -13570,7 +13580,7 @@ export default function LabyrinthGame() {
                   <div
                     style={{
                       ...controlsSectionStyle,
-                      borderColor: "#554466",
+                      border: "1px solid #554466",
                       marginTop: 0,
                       padding: 6,
                       boxSizing: "border-box",
@@ -13618,7 +13628,7 @@ export default function LabyrinthGame() {
                     <div
                       style={{
                         ...controlsSectionStyle,
-                        borderColor: "#554466",
+                        border: "1px solid #554466",
                         marginTop: 0,
                         padding: 6,
                         boxSizing: "border-box",
@@ -13671,7 +13681,7 @@ export default function LabyrinthGame() {
                       : {}),
                   }}
                 >
-                  <div style={{ ...controlsSectionStyle, borderColor: "#554466", marginTop: 0 }}>
+                  <div style={{ ...controlsSectionStyle, border: "1px solid #554466", marginTop: 0 }}>
                     <div style={{ ...controlsSectionLabelStyle, color: "#ccb8ff" }}>Bomb &amp; artifacts</div>
                     <div
                       style={{
@@ -13780,7 +13790,7 @@ export default function LabyrinthGame() {
                     <div
                       style={{
                         ...controlsSectionStyle,
-                        borderColor: "#3a3d52",
+                        border: "1px solid #3a3d52",
                         marginTop: 0,
                         padding: "8px 10px",
                       }}
@@ -13891,7 +13901,7 @@ export default function LabyrinthGame() {
                       <div
                         style={{
                           ...controlsSectionStyle,
-                        borderColor: "#554466",
+                        border: "1px solid #554466",
                           marginTop: 0,
                           padding: 6,
                         boxSizing: "border-box",

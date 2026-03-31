@@ -1208,8 +1208,9 @@ export class Labyrinth {
   }
 
   /**
-   * Valid teleport destinations: MAGIC cells only among the **closest** Manhattan distance
-   * (shortest hop to any allowed magic tile). Tie-break: y then x for stable ordering.
+   * Valid teleport destinations: eligible MAGIC cells, ordered by **increasing** Manhattan distance from the
+   * player, then y, then x. Fills up to `maxOptions` across **multiple distance rings** (not only the single
+   * closest ring), so maps with few nearest magic tiles still offer several choices.
    * @param maxOptions Cap how many destinations the UI lists (random pick uses the same set).
    */
   getTeleportOptions(playerIndex = 0, maxOptions = 6, _maxDistanceLegacy?: number): [number, number][] {
@@ -1227,16 +1228,25 @@ export class Labyrinth {
         )
           candidates.push([x, y]);
     if (candidates.length === 0) return [];
-    const minDist = Math.min(...candidates.map(([cx, cy]) => dist(cx, cy)));
-    const closestRing = candidates.filter(([cx, cy]) => dist(cx, cy) === minDist);
-    closestRing.sort((a, b) => {
-      const da = dist(a[0], a[1]);
-      const db = dist(b[0], b[1]);
-      if (da !== db) return da - db;
-      if (a[1] !== b[1]) return a[1] - b[1];
-      return a[0] - b[0];
-    });
-    return closestRing.slice(0, maxOptions);
+    const distanceLevels = [...new Set(candidates.map(([cx, cy]) => dist(cx, cy)))].sort((a, b) => a - b);
+    const result: [number, number][] = [];
+    const seen = new Set<string>();
+    for (const d of distanceLevels) {
+      if (result.length >= maxOptions) break;
+      const ring = candidates.filter(([cx, cy]) => dist(cx, cy) === d);
+      ring.sort((a, b) => {
+        if (a[1] !== b[1]) return a[1] - b[1];
+        return a[0] - b[0];
+      });
+      for (const cell of ring) {
+        if (result.length >= maxOptions) break;
+        const key = `${cell[0]},${cell[1]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push(cell);
+      }
+    }
+    return result;
   }
 
   getRandomTeleportDestination(playerIndex: number): [number, number] | null {

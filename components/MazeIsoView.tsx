@@ -255,6 +255,27 @@ function CanvasContextBridge({
   return null;
 }
 
+/** Default browser behavior on context loss can leave the maze canvas blank; after restore, force a R3F frame. */
+function WebGlContextLossGuard() {
+  const { gl, invalidate } = useThree();
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const onLost = (e: Event) => {
+      e.preventDefault();
+    };
+    const onRestored = () => {
+      invalidate();
+    };
+    canvas.addEventListener("webglcontextlost", onLost);
+    canvas.addEventListener("webglcontextrestored", onRestored);
+    return () => {
+      canvas.removeEventListener("webglcontextlost", onLost);
+      canvas.removeEventListener("webglcontextrestored", onRestored);
+    };
+  }, [gl, invalidate]);
+  return null;
+}
+
 /** World-space arc from slingshot cell, matching `getCatapultTrajectory` and current orbit. */
 function SlingshotTrajectoryArc({
   from,
@@ -1504,7 +1525,8 @@ function CameraController({
   /** Smoothed grid (dx,dy) for auto camera offset — eases orbit when facing/turn changes instead of snapping. */
   const smoothFollowDirRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 1 });
 
-  const lockCameraToAutoFraming = teleportMode || (catapultMode && catapultLockCameraForPull);
+  /** Teleport destination picking: allow orbit / minimap ring so the player can inspect beacons; slingshot pull still locks. */
+  const lockCameraToAutoFraming = catapultMode && catapultLockCameraForPull;
 
   useLayoutEffect(() => {
     orbitLookApplierRef.current = (dxPx: number, dyPx: number) => {
@@ -3183,6 +3205,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
         }}
       >
         <CanvasContextBridge cameraRef={canvasCameraRef} glDomRef={canvasGlDomRef} />
+        <WebGlContextLossGuard />
         <MazeScene
           grid={grid} mapWidth={mapWidth} mapHeight={mapHeight}
           playerX={playerX} playerY={playerY}
