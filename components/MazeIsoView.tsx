@@ -12,9 +12,9 @@ import {
   useState,
   type MutableRefObject,
 } from "react";
-import type { Ref } from "react";
+import type { ReactNode, Ref } from "react";
 import { Canvas, useThree, useFrame, ThreeEvent } from "@react-three/fiber";
-import { Billboard, OrbitControls, Text, useAnimations, useGLTF, useTexture } from "@react-three/drei";
+import { OrbitControls, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { MAZE_FLOOR_TEXTURE, MAZE_ISO_WALL_SIDE_TEXTURE } from "@/lib/mazeCellTheme";
 import { WALL, type DraculaState, type MonsterType } from "@/lib/labyrinth";
@@ -116,6 +116,8 @@ type Props = {
     variant: "spell" | "skill" | "light";
     fatalJump: boolean;
   } | null;
+  /** While choosing a teleport destination: countdown / manual-pick hint above the 3D view. */
+  teleportPickTimerOverlay?: ReactNode;
 };
 
 export type MazeIsoViewImperativeHandle = {
@@ -151,10 +153,19 @@ const DRAG_SUPPRESS_THRESHOLD_PX = 6;
  */
 const CS = 3.55;
 const FLOOR_Y = 0;
-/** Ballistic preview: max world-Y apex above floor (below typical wall height). */
-const SLING_ARC_PEAK_MAX = 2.85;
-const SLING_ARC_PEAK_MIN = 0.5;
-const SLING_ARC_PEAK_PER_CHORD = 0.36;
+/** Ballistic preview: max “peakH” input (world units); combined with `SLING_ARC_APEX_SCALE` stays near wall top. */
+const SLING_ARC_PEAK_MAX = 2.78;
+/** Higher floor for short hops so the arc clearly climbs above the surface. */
+const SLING_ARC_PEAK_MIN = 1.18;
+/** Extra height vs horizontal chord length (world units along ground). */
+const SLING_ARC_PEAK_PER_CHORD = 0.82;
+/**
+ * Parabola `peakH * scale * t * (1-t)` peaks at `t=0.5` with value `peakH * scale / 4`.
+ * Scale 4.5 vs 4 yields a ~12.5% higher apex for the same peakH.
+ */
+const SLING_ARC_APEX_SCALE = 4.5;
+/** Curve samples + shader dash segments (must match SlingshotTrajectoryArc). */
+const SLING_ARC_SEG_STEPS = 56;
 
 /** Ray from screen → horizontal floor plane (y = planeY). Respects current camera / canvas rect (orbit-safe aim). */
 function intersectClientWithFloor(
@@ -181,7 +192,7 @@ const SLING_ANCHOR_MIN_WORLD = 0.09;
 const SLING_STRENGTH_MIN = 16;
 const SLING_STRENGTH_MAX = 260;
 /** Screen pull length (px) maps to trajectory strength (matches grid drag feel). */
-const SLING_STRENGTH_PER_SCREEN_PX = 2.15;
+const SLING_STRENGTH_PER_SCREEN_PX = 2.55;
 
 function projectWorldPointToClient(
   camera: THREE.PerspectiveCamera,
@@ -275,6 +286,32 @@ function WebGlContextLossGuard() {
   return null;
 }
 
+const SLING_ARC_VERTS = SLING_ARC_SEG_STEPS + 1;
+
+const SLING_ARC_VERTEX_SHADER = /* glsl */ `
+  attribute float progress;
+  varying float vProg;
+  void main() {
+    vProg = progress;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const SLING_ARC_FRAGMENT_SHADER = /* glsl */ `
+  precision highp float;
+  uniform vec3 uColor;
+  uniform float uBaseOpacity;
+  uniform float uDashRepeat;
+  uniform float uDashDuty;
+  varying float vProg;
+  void main() {
+    float d = fract(vProg * uDashRepeat);
+    if (d > uDashDuty) discard;
+    float fade = 1.0 - smoothstep(0.28, 0.86, vProg);
+    gl_FragColor = vec4(uColor, uBaseOpacity * fade);
+  }
+`;
+
 /** World-space arc from slingshot cell, matching `getCatapultTrajectory` and current orbit. */
 function SlingshotTrajectoryArc({
   from,
@@ -288,10 +325,23 @@ function SlingshotTrajectoryArc({
   const { camera, gl } = useThree();
   const lineObj = useMemo(() => {
     const geo = new THREE.BufferGeometry();
-    const mat = new THREE.LineBasicMaterial({
-      color: "#ffdd88",
+    const pos = new Float32Array(SLING_ARC_VERTS * 3);
+    const prog = new Float32Array(SLING_ARC_VERTS);
+    for (let i = 0; i < SLING_ARC_VERTS; i++) {
+      prog[i] = i / SLING_ARC_SEG_STEPS;
+    }
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("progress", new THREE.BufferAttribute(prog, 1));
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uColor: { value: new THREE.Color(0xffdd88) },
+        uBaseOpacity: { value: 0.92 },
+        uDashRepeat: { value: 32 },
+        uDashDuty: { value: 0.5 },
+      },
+      vertexShader: SLING_ARC_VERTEX_SHADER,
+      fragmentShader: SLING_ARC_FRAGMENT_SHADER,
       transparent: true,
-      opacity: 0.95,
       depthTest: false,
       depthWrite: false,
     });
@@ -299,6 +349,13 @@ function SlingshotTrajectoryArc({
     line.renderOrder = 920;
     return line;
   }, []);
+
+  useEffect(() => {
+    return () => {
+      lineObj.geometry.dispose();
+      (lineObj.material as THREE.ShaderMaterial).dispose();
+    };
+  }, [lineObj]);
 
   useFrame(() => {
     const line = lineObj;
@@ -342,17 +399,18 @@ function SlingshotTrajectoryArc({
       SLING_ARC_PEAK_MAX,
       Math.max(SLING_ARC_PEAK_MIN, horizChord * SLING_ARC_PEAK_PER_CHORD),
     );
-    const segSteps = 32;
-    const vecs: THREE.Vector3[] = [];
-    for (let i = 0; i <= segSteps; i++) {
-      const t = i / segSteps;
+    const geo = line.geometry as THREE.BufferGeometry;
+    const posArr = (geo.attributes.position as THREE.BufferAttribute).array as Float32Array;
+    for (let i = 0; i < SLING_ARC_VERTS; i++) {
+      const t = i / SLING_ARC_SEG_STEPS;
       const gx = g0x + (g1x - g0x) * t;
       const gy = g0y + (g1y - g0y) * t;
-      const wy = FLOOR_Y + 0.08 + peakH * 4 * t * (1 - t);
-      vecs.push(new THREE.Vector3(gx * CS, wy, gy * CS));
+      const wy = FLOOR_Y + 0.08 + peakH * SLING_ARC_APEX_SCALE * t * (1 - t);
+      posArr[i * 3] = gx * CS;
+      posArr[i * 3 + 1] = wy;
+      posArr[i * 3 + 2] = gy * CS;
     }
-    const geo = line.geometry as THREE.BufferGeometry;
-    geo.setFromPoints(vecs);
+    geo.attributes.position.needsUpdate = true;
     geo.computeBoundingSphere();
   });
 
@@ -1826,7 +1884,13 @@ function CameraController({
       transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.55);
     }
 
-    if (facingChanged && !rotateMode) {
+    /**
+     * Do not clear manual orbit when the player facing flips to a cardinal **because** we are orbiting:
+     * `onTouchCameraForwardGrid` snaps view→grid to N/E/S/W while the minimap ring or canvas drag runs.
+     * `activateRotate()` commits one frame late; without this guard, `facingChanged && !rotateMode` wiped
+     * `manualOffsetRef` and the camera jumped in ~90° steps (especially on mobile landscape ring drag).
+     */
+    if (facingChanged && !rotateMode && !dragRef.current && !orbitRingGesture) {
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       autoDirRef.current = desiredDir;
@@ -2041,23 +2105,6 @@ function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number })
         />
       </mesh>
     </group>
-  );
-}
-
-function MagicPortalActionHint({ playerX, playerY }: { playerX: number; playerY: number }) {
-  return (
-    <Billboard position={[playerX * CS, 2.35, playerY * CS]}>
-      <Text
-        fontSize={0.3}
-        color="#d4a8ff"
-        outlineWidth={0.028}
-        outlineColor="#1a0a24"
-        anchorX="center"
-        anchorY="bottom"
-      >
-        Magic — tap a purple beacon or open portal
-      </Text>
-    </Billboard>
   );
 }
 
@@ -2710,10 +2757,7 @@ function MazeScene({
       {magicPortalPreviewOptions &&
         magicPortalPreviewOptions.length > 0 &&
         !teleportMode && (
-          <>
-            <MagicPortalActionHint playerX={playerX} playerY={playerY} />
-            <TeleportTargetMarkers options={magicPortalPreviewOptions} accent="magic" previewOnly />
-          </>
+          <TeleportTargetMarkers options={magicPortalPreviewOptions} accent="magic" previewOnly />
         )}
       {catapultFrom && <SlingshotSourceHint cellX={catapultFrom[0]} cellY={catapultFrom[1]} />}
       {catapultFrom && catapultTrajectoryPreview && (
@@ -3059,6 +3103,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     combatRunDisabled = false,
     playerGlbPath,
     isoCombatPlayerCue = null,
+    teleportPickTimerOverlay = null,
     fillViewport = false,
     touchUi = false,
     onRotateModeChange,
@@ -3166,7 +3211,9 @@ const MazeIsoView = forwardRef(function MazeIsoView(
         flex: 1,
         minHeight: 0,
         height: fillViewport ? "100%" : undefined,
-        margin: "0 auto",
+        margin: 0,
+        alignSelf: "stretch",
+        boxSizing: "border-box",
         borderRadius: fillViewport ? 0 : 8,
         overflow: "hidden",
         border: fillViewport ? "none" : "1px solid #333",
@@ -3185,14 +3232,19 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           fillViewport
             ? {
                 position: "absolute",
-                left: 0,
-                top: 0,
+                inset: 0,
                 width: "100%",
                 height: "100%",
                 display: "block",
-                touchAction: "none",
+                touchAction: "auto",
               }
-            : { width: "100%", flex: 1, minHeight: 0, touchAction: "none" as const }
+            : {
+                width: "100%",
+                flex: 1,
+                minHeight: 0,
+                alignSelf: "stretch",
+                touchAction: "auto" as const,
+              }
         }
         gl={{ antialias: true, alpha: false }}
         dpr={[1, 1.4]}
@@ -3236,6 +3288,23 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           isoCombatPlayerCue={isoCombatPlayerCue}
         />
       </Canvas>
+      {teleportMode && teleportPickTimerOverlay ? (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            top: "max(10px, env(safe-area-inset-top, 0px))",
+            zIndex: 24,
+            pointerEvents: "none",
+            maxWidth: "min(92%, 380px)",
+          }}
+        >
+          <div style={{ pointerEvents: "auto", display: "flex", justifyContent: "center" }}>
+            {teleportPickTimerOverlay}
+          </div>
+        </div>
+      ) : null}
       {combatActive && (
         <>
           {/* Top-center combat hint */}

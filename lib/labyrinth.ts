@@ -109,9 +109,28 @@ export function peekRevealBatchSize(lab: { hiddenCells: Map<unknown, unknown>; n
   return Math.min(lab.hiddenCells.size, perTrigger, totalAllowed);
 }
 
-/** True if this kind is only meant for the maze phase, not inside the combat modal. */
+const STORED_ARTIFACT_MAZE_PHASE_ONLY = new Set<StoredArtifactKind>(["teleport", "reveal", "healing", "torch"]);
+/** Kinds that may only be spent from combat UI / during combat (not from exploration dock). */
+const STORED_ARTIFACT_COMBAT_PHASE_ONLY = new Set<StoredArtifactKind>([]);
+
+export type StoredArtifactPhase = "maze" | "combat" | "both";
+
+export function storedArtifactPhase(kind: StoredArtifactKind): StoredArtifactPhase {
+  if (STORED_ARTIFACT_MAZE_PHASE_ONLY.has(kind)) return "maze";
+  if (STORED_ARTIFACT_COMBAT_PHASE_ONLY.has(kind)) return "combat";
+  return "both";
+}
+
+export function isStoredArtifactMazePhaseOnly(kind: StoredArtifactKind): boolean {
+  return storedArtifactPhase(kind) === "maze";
+}
+
+export function isStoredArtifactCombatPhaseOnly(kind: StoredArtifactKind): boolean {
+  return storedArtifactPhase(kind) === "combat";
+}
+
 export function isStoredArtifactMapOnly(kind: StoredArtifactKind): boolean {
-  return kind === "teleport" || kind === "reveal" || kind === "healing" || kind === "torch";
+  return isStoredArtifactMazePhaseOnly(kind);
 }
 
 /** One stored artifact per player at maze start — shows under combat "Skills & Artifacts" (cycles by seat). */
@@ -1265,6 +1284,44 @@ export class Labyrinth {
     return cells[Math.floor(Math.random() * cells.length)];
   }
 
+  /**
+   * Random walkable cell for teleport trap: avoids player spawn corners, explicit start tiles,
+   * and the trap cell (so the player always relocates). Falls back if the maze is too small.
+   */
+  getRandomTrapTeleportDestination(fromX: number, fromY: number): [number, number] | null {
+    const exclude = new Set<string>([`${fromX},${fromY}`]);
+    for (const [sx, sy] of this._getCornerSpawns()) {
+      exclude.add(`${sx},${sy}`);
+    }
+    const collect = (skipSpawnAndStart: boolean): [number, number][] => {
+      const cells: [number, number][] = [];
+      for (let y = 0; y < this.height; y++) {
+        for (let x = 0; x < this.width; x++) {
+          const c = this.grid[y][x];
+          if (!isWalkable(c)) continue;
+          if (skipSpawnAndStart && c === START) continue;
+          const key = `${x},${y}`;
+          if (exclude.has(key)) continue;
+          cells.push([x, y]);
+        }
+      }
+      return cells;
+    };
+    let cells = collect(true);
+    if (cells.length === 0) {
+      exclude.clear();
+      exclude.add(`${fromX},${fromY}`);
+      cells = collect(true);
+    }
+    if (cells.length === 0) {
+      exclude.clear();
+      exclude.add(`${fromX},${fromY}`);
+      cells = collect(false);
+    }
+    if (cells.length === 0) return null;
+    return cells[Math.floor(Math.random() * cells.length)];
+  }
+
   teleportToCell(playerIndex: number, destX: number, destY: number): boolean {
     const p = this.players[playerIndex];
     if (!p) return false;
@@ -1360,9 +1417,10 @@ export class Labyrinth {
     const ndx = Math.sign(dx) || 0;
     const ndy = Math.sign(dy) || 0;
     const maxDist = Math.max(this.width, this.height) * 0.4;
-    const strengthScale = 0.12;
+    /** Maps screen-drag strength (px) to grid cells — slightly higher so preview/launch don’t hug the player. */
+    const strengthScale = 0.168;
     const baseDist = Math.min(maxDist, Math.max(2, strength * strengthScale));
-    const dist = useRandom ? baseDist * (0.9 + Math.random() * 0.15) : baseDist * 0.9;
+    const dist = useRandom ? baseDist * (0.9 + Math.random() * 0.15) : baseDist * 0.94;
     const destXClamped = Math.max(0, Math.min(this.width - 1, Math.round(fromX + scaleX * dist)));
     const destYClamped = Math.max(0, Math.min(this.height - 1, Math.round(fromY + scaleY * dist)));
     const perp1 = [-scaleY, scaleX];
