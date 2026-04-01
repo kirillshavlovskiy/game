@@ -12,9 +12,9 @@ import {
   useState,
   type MutableRefObject,
 } from "react";
-import type { Ref } from "react";
+import type { ReactNode, Ref } from "react";
 import { Canvas, useThree, useFrame, ThreeEvent } from "@react-three/fiber";
-import { Billboard, OrbitControls, Text, useAnimations, useGLTF, useTexture } from "@react-three/drei";
+import { OrbitControls, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { MAZE_FLOOR_TEXTURE, MAZE_ISO_WALL_SIDE_TEXTURE } from "@/lib/mazeCellTheme";
 import { WALL, type DraculaState, type MonsterType } from "@/lib/labyrinth";
@@ -117,6 +117,8 @@ type Props = {
     variant: "spell" | "skill" | "light";
     fatalJump: boolean;
   } | null;
+  /** While choosing a teleport destination: countdown / manual-pick hint above the 3D view. */
+  teleportPickTimerOverlay?: ReactNode;
 };
 
 export type MazeIsoViewImperativeHandle = {
@@ -2045,23 +2047,6 @@ function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number })
   );
 }
 
-function MagicPortalActionHint({ playerX, playerY }: { playerX: number; playerY: number }) {
-  return (
-    <Billboard position={[playerX * CS, 2.35, playerY * CS]}>
-      <Text
-        fontSize={0.3}
-        color="#d4a8ff"
-        outlineWidth={0.028}
-        outlineColor="#1a0a24"
-        anchorX="center"
-        anchorY="bottom"
-      >
-        Magic — tap a purple beacon or open portal
-      </Text>
-    </Billboard>
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /*  Scene                                                              */
 /* ------------------------------------------------------------------ */
@@ -2711,10 +2696,7 @@ function MazeScene({
       {magicPortalPreviewOptions &&
         magicPortalPreviewOptions.length > 0 &&
         !teleportMode && (
-          <>
-            <MagicPortalActionHint playerX={playerX} playerY={playerY} />
-            <TeleportTargetMarkers options={magicPortalPreviewOptions} accent="magic" previewOnly />
-          </>
+          <TeleportTargetMarkers options={magicPortalPreviewOptions} accent="magic" previewOnly />
         )}
       {catapultFrom && <SlingshotSourceHint cellX={catapultFrom[0]} cellY={catapultFrom[1]} />}
       {catapultFrom && catapultTrajectoryPreview && (
@@ -3060,6 +3042,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     combatRunDisabled = false,
     playerGlbPath,
     isoCombatPlayerCue = null,
+    teleportPickTimerOverlay = null,
     fillViewport = false,
     touchUi = false,
     onRotateModeChange,
@@ -3167,7 +3150,9 @@ const MazeIsoView = forwardRef(function MazeIsoView(
         flex: 1,
         minHeight: 0,
         height: fillViewport ? "100%" : undefined,
-        margin: "0 auto",
+        margin: 0,
+        alignSelf: "stretch",
+        boxSizing: "border-box",
         borderRadius: fillViewport ? 0 : 8,
         overflow: "hidden",
         border: fillViewport ? "none" : "1px solid #333",
@@ -3186,14 +3171,19 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           fillViewport
             ? {
                 position: "absolute",
-                left: 0,
-                top: 0,
+                inset: 0,
                 width: "100%",
                 height: "100%",
                 display: "block",
-                touchAction: "none",
+                touchAction: "auto",
               }
-            : { width: "100%", flex: 1, minHeight: 0, touchAction: "none" as const }
+            : {
+                width: "100%",
+                flex: 1,
+                minHeight: 0,
+                alignSelf: "stretch",
+                touchAction: "auto" as const,
+              }
         }
         gl={{ antialias: true, alpha: false }}
         dpr={[1, 1.4]}
@@ -3237,6 +3227,23 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           isoCombatPlayerCue={isoCombatPlayerCue}
         />
       </Canvas>
+      {teleportMode && teleportPickTimerOverlay ? (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            top: "max(10px, env(safe-area-inset-top, 0px))",
+            zIndex: 24,
+            pointerEvents: "none",
+            maxWidth: "min(92%, 380px)",
+          }}
+        >
+          <div style={{ pointerEvents: "auto", display: "flex", justifyContent: "center" }}>
+            {teleportPickTimerOverlay}
+          </div>
+        </div>
+      ) : null}
       {combatActive && (
         <>
           {/* Top-center combat hint */}

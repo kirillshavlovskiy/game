@@ -1265,6 +1265,44 @@ export class Labyrinth {
     return cells[Math.floor(Math.random() * cells.length)];
   }
 
+  /**
+   * Random walkable cell for teleport trap: avoids player spawn corners, explicit start tiles,
+   * and the trap cell (so the player always relocates). Falls back if the maze is too small.
+   */
+  getRandomTrapTeleportDestination(fromX: number, fromY: number): [number, number] | null {
+    const exclude = new Set<string>([`${fromX},${fromY}`]);
+    for (const [sx, sy] of this._getCornerSpawns()) {
+      exclude.add(`${sx},${sy}`);
+    }
+    const collect = (skipSpawnAndStart: boolean): [number, number][] => {
+      const cells: [number, number][] = [];
+      for (let y = 0; y < this.height; y++) {
+        for (let x = 0; x < this.width; x++) {
+          const c = this.grid[y][x];
+          if (!isWalkable(c)) continue;
+          if (skipSpawnAndStart && c === START) continue;
+          const key = `${x},${y}`;
+          if (exclude.has(key)) continue;
+          cells.push([x, y]);
+        }
+      }
+      return cells;
+    };
+    let cells = collect(true);
+    if (cells.length === 0) {
+      exclude.clear();
+      exclude.add(`${fromX},${fromY}`);
+      cells = collect(true);
+    }
+    if (cells.length === 0) {
+      exclude.clear();
+      exclude.add(`${fromX},${fromY}`);
+      cells = collect(false);
+    }
+    if (cells.length === 0) return null;
+    return cells[Math.floor(Math.random() * cells.length)];
+  }
+
   teleportToCell(playerIndex: number, destX: number, destY: number): boolean {
     const p = this.players[playerIndex];
     if (!p) return false;
