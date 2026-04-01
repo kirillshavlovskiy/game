@@ -25,7 +25,6 @@ import {
   resolveMonsterAnimationClipName,
   resolvePlayerAnimationClipName,
   resolvePlayerShieldBlockClipName,
-  getPlayer3DGlb,
   type IsoCombatPlayerMoment,
 } from "@/lib/monsterModels3d";
 

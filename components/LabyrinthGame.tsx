@@ -81,10 +81,15 @@ import dynamic from "next/dynamic";
 import {
   getMonsterGltfPath,
   isMonster3DEnabled,
+  mergedMeshyMonsterHitPlayerHurtClipStartTimeSec,
   PLAYER_3D_GLB,
   getPlayer3DGlb,
   mapIsoCombatPlayerAnimCue,
+  playerStrikeVariantFromDice,
+  draculaAttackVariantFromStrikeTarget,
+  type Monster3DSpriteState,
 } from "@/lib/monsterModels3d";
+import { resolveCombat3dClipLeads } from "@/lib/combat3dContact";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import MazeIsoView, {
   type CatapultTrajectoryPreviewFn,
@@ -520,20 +525,47 @@ function formatMonsterCounterattackDamageLine(
 /**
  * Staggered 3D lab commit shows pre-strike HP in bars first; without this, `draculaHurtHp` flips after flush and
  * `MonsterModel3D` restarts the same hurt clip (double animation). Used for merged Meshy rigs (Dracula + skeleton).
+ * For Dracula, when the player picked head/body/legs before the die and the exchange favoured the player, we also
+ * store `draculaHurtStrikeZone` so 3D hurt/knockdown clips match aim instead of HP tiers only.
  */
 function draculaPlayerHitHurt3dFooterExtra(
   monsterType: MonsterType,
   strikePortrait: CombatStrikePortrait,
   hpAfterStrike: number,
-  maxHp: number
-): { draculaHurt3dHp?: { hp: number; maxHp: number } } {
+  maxHp: number,
+  strikeTarget?: StrikeTarget
+): { draculaHurt3dHp?: { hp: number; maxHp: number }; draculaHurtStrikeZone?: StrikeTarget } {
   if (
     (monsterType !== "V" && monsterType !== "K" && monsterType !== "Z" && monsterType !== "S") ||
     (strikePortrait !== "playerHit" && strikePortrait !== "playerHitHeavy")
   ) {
     return {};
   }
-  return { draculaHurt3dHp: { hp: hpAfterStrike, maxHp: maxHp } };
+  const out: { draculaHurt3dHp: { hp: number; maxHp: number }; draculaHurtStrikeZone?: StrikeTarget } = {
+    draculaHurt3dHp: { hp: hpAfterStrike, maxHp: maxHp },
+  };
+  if (monsterType === "V" && strikeTarget != null) {
+    out.draculaHurtStrikeZone = strikeTarget;
+  }
+  return out;
+}
+
+/** Merged Meshy monsters: player HP lost on `monsterHit` drives standing hurt clips (flinch / waist / fall — not shot-fall). */
+function mergedMeshyMonsterHitPlayerHpFooterExtra(
+  monsterType: MonsterType,
+  strikePortrait: CombatStrikePortrait,
+  playerHpLost: number,
+): { playerHpLostThisStrike?: number } {
+  const merged =
+    monsterType === "V" ||
+    monsterType === "K" ||
+    monsterType === "Z" ||
+    monsterType === "S" ||
+    monsterType === "L";
+  if (!merged || strikePortrait !== "monsterHit" || playerHpLost <= 0) {
+    return {};
+  }
+  return { playerHpLostThisStrike: playerHpLost };
 }
 
 /** Auto-dismiss durations — single effect uses toast.seq so overlapping timers never clear a newer toast */
@@ -2903,8 +2935,12 @@ export default function LabyrinthGame() {
     draculaAttackSegment?: "spell" | "skill" | "light";
     /** Post-strike HP for Dracula light-hit tier clips — stable across stagger flush so hurt anim does not restart. */
     draculaHurt3dHp?: { hp: number; maxHp: number };
+    /** Dracula: head/body/legs chosen before the die on a player-favour hit — drives hurt (and legs knockdown) clips. */
+    draculaHurtStrikeZone?: StrikeTarget;
     /** True when this monster hit is lethal and used the **spell** clip (e.g. Jumping_Punch) — player 3D uses `Shot_and_Fall_Backward`. */
     playerFatalJumpKill?: boolean;
+    /** Net HP the player lost on this strike (`monsterHit`) — 3D hurt reaction intensity. */
+    playerHpLostThisStrike?: number;
   } | null>(null);
   /** Landscape skills panel: raw d6 (1–6) from the last resolved strike roll this fight */
   const [lastCombatStrikeDiceFace, setLastCombatStrikeDiceFace] = useState<number | null>(null);
@@ -3040,6 +3076,13 @@ export default function LabyrinthGame() {
   const pendingArtifactRerollRef = useRef<{ result: CombatResult } | null>(null);
   const [combatArtifactRerollPrompt, setCombatArtifactRerollPrompt] = useState(false);
   const combatStrikeTargetDuringRollRef = useRef<StrikeTarget | null>(null);
+  /** Per spell/skill/light tier: count strike-zone picks during the current roll — rotates player attack clip priority. */
+  const [playerStrikeAnimCycleByTier, setPlayerStrikeAnimCycleByTier] = useState({
+    spell: 0,
+    skill: 0,
+    light: 0,
+  });
+  const wasRollingForStrikeCycleRef = useRef(false);
   /** Set true the instant the strike d6 value is applied — before UI reveal — so aim cannot be changed after the roll is locked in. */
   const combatStrikeDiceOutcomeKnownRef = useRef(false);
   const rollingRef = useRef(false);
@@ -3048,11 +3091,24 @@ export default function LabyrinthGame() {
     combatState != null && getMonsterGltfPath(combatState.monsterType, "idle") != null;
   const combatStrikePick3dDuringRoll =
     combatMonsterStrike3d && rolling && !combatArtifactRerollPrompt;
-  /** While the strike die rolls, lerp fighters from idle spacing toward strike-pick range so the snap to contact range on hit is smaller (better jump/spin alignment). */
+  /**
+   * Lerp toward closed spacing while the die rolls **and** through hurt/recover so fighters stay “stepped in” before
+   * strike clips (matches strike-pick distance in `combatFaceOffPositions` for hit beats). Resets between rolls (`ready`).
+   */
   const combat3dRollingApproachBlend =
-    combatMonsterStrike3d && combatState != null && combatResult == null && rolling && !combatArtifactRerollPrompt
+    combatMonsterStrike3d &&
+    combatState != null &&
+    combatResult == null &&
+    !combatArtifactRerollPrompt &&
+    (rolling || (combatFooterSnapshot != null && combatRecoveryPhase !== "ready"))
       ? 1
       : 0;
+  useEffect(() => {
+    if (rolling && !wasRollingForStrikeCycleRef.current) {
+      setPlayerStrikeAnimCycleByTier({ spell: 0, skill: 0, light: 0 });
+    }
+    wasRollingForStrikeCycleRef.current = rolling;
+  }, [rolling]);
   /** Head-body-legs row only when not using 3D tap-to-aim (no duplicate controls). */
   const combatStrikePickButtonsDuringRoll =
     combatState != null &&
@@ -4134,6 +4190,8 @@ export default function LabyrinthGame() {
     if (!rollingRef.current) return;
     if (combatStrikeDiceOutcomeKnownRef.current) return;
     combatStrikeTargetDuringRollRef.current = target;
+    const tier = draculaAttackVariantFromStrikeTarget(target);
+    setPlayerStrikeAnimCycleByTier((prev) => ({ ...prev, [tier]: prev[tier] + 1 }));
   }, []);
 
   function resolveAfterDice(result: CombatResult, p: Parameters<typeof storedArtifactCount>[0] | undefined, value: number, strikeTarget?: StrikeTarget) {
@@ -4291,6 +4349,13 @@ export default function LabyrinthGame() {
       if (monsterSlainThisRoll && merged3dSpellSegmentMonster && draculaAttackSegment == null) {
         draculaAttackSegment = "spell";
       }
+      if (
+        (strikePortrait === "playerHit" || strikePortrait === "playerHitHeavy") &&
+        merged3dSpellSegmentMonster &&
+        draculaAttackSegment == null
+      ) {
+        draculaAttackSegment = playerStrikeVariantFromDice(value);
+      }
       const playerFatalJumpKill =
         merged3dSpellSegmentMonster &&
         strikePortrait === "monsterHit" &&
@@ -4401,7 +4466,8 @@ export default function LabyrinthGame() {
               strikePortrait,
               ...(draculaAttackSegment ? { draculaAttackSegment } : {}),
               ...(playerFatalJumpKill ? { playerFatalJumpKill: true } : {}),
-              ...draculaPlayerHitHurt3dFooterExtra(combat.monsterType, strikePortrait, monsterHpAfterStrike, maxHpM),
+              ...mergedMeshyMonsterHitPlayerHpFooterExtra(combat.monsterType, strikePortrait, missDmgPre),
+              ...draculaPlayerHitHurt3dFooterExtra(combat.monsterType, strikePortrait, monsterHpAfterStrike, maxHpM, strikeTarget),
               ...glancingHp,
             });
           } else {
@@ -4413,7 +4479,8 @@ export default function LabyrinthGame() {
               strikePortrait,
               ...(draculaAttackSegment ? { draculaAttackSegment } : {}),
               ...(playerFatalJumpKill ? { playerFatalJumpKill: true } : {}),
-              ...draculaPlayerHitHurt3dFooterExtra(combat.monsterType, strikePortrait, monsterHpAfterStrike, maxHpM),
+              ...mergedMeshyMonsterHitPlayerHpFooterExtra(combat.monsterType, strikePortrait, missDmgPre),
+              ...draculaPlayerHitHurt3dFooterExtra(combat.monsterType, strikePortrait, monsterHpAfterStrike, maxHpM, strikeTarget),
               ...glancingHp,
             });
             setCombatRecoveryPhase("hurt");
@@ -4687,7 +4754,8 @@ export default function LabyrinthGame() {
           strikePortrait,
           ...(draculaAttackSegment ? { draculaAttackSegment } : {}),
           ...(playerFatalJumpKill ? { playerFatalJumpKill: true } : {}),
-          ...draculaPlayerHitHurt3dFooterExtra(combat.monsterType, strikePortrait, monsterHpAfterStrike, maxHpM),
+          ...mergedMeshyMonsterHitPlayerHpFooterExtra(combat.monsterType, strikePortrait, missDmgPre),
+          ...draculaPlayerHitHurt3dFooterExtra(combat.monsterType, strikePortrait, monsterHpAfterStrike, maxHpM, strikeTarget),
         });
         setCombatRecoveryPhase("hurt");
         lastCombatRecoveryClipFinishMs.current = 0;
@@ -4910,7 +4978,19 @@ export default function LabyrinthGame() {
     const t = setTimeout(() => {
       setCombatRecoveryPhase((p) => {
         if (p === "hurt") {
-          return combatFooterSnapshot.strikePortrait === "playerHitHeavy" ? "recover" : "ready";
+          const sp = combatFooterSnapshot.strikePortrait;
+          const mt = combatState?.monsterType;
+          const mergedStrike3d =
+            mt === "V" || mt === "K" || mt === "Z" || mt === "S" || mt === "L";
+          if (sp === "playerHitHeavy") return "recover";
+          if (
+            mergedStrike3d &&
+            sp === "playerHit" &&
+            combatFooterSnapshot.draculaAttackSegment === "skill"
+          ) {
+            return "recover";
+          }
+          return "ready";
         }
         if (p === "recover") return "ready";
         return p;
@@ -5342,9 +5422,17 @@ export default function LabyrinthGame() {
     if (now - lastCombatRecoveryClipFinishMs.current < COMBAT_3D_CLIP_FINISH_DEBOUNCE_MS) return;
     lastCombatRecoveryClipFinishMs.current = now;
     setCombatRecoveryPhase((p) => {
-      const sp = combatFooterSnapshotRef.current?.strikePortrait;
+      const snap = combatFooterSnapshotRef.current;
+      const sp = snap?.strikePortrait;
+      const mt = combatStateRef.current?.monsterType;
+      const mergedStrike3d =
+        mt === "V" || mt === "K" || mt === "Z" || mt === "S" || mt === "L";
       if (sp === "defeated") return "ready";
-      if (p === "hurt") return sp === "playerHitHeavy" ? "recover" : "ready";
+      if (p === "hurt") {
+        if (sp === "playerHitHeavy") return "recover";
+        if (mergedStrike3d && sp === "playerHit") return "recover";
+        return "ready";
+      }
       if (p === "recover") return "ready";
       return p;
     });
@@ -9348,7 +9436,6 @@ export default function LabyrinthGame() {
                 const a = playerArmour[combatState.playerIndex];
                 return a && a !== NO_ARMOUR_SENTINEL ? a : null;
               })();
-              const combatPlayerGlb = getPlayer3DGlb(playerAvatars[headerPi]);
 
               const playerGltfVisualState: MonsterSpriteState = (() => {
                 if (combatResult?.playerDefeated && !combatState) return "defeated";
@@ -9358,6 +9445,8 @@ export default function LabyrinthGame() {
                   case "angry": return "knockdown";
                   case "hurt": return "attack";
                   case "knockdown": return "angry";
+                  /** Monster hunt between rolls — player uses hunt locomotion too so the strike can cross-fade from crouch/walk, not from a hard idle cut. */
+                  case "hunt": return "hunt";
                   /**
                    * Lethal strike: monster plays defeat / fall during `combatRecoveryPhase === "hurt"`.
                    * Player must show the finisher (attack) in that same beat — not idle “watching” the fall.
@@ -9372,12 +9461,25 @@ export default function LabyrinthGame() {
               })();
               const playerAttackVariant: "spell" | "skill" | "light" | undefined = (() => {
                 const st = playerGltfVisualState as string;
-                if (st === "idle" || st === "rolling" || st === "recover" || st === "neutral" || st === "defeated") return undefined;
+                if (st === "idle" || st === "hunt" || st === "rolling" || st === "recover" || st === "neutral" || st === "defeated") return undefined;
                 const seg = combatFooterSnapshot?.draculaAttackSegment;
                 if (seg === "spell") return "spell";
                 if (seg === "skill") return "skill";
+                if (seg === "light") return "light";
+                const sp = combatFooterSnapshot?.strikePortrait;
+                const pr = combatFooterSnapshot?.playerRoll;
+                if (
+                  (sp === "playerHit" || sp === "playerHitHeavy") &&
+                  pr != null
+                ) {
+                  return playerStrikeVariantFromDice(pr);
+                }
                 return "light";
               })();
+              const _strikeTierCycles = playerStrikeAnimCycleByTier[playerAttackVariant ?? "spell"];
+              const playerAttackClipCycleIndexFor3d =
+                _strikeTierCycles <= 0 ? 0 : _strikeTierCycles - 1;
+              const combatPlayerGlb = getPlayer3DGlb(playerAvatars[headerPi]);
               const playerFatalJumpKill3d =
                 !!combatFooterSnapshot?.playerFatalJumpKill && playerGltfVisualState === "hurt";
               const isDracula3dCombatPortrait =
@@ -9590,19 +9692,60 @@ export default function LabyrinthGame() {
               const combatScene3dHeightFaceoff =
                 mobileFaceoff3dH ?? desktopFaceoff3dH ?? combatMonster3dHeight;
               const draculaHurt3dLocked = combatFooterSnapshot?.draculaHurt3dHp;
+              /** Always pass post-hit HP for merged hurt clips (incl. 1–2 HP); the old `>= 3` gate dropped tier data on finishing blows and broke light-hit reactions. */
               const draculaHurtHpFor3d =
                 (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S" || headerMt === "L") &&
                 gltfVisualState === "hurt" &&
                 draculaHurt3dLocked &&
-                draculaHurt3dLocked.hp >= 3
-                  ? { hp: draculaHurt3dLocked.hp, maxHp: draculaHurt3dLocked.maxHp }
+                draculaHurt3dLocked.maxHp >= 1
+                  ? {
+                      hp: Math.min(draculaHurt3dLocked.maxHp, Math.max(0, draculaHurt3dLocked.hp)),
+                      maxHp: draculaHurt3dLocked.maxHp,
+                    }
                   : (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S" || headerMt === "L") &&
                       gltfVisualState === "hurt" &&
                       monsterMaxHp >= 1 &&
-                      monsterCurHp >= 3 &&
+                      monsterCurHp >= 1 &&
                       !draculaHurt3dLocked
                     ? { hp: monsterCurHp, maxHp: monsterMaxHp }
                     : undefined;
+              const playerHurtAnimContextFor3d =
+                playerGltfVisualState === "hurt" &&
+                combatFooterSnapshot?.strikePortrait === "monsterHit" &&
+                (combatFooterSnapshot.playerHpLostThisStrike ?? 0) > 0 &&
+                isDracula3dCombatPortrait
+                  ? {
+                      hpLost: combatFooterSnapshot.playerHpLostThisStrike!,
+                      strikeZone:
+                        combatFooterSnapshot.draculaAttackSegment === "spell"
+                          ? ("head" as const)
+                          : combatFooterSnapshot.draculaAttackSegment === "light"
+                            ? ("legs" as const)
+                            : ("body" as const),
+                    }
+                  : null;
+              const playerHurtClipStartTimeSecFor3d =
+                playerGltfVisualState === "hurt" &&
+                combatFooterSnapshot?.strikePortrait === "monsterHit" &&
+                isDracula3dCombatPortrait &&
+                !playerFatalJumpKill3d
+                  ? mergedMeshyMonsterHitPlayerHurtClipStartTimeSec(
+                      headerMt ?? null,
+                      combatFooterSnapshot?.draculaAttackSegment ?? "light",
+                    )
+                  : 0;
+              const combat3dClipLeads = resolveCombat3dClipLeads({
+                isMergedMeshy: !!isDracula3dCombatPortrait,
+                monsterType: headerMt ?? null,
+                playerVisualState: playerGltfVisualState as Monster3DSpriteState,
+                monsterVisualState: gltfVisualState as Monster3DSpriteState,
+                draculaAttackVariant: combatDraculaStrikeSegment,
+                playerAttackVariant: playerAttackVariant,
+                playerFatalJumpKill: playerFatalJumpKill3d,
+                rollingApproachBlend: combat3dRollingApproachBlend,
+              });
+              const playerAttackClipLeadInSecFor3d = combat3dClipLeads.meshyPlayerAttackLeadInSec;
+              const monsterHurtClipStartTimeSecFor3d = combat3dClipLeads.meshyMonsterHurtLeadInSec;
               /** Landscape: skills/artifacts in the center column; roll + retreat under HP bars (pre–e26e59e4 layout). */
               const renderLandscapeFaceoffSkillsPanel = (): React.ReactNode => {
                 if (!lab || !combatState) return null;
@@ -9913,7 +10056,15 @@ export default function LabyrinthGame() {
                           draculaAttackVariant={combatDraculaStrikeSegment}
                           playerAttackVariant={playerAttackVariant}
                           playerFatalJumpKill={playerFatalJumpKill3d}
+                          playerHurtAnimContext={playerHurtAnimContextFor3d}
+                          playerHurtClipStartTimeSec={playerHurtClipStartTimeSecFor3d}
+                          playerAttackClipLeadInSec={playerAttackClipLeadInSecFor3d}
+                          monsterHurtClipStartTimeSec={monsterHurtClipStartTimeSecFor3d}
+                          playerAttackClipCycleIndex={playerAttackClipCycleIndexFor3d}
                           draculaHurtHp={draculaHurtHpFor3d}
+                          draculaHurtStrikeZone={
+                            headerMt === "V" ? combatFooterSnapshot?.draculaHurtStrikeZone : undefined
+                          }
                           draculaLoopAngrySkill01={draculaLossMenaceLoop3d}
                           compactCombatViewport
                           strikePickActive={combatStrikePick3dDuringRoll}
@@ -10735,7 +10886,15 @@ export default function LabyrinthGame() {
                             draculaAttackVariant={combatDraculaStrikeSegment}
                             playerAttackVariant={playerAttackVariant}
                             playerFatalJumpKill={playerFatalJumpKill3d}
+                            playerHurtAnimContext={playerHurtAnimContextFor3d}
+                            playerHurtClipStartTimeSec={playerHurtClipStartTimeSecFor3d}
+                            playerAttackClipLeadInSec={playerAttackClipLeadInSecFor3d}
+                            monsterHurtClipStartTimeSec={monsterHurtClipStartTimeSecFor3d}
+                            playerAttackClipCycleIndex={playerAttackClipCycleIndexFor3d}
                             draculaHurtHp={draculaHurtHpFor3d}
+                            draculaHurtStrikeZone={
+                              headerMt === "V" ? combatFooterSnapshot?.draculaHurtStrikeZone : undefined
+                            }
                             draculaLoopAngrySkill01={draculaLossMenaceLoop3d}
                             compactCombatViewport
                             strikePickActive={combatStrikePick3dDuringRoll}

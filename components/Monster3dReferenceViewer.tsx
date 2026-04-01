@@ -192,6 +192,7 @@ export function Monster3dReferenceViewer() {
               <option value="skill">
                 {monsterType === "K" ? "skill first (slash → skills…)" : "skill first (Skill_03 → …)"}
               </option>
+              <option value="light">light tier first</option>
             </select>
           </label>
         ) : null}

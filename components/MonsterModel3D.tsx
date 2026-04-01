@@ -3,6 +3,7 @@
 import React, {
   Component,
   Suspense,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -18,7 +19,14 @@ import { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { MonsterType } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
 import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
-import { glbSlugFromPathOrUrl, resolveMonsterAnimationClipName, resolvePlayerAnimationClipName } from "@/lib/monsterModels3d";
+import {
+  glbSlugFromPathOrUrl,
+  isMergedMeshyStrikePortraitType,
+  isMeshyPostAttackCalmState,
+  resolveMonsterAnimationClipName,
+  resolvePlayerAnimationClipName,
+  resolveWalkFightBackClipName,
+} from "@/lib/monsterModels3d";
 
 /**
  * World X half-separation (|playerX| = |monsterX|). Looping stances lock armature root; one-shot attacks
@@ -27,16 +35,39 @@ import { glbSlugFromPathOrUrl, resolveMonsterAnimationClipName, resolvePlayerAni
  * Tuned against merged player + monster GLBs in the face-off box.
  */
 const COMBAT_IDLE_SEPARATION_HALF = 1.38;
+/** Same half used during strike-pick / dice roll — kept for **all** resolved-hit face-offs so jump/skill clips align with contact (variant-tiny halves read as long-range hits). */
 const COMBAT_STRIKE_PICK_SEPARATION_HALF = 0.92;
-
+/**
+ * Player **spell** jump-ins and monster **skill** grounded strikes need a shorter half than 0.92 so contact reads on merged rigs.
+ */
+const COMBAT_SPELL_SKILL_TIGHT_CONTACT_HALF = 0.68;
+/**
+ * Monster **light** (e.g. charged cast) vs player **hurt** — shorter still than 0.92 / 0.68 so the strike reads on the defender.
+ */
+const COMBAT_MONSTER_LIGHT_VS_PLAYER_HURT_HALF = 0.56;
+/**
+ * Standing attacker vs **knockdown** defender — tighter than `COMBAT_STRIKE_PICK_SEPARATION_HALF` so the blow reads on the
+ * downed figure (merged rigs are `Center`‑ed; 0.92 leaves too much air for knockdown clips).
+ */
+const COMBAT_ATTACK_VS_KNOCKDOWN_HALF = 0.42;
 function combatContactHalfXForVariant(variant: "spell" | "skill" | "light" | undefined): number {
   const v = variant ?? "light";
-  if (v === "spell") return 0.11;
-  if (v === "skill") return 0.34;
-  return 0.32;
+  /** Wider spread so jump/spell vs leg reads clearly; spell ~cheek‑to‑cheek for merged GLBs. */
+  if (v === "spell") return 0.06;
+  if (v === "skill") return 0.28;
+  return 0.38;
 }
 
-function combatFaceOffPositions(args: {
+/**
+ * Strike-contact spacing uses tiny half-widths so jump/spell clips reach the defender, but each glTF is `Center`‑ed on
+ * its bbox — centers only ~0.12 apart (2×0.06 spell) stack both rigs in the same volume. Floor keeps a readable gap;
+ * forward root motion on attacks still closes distance in motion.
+ */
+const COMBAT_CONTACT_HALF_X_MIN = 0.38;
+
+/** Exposed for `/monster-3d-animations` contact lab — same math as `CombatScene3D` face-off X. */
+export function combatFaceOffPositions(args: {
+  /** When true, same half as exchange spacing (kept for API compat — spacing is always strike-pick style for hit beats). */
   strikePickActive: boolean;
   isContactExchange: boolean;
   /** 0 = idle spacing, 1 = closed to strike range while dice roll */
@@ -47,7 +78,7 @@ function combatFaceOffPositions(args: {
   draculaAttackVariant?: "spell" | "skill" | "light";
 }): { playerPosX: number; monsterPosX: number } {
   const {
-    strikePickActive,
+    strikePickActive: _strikePickActive,
     isContactExchange,
     rollingApproachBlend,
     playerVisualState,
@@ -55,33 +86,88 @@ function combatFaceOffPositions(args: {
     playerAttackVariant,
     draculaAttackVariant,
   } = args;
-  if (strikePickActive) {
-    const h = COMBAT_STRIKE_PICK_SEPARATION_HALF;
-    return { playerPosX: -h, monsterPosX: h };
-  }
-  if (!isContactExchange) {
+  void _strikePickActive;
+  /**
+   * Old logic only used tight spacing when `isContactExchange` (both sides in hit/attack/knockdown/angry).
+   * While the attacker plays `attack`, the defender is often still calm `idle`/`hunt` — we stayed on idle
+   * lerp (~1.38→0.92) so jump punches never read as reaching. Any `attack` must pull into contact range.
+   *
+   * **Light / quick jabs:** the player `attack` clip often ends before the monster `hurt` clip. Then the player is
+   * already `idle` while the defender is still `hurt` — `isContactExchange` becomes false and we fell through to the
+   * `rollingApproachBlend` path; when blend is 0 (e.g. recovery phase just flipped `ready`) the scene snapped back to
+   * idle separation (~1.38). Keep strike-range X while either side is still hurt / recover / knockdown.
+   */
+  const inPostHitPose =
+    playerVisualState === "hurt" ||
+    monsterVisualState === "hurt" ||
+    playerVisualState === "recover" ||
+    monsterVisualState === "recover" ||
+    playerVisualState === "knockdown" ||
+    monsterVisualState === "knockdown";
+  const useStrikeContactSpacing =
+    isContactExchange ||
+    playerVisualState === "attack" ||
+    monsterVisualState === "attack" ||
+    inPostHitPose;
+  if (!useStrikeContactSpacing) {
     const idle = COMBAT_IDLE_SEPARATION_HALF;
     const t = Math.max(0, Math.min(1, rollingApproachBlend));
     const close = COMBAT_STRIKE_PICK_SEPARATION_HALF;
     const h = idle * (1 - t) + close * t;
     return { playerPosX: -h, monsterPosX: h };
   }
+
   const pAtk = playerVisualState === "attack";
   const mAtk = monsterVisualState === "attack";
-  let half: number;
-  if (pAtk && !mAtk) {
-    half = combatContactHalfXForVariant(playerAttackVariant);
-  } else if (mAtk && !pAtk) {
-    half = combatContactHalfXForVariant(draculaAttackVariant);
-  } else if (pAtk && mAtk) {
-    half = Math.max(
-      combatContactHalfXForVariant(playerAttackVariant),
-      combatContactHalfXForVariant(draculaAttackVariant)
-    );
-  } else {
-    half = 0.32;
+  const pKd = playerVisualState === "knockdown";
+  const mKd = monsterVisualState === "knockdown";
+  /** Direct attack vs knockdown poses. */
+  const attackVsKnockdown =
+    (pKd && mAtk && !pAtk) || (mKd && pAtk && !mAtk);
+  /**
+   * Combat 3D mirrors sides: player heavy on monster often shows **monster `knockdown` + player `angry`**
+   * (see `LabyrinthGame` `playerGltfVisualState` swap), not `attack` + `knockdown`.
+   */
+  const mirroredHeavyKnockdown =
+    monsterVisualState === "knockdown" && playerVisualState === "angry";
+
+  if (attackVsKnockdown || mirroredHeavyKnockdown) {
+    const h = COMBAT_ATTACK_VS_KNOCKDOWN_HALF;
+    return { playerPosX: -h, monsterPosX: h };
   }
-  return { playerPosX: -half, monsterPosX: half };
+
+  if (pAtk && mAtk) {
+    const half = Math.max(
+      combatContactHalfXForVariant(playerAttackVariant),
+      combatContactHalfXForVariant(draculaAttackVariant),
+      COMBAT_CONTACT_HALF_X_MIN,
+    );
+    return { playerPosX: -half, monsterPosX: half };
+  }
+
+  let h = COMBAT_STRIKE_PICK_SEPARATION_HALF;
+  const tightSpellSkillRootMotion =
+    (pAtk && !mAtk && playerAttackVariant === "spell") ||
+    (mAtk && !pAtk && draculaAttackVariant === "skill");
+  const tightMonsterLightVsPlayerHurt =
+    mAtk && !pAtk && draculaAttackVariant === "light" && playerVisualState === "hurt";
+  /** Player light jab vs hurt monster (net win): same idea as spell/skill tight contact — 0.92 leaves thin air for short strikes. */
+  const tightPlayerLightVsMonsterHurt =
+    pAtk && !mAtk && playerAttackVariant === "light" && monsterVisualState === "hurt";
+  /** Skill tier now uses `Jumping_Punch` — same tight half as spell/light vs hurt so the lunge reads on the defender. */
+  const tightPlayerSkillVsMonsterHurtRecover =
+    pAtk &&
+    !mAtk &&
+    playerAttackVariant === "skill" &&
+    (monsterVisualState === "hurt" || monsterVisualState === "recover");
+  if (tightMonsterLightVsPlayerHurt) {
+    h = COMBAT_MONSTER_LIGHT_VS_PLAYER_HURT_HALF;
+  } else if (tightPlayerLightVsMonsterHurt || tightPlayerSkillVsMonsterHurtRecover) {
+    h = COMBAT_SPELL_SKILL_TIGHT_CONTACT_HALF;
+  } else if (tightSpellSkillRootMotion) {
+    h = COMBAT_SPELL_SKILL_TIGHT_CONTACT_HALF;
+  }
+  return { playerPosX: -h, monsterPosX: h };
 }
 
 export interface MonsterModel3DProps {
@@ -108,6 +194,8 @@ export interface MonsterModel3DProps {
   draculaAttackVariant?: "spell" | "skill" | "light";
   /** Dracula + `hurt`: HP after the strike (with max) selects light / medium / heavy hit clips. */
   draculaHurtHp?: { hp: number; maxHp: number } | null;
+  /** Dracula: head/body/legs from strike pick — overrides HP tier for hurt clips; legs also biases knockdown to `falling_down`. */
+  draculaHurtStrikeZone?: StrikeTarget | null;
   /** Player-loss banner: loop `Skill_01` on `angry` until the user continues. */
   draculaLoopAngrySkill01?: boolean;
 }
@@ -123,6 +211,61 @@ function shouldLoopVisualState(state: Monster3DSpriteState, draculaLoopAngrySkil
  */
 function shouldLockRootMotionForState(state: Monster3DSpriteState, draculaLoopAngrySkill01: boolean): boolean {
   return shouldLoopVisualState(state, draculaLoopAngrySkill01);
+}
+
+/**
+ * Pin root only for looping stance clips (idle / hunt / rolling / …). Do **not** lock during player `attack`:
+ * wasteland-drifter strikes are authored with root motion; locking made the torso read “frozen” at the face-off X
+ * while only extremities moved. World placement stays from the parent group `positionX` + clip lead-ins in
+ * `combat3dContact` / `resolveCombat3dClipLeads`.
+ */
+function useCombatRootMotionLock(
+  scene: THREE.Object3D,
+  visualState: Monster3DSpriteState,
+  draculaLoopAngrySkill01: boolean,
+): void {
+  const lock = shouldLockRootMotionForState(visualState, draculaLoopAngrySkill01);
+  useRootMotionLock(scene, lock);
+}
+
+/** Skip Meshy “wind-up” at t=0 on player `hurt` so flinch aligns with merged monster contact (see `mergedMeshyMonsterHitPlayerHurtClipStartTimeSec`). */
+function applyPlayerHurtClipContactSync(
+  act: THREE.AnimationAction,
+  isPlayerModel: boolean,
+  visualState: Monster3DSpriteState,
+  startSec: number,
+  fatalJumpKill: boolean,
+): void {
+  if (!isPlayerModel || visualState !== "hurt" || fatalJumpKill || !(startSec > 0)) return;
+  const clip = act.getClip();
+  if (!clip || clip.duration <= 0) return;
+  act.time = Math.min(startSec, Math.max(0, clip.duration - 0.04));
+}
+
+/** Skip Meshy wind-up at t=0 on monster `hurt` when the player lands a strike — pairs with `PLAYER_HITS_MONSTER` in `combat3dContact`. */
+function applyMonsterHurtClipContactSync(
+  act: THREE.AnimationAction,
+  isPlayerModel: boolean,
+  visualState: Monster3DSpriteState,
+  startSec: number,
+): void {
+  if (isPlayerModel || visualState !== "hurt" || !(startSec > 0)) return;
+  const clip = act.getClip();
+  if (!clip || clip.duration <= 0) return;
+  act.time = Math.min(startSec, Math.max(0, clip.duration - 0.04));
+}
+
+/** Player `attack`: skip into clip (lead-in from `combat3dContact` / `resolveCombat3dClipLeads`). */
+function applyPlayerAttackClipSkillLeadIn(
+  act: THREE.AnimationAction,
+  isPlayerModel: boolean,
+  visualState: Monster3DSpriteState,
+  leadInSec: number,
+): void {
+  if (!isPlayerModel || visualState !== "attack" || !(leadInSec > 0)) return;
+  const clip = act.getClip();
+  if (!clip || clip.duration <= 0) return;
+  act.time = Math.min(leadInSec, Math.max(0, clip.duration - 0.04));
 }
 
 class ModelErrorBoundary extends Component<
@@ -186,6 +329,61 @@ function useRootMotionLock(scene: THREE.Object3D, enabled: boolean) {
   });
 }
 
+/** Outgoing clip for `crossFadeTo` — avoids `stopAllAction` snapping hunt/rolling pose back to bind before `attack`. */
+function pickDominantPlayingAction(actions: Record<string, THREE.AnimationAction | null>): THREE.AnimationAction | null {
+  let best: THREE.AnimationAction | null = null;
+  let bestW = 0;
+  for (const a of Object.values(actions)) {
+    if (!a) continue;
+    const w = a.getEffectiveWeight();
+    if (w > bestW) {
+      bestW = w;
+      best = a;
+    }
+  }
+  return bestW > 1e-3 ? best : null;
+}
+
+/**
+ * When hunt/rolling → strike, `pickDominantPlayingAction` can return null (e.g. cross-fade ramp, drei's action map).
+ * Resolve the expected locomotion clip and use it if it is still running so `crossFadeTo` has a real outgoing action.
+ */
+function pickLocomotionHandoffOutgoing(
+  actions: Record<string, THREE.AnimationAction | null>,
+  names: readonly string[],
+  url: string,
+  prevState: Monster3DSpriteState | null,
+  isPlayerModel: boolean,
+  monsterType: MonsterType | null | undefined,
+  draculaAttackVariant: "spell" | "skill" | "light" | undefined,
+  monsterResolveOpts: {
+    draculaHurtHp?: { hp: number; maxHp: number } | null;
+    draculaHurtStrikeZone?: StrikeTarget | null;
+  },
+): THREE.AnimationAction | null {
+  const dom = pickDominantPlayingAction(actions);
+  if (dom && dom.getEffectiveWeight() > 1e-4) return dom;
+  if (prevState !== "hunt" && prevState !== "rolling") return dom;
+
+  const glbSlug = glbSlugFromPathOrUrl(url);
+  const clip = isPlayerModel
+    ? resolvePlayerAnimationClipName(prevState, names, draculaAttackVariant)
+    : resolveMonsterAnimationClipName(prevState, names, {
+        monsterType: monsterType ?? null,
+        glbSlug,
+        draculaAttackVariant,
+        draculaHurtHp: monsterResolveOpts.draculaHurtHp ?? null,
+        draculaHurtStrikeZone: monsterResolveOpts.draculaHurtStrikeZone ?? null,
+        /** `prevState` is only `hunt` / `rolling` here — never `angry`. */
+        draculaAngryLockSkill01: false,
+      });
+  const a = clip ? actions[clip] ?? null : null;
+  if (a && a.isRunning()) return a;
+  return dom;
+}
+
+const PLAYER_LOCOMOTION_TO_ATTACK_CROSSFADE_SEC = 0.38;
+
 function GltfSubject({
   url,
   visualState,
@@ -193,10 +391,13 @@ function GltfSubject({
   monsterType,
   draculaAttackVariant,
   draculaHurtHp,
+  draculaHurtStrikeZone,
   draculaLoopAngrySkill01 = false,
   onOneShotAnimationFinished,
   isPlayerModel = false,
   playerFatalJumpKill = false,
+  playerHurtAnimContext = null,
+  playerHurtClipStartTimeSec = 0,
 }: {
   url: string;
   visualState: Monster3DSpriteState;
@@ -204,26 +405,47 @@ function GltfSubject({
   monsterType?: MonsterType | null;
   draculaAttackVariant?: "spell" | "skill" | "light";
   draculaHurtHp?: { hp: number; maxHp: number } | null;
+  draculaHurtStrikeZone?: StrikeTarget | null;
   draculaLoopAngrySkill01?: boolean;
   onOneShotAnimationFinished?: () => void;
   isPlayerModel?: boolean;
   /** Lethal spell strike (e.g. Jumping_Punch) — prefer `Shot_and_Fall_Backward` on player `hurt`. */
   playerFatalJumpKill?: boolean;
+  /** Standing hurt: HP lost this strike + optional strike zone (else inferred from segment). */
+  playerHurtAnimContext?: { hpLost: number; strikeZone?: StrikeTarget } | null;
+  /** Skip this many seconds into player `hurt` so impact matches merged monster contact. */
+  playerHurtClipStartTimeSec?: number;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const { scene, animations } = useGLTF(url);
   const { actions, names, mixer } = useAnimations(animations, groupRef);
   const onFinishedRef = useRef(onOneShotAnimationFinished);
   onFinishedRef.current = onOneShotAnimationFinished;
-  const prevVisualStateRef = useRef<Monster3DSpriteState>(visualState);
+  /** `null` until first clip run — keeps `attack → walk-back` chains (prev stays `attack` until realign ends). */
+  const prevVisualStateRef = useRef<Monster3DSpriteState | null>(null);
+  /**
+   * `sameAsClampedPrev` must not skip the **second** mount in React Strict dev (mount → cleanup → remount): the first
+   * run sets `prevVisualStateRef` and plays; cleanup stops the mixer; without this flag the remount returns early and
+   * nothing plays (looks like the GLB never loaded).
+   */
+  const playedClampedStateThisEffectRef = useRef(false);
   const draculaVariantRef = useRef(draculaAttackVariant);
   draculaVariantRef.current = draculaAttackVariant;
   const draculaHurtRef = useRef(draculaHurtHp);
   draculaHurtRef.current = draculaHurtHp;
   const playerJumpKillRef = useRef(playerFatalJumpKill);
   playerJumpKillRef.current = playerFatalJumpKill;
+  const playerHurtCtxRef = useRef(playerHurtAnimContext);
+  playerHurtCtxRef.current = playerHurtAnimContext;
+  const playerHurtAnimKey = playerHurtAnimContext
+    ? `${playerHurtAnimContext.hpLost}:${playerHurtAnimContext.strikeZone ?? ""}`
+    : "";
+  const playerHurtStartRef = useRef(playerHurtClipStartTimeSec);
+  playerHurtStartRef.current = playerHurtClipStartTimeSec;
+  /** Skip mixer churn while `Walk_Fight_Back` → calm is playing (prev still `attack`, next already `idle`). */
+  const attackToIdleRealignLockRef = useRef(false);
 
-  useRootMotionLock(scene, shouldLockRootMotionForState(visualState, !!draculaLoopAngrySkill01));
+  useCombatRootMotionLock(scene, visualState, !!draculaLoopAngrySkill01);
 
   useEffect(() => {
     useGLTF.preload(url);
@@ -231,13 +453,31 @@ function GltfSubject({
 
   useEffect(() => {
     const prevState = prevVisualStateRef.current;
-    prevVisualStateRef.current = visualState;
+
+    if (visualState === "attack") attackToIdleRealignLockRef.current = false;
+    if (visualState === "hunt" || visualState === "rolling") {
+      attackToIdleRealignLockRef.current = false;
+    }
 
     // Skip replaying a clamped one-shot clip (e.g. defeated) when re-rendered with the same state.
+    /** `hurt` excluded — hurt opts / lead-in can change without a state change (see `PositionedGltfSubject`). */
     const sameAsClampedPrev =
+      playedClampedStateThisEffectRef.current &&
+      prevState !== null &&
       prevState === visualState &&
-      !shouldLoopVisualState(visualState, !!draculaLoopAngrySkill01);
+      !shouldLoopVisualState(visualState, !!draculaLoopAngrySkill01) &&
+      visualState !== "hurt";
     if (sameAsClampedPrev) return;
+
+    if (
+      attackToIdleRealignLockRef.current &&
+      prevState === "attack" &&
+      isMeshyPostAttackCalmState(visualState) &&
+      visualState !== "hunt" &&
+      visualState !== "rolling"
+    ) {
+      return;
+    }
 
     /**
      * Connected sequences: the outgoing clip's final clamped pose must blend
@@ -252,7 +492,106 @@ function GltfSubject({
       (prevState === "knockdown" && (visualState === "recover" || visualState === "defeated")) ||
       (prevState === "hurt" && visualState === "recover") ||
       (prevState === "recover" && (visualState === "idle" || visualState === "neutral"));
-    const fadeDuration = crossFade ? 0.4 : 0.18;
+    let fadeDuration = crossFade ? 0.4 : 0.18;
+    if (!crossFade && isPlayerModel && visualState === "hurt") {
+      fadeDuration = Math.min(fadeDuration, 0.05);
+    }
+
+    const tryWalkBack =
+      !crossFade &&
+      prevState === "attack" &&
+      isMeshyPostAttackCalmState(visualState) &&
+      visualState !== "hunt" &&
+      visualState !== "rolling" &&
+      (isPlayerModel || isMergedMeshyStrikePortraitType(monsterType));
+    if (tryWalkBack) {
+      const wb = resolveWalkFightBackClipName(url, names, { isPlayerModel, monsterType });
+      if (wb && actions[wb]) {
+        mixer.stopAllAction();
+        attackToIdleRealignLockRef.current = true;
+        const actWb = actions[wb]!;
+        actWb.reset();
+        actWb.setLoop(THREE.LoopOnce, 1);
+        actWb.clampWhenFinished = true;
+        let actForListener: THREE.AnimationAction | null = actWb;
+        let didNotify = false;
+        const notifyOnce = () => {
+          if (didNotify) return;
+          didNotify = true;
+          onFinishedRef.current?.();
+        };
+        const onWbFin = (e: THREE.AnimationMixerEventMap["finished"]) => {
+          if (e.action !== actForListener) return;
+          mixer.removeEventListener("finished", onWbFin);
+          actForListener = null;
+          const glbSlug = glbSlugFromPathOrUrl(url);
+          const dHurt = draculaHurtRef.current;
+          const hurtCtx =
+            dHurt?.hp != null && dHurt?.maxHp != null ? { hp: dHurt.hp, maxHp: dHurt.maxHp } : dHurt ?? null;
+          const calmPick = isPlayerModel
+            ? resolvePlayerAnimationClipName(visualState, names, draculaVariantRef.current, {
+                fatalJumpKill: playerJumpKillRef.current,
+                playerHurtHpLost: playerHurtCtxRef.current?.hpLost,
+                playerHurtStrikeZone: playerHurtCtxRef.current?.strikeZone,
+              })
+            : resolveMonsterAnimationClipName(visualState, names, {
+                monsterType,
+                glbSlug,
+                draculaAttackVariant: draculaVariantRef.current,
+                draculaHurtHp: hurtCtx,
+                draculaHurtStrikeZone: draculaHurtStrikeZone ?? null,
+                draculaAngryLockSkill01: draculaLoopAngrySkill01 && visualState === "angry",
+              });
+          const loops = shouldLoopVisualState(visualState, !!draculaLoopAngrySkill01);
+          const onCalmFin = (ev: THREE.AnimationMixerEventMap["finished"]) => {
+            if (ev.action !== actForListener) return;
+            mixer.removeEventListener("finished", onCalmFin);
+            actForListener = null;
+            notifyOnce();
+          };
+          if (calmPick && actions[calmPick]) {
+            const act = actions[calmPick]!;
+            act.reset();
+            applyPlayerHurtClipContactSync(
+              act,
+              isPlayerModel,
+              visualState,
+              playerHurtStartRef.current,
+              playerJumpKillRef.current,
+            );
+            if (loops) {
+              act.setLoop(THREE.LoopRepeat, Infinity);
+              act.clampWhenFinished = false;
+            } else {
+              act.setLoop(THREE.LoopOnce, 1);
+              act.clampWhenFinished = true;
+              if (onFinishedRef.current) {
+                actForListener = act;
+                mixer.addEventListener("finished", onCalmFin);
+              }
+            }
+            act.fadeIn(fadeDuration).play();
+          }
+          attackToIdleRealignLockRef.current = false;
+          prevVisualStateRef.current = visualState;
+          invalidate();
+        };
+        mixer.addEventListener("finished", onWbFin);
+        actWb.fadeIn(0.12).play();
+        playedClampedStateThisEffectRef.current = true;
+        invalidate();
+        return () => {
+          playedClampedStateThisEffectRef.current = false;
+          attackToIdleRealignLockRef.current = false;
+          mixer.removeEventListener("finished", onWbFin);
+          for (const a of Object.values(actions)) {
+            a?.fadeOut(0.12);
+          }
+        };
+      }
+    }
+
+    prevVisualStateRef.current = visualState;
 
     if (!crossFade) {
     mixer.stopAllAction();
@@ -265,12 +604,15 @@ function GltfSubject({
     const pick = isPlayerModel
       ? resolvePlayerAnimationClipName(visualState, names, draculaVariantRef.current, {
           fatalJumpKill: playerJumpKillRef.current,
+          playerHurtHpLost: playerHurtCtxRef.current?.hpLost,
+          playerHurtStrikeZone: playerHurtCtxRef.current?.strikeZone,
         })
       : resolveMonsterAnimationClipName(visualState, names, {
       monsterType,
       glbSlug,
       draculaAttackVariant: draculaVariantRef.current,
       draculaHurtHp: hurtCtx,
+      draculaHurtStrikeZone: draculaHurtStrikeZone ?? null,
       draculaAngryLockSkill01: draculaLoopAngrySkill01 && visualState === "angry",
     });
     const loops = shouldLoopVisualState(visualState, !!draculaLoopAngrySkill01);
@@ -292,6 +634,13 @@ function GltfSubject({
     if (pick && actions[pick]) {
       const act = actions[pick]!;
       act.reset();
+      applyPlayerHurtClipContactSync(
+        act,
+        isPlayerModel,
+        visualState,
+        playerHurtStartRef.current,
+        playerJumpKillRef.current,
+      );
       if (loops) {
         act.setLoop(THREE.LoopRepeat, Infinity);
         act.clampWhenFinished = false;
@@ -309,10 +658,12 @@ function GltfSubject({
         }
       }
       act.fadeIn(fadeDuration).play();
+      playedClampedStateThisEffectRef.current = true;
     }
 
     invalidate();
     return () => {
+      playedClampedStateThisEffectRef.current = false;
       if (actForListener) {
         mixer.removeEventListener("finished", onMixerFinished);
         actForListener = null;
@@ -321,7 +672,22 @@ function GltfSubject({
         a?.fadeOut(0.12);
       }
     };
-  }, [actions, names, mixer, url, visualState, monsterType, draculaLoopAngrySkill01, isPlayerModel]);
+  }, [
+    actions,
+    names,
+    mixer,
+    url,
+    visualState,
+    monsterType,
+    draculaLoopAngrySkill01,
+    isPlayerModel,
+    draculaAttackVariant,
+    draculaHurtHp,
+    draculaHurtStrikeZone,
+    playerFatalJumpKill,
+    playerHurtAnimKey,
+    playerHurtClipStartTimeSec,
+  ]);
 
   useEffect(() => {
     invalidate();
@@ -345,9 +711,39 @@ function PositionedGltfSubject(
     positionX?: number;
     weaponUrl?: string | null;
     hitRootRef?: React.MutableRefObject<THREE.Group | null> | null;
+    /**
+     * When set (e.g. face-off lab), any change restarts the current clip from t=0 on both fighters so
+     * paired actions start together. Omit in live combat.
+     */
+    animationSyncKey?: string;
+    /**
+     * Face-off lab: with `onPairPlaybackMixerReady`, fire once per `pairGateToken` when the mixer has actions
+     * so the parent can align start times after both GLBs finish Suspense loading.
+     */
+    pairGateToken?: number;
+    pairPlaybackRole?: "player" | "monster";
+    onPairPlaybackMixerReady?: (role: "player" | "monster", gateToken: number) => void;
+    /** Player `attack`: seconds to skip into the clip (skill-tier strike — earlier hit phase). */
+    playerAttackClipLeadInSec?: number;
+    /** Rotates merged player `attack` clip try-order (strike-pick repeats during one roll). */
+    playerAttackClipCycleIndex?: number;
+    /** Monster `hurt`: seconds into reaction clip when player connects (player `attack` beat). */
+    monsterHurtClipStartTimeSec?: number;
   }
 ) {
-  const { positionX = 0, weaponUrl, hitRootRef, ...rest } = props;
+  const {
+    positionX = 0,
+    weaponUrl,
+    hitRootRef,
+    animationSyncKey,
+    pairGateToken,
+    pairPlaybackRole,
+    onPairPlaybackMixerReady,
+    playerAttackClipLeadInSec = 0,
+    playerAttackClipCycleIndex = 0,
+    monsterHurtClipStartTimeSec = 0,
+    ...rest
+  } = props;
   const groupRef = useRef<THREE.Group | null>(null);
   const setGroupRef = (node: THREE.Group | null) => {
     groupRef.current = node;
@@ -358,31 +754,249 @@ function PositionedGltfSubject(
   const { actions, names, mixer } = useAnimations(animations, innerRef);
   const onFinishedRef = useRef(rest.onOneShotAnimationFinished);
   onFinishedRef.current = rest.onOneShotAnimationFinished;
-  const prevVisualStateRef = useRef<Monster3DSpriteState>(rest.visualState);
+  const prevVisualStateRef = useRef<Monster3DSpriteState | null>(null);
+  /** See `playedClampedStateThisEffectRef` on `GltfSubject` — Strict Mode remount must replay clips. */
+  const playedClampedStateThisEffectRef = useRef(false);
+  const prevAnimationSyncKeyRef = useRef<string | undefined>(undefined);
   const draculaVariantRef = useRef(rest.draculaAttackVariant);
   draculaVariantRef.current = rest.draculaAttackVariant;
   const draculaHurtRef = useRef(rest.draculaHurtHp);
   draculaHurtRef.current = rest.draculaHurtHp;
   const playerJumpKillRef = useRef(rest.playerFatalJumpKill);
   playerJumpKillRef.current = rest.playerFatalJumpKill;
+  const playerHurtCtxRef = useRef(rest.playerHurtAnimContext);
+  playerHurtCtxRef.current = rest.playerHurtAnimContext;
+  const playerHurtAnimKey = rest.playerHurtAnimContext
+    ? `${rest.playerHurtAnimContext.hpLost}:${rest.playerHurtAnimContext.strikeZone ?? ""}`
+    : "";
+  const playerHurtStartRef = useRef(rest.playerHurtClipStartTimeSec ?? 0);
+  playerHurtStartRef.current = rest.playerHurtClipStartTimeSec ?? 0;
+  const playerAttackLeadRef = useRef(playerAttackClipLeadInSec);
+  playerAttackLeadRef.current = playerAttackClipLeadInSec;
+  const playerAttackCycleRef = useRef(playerAttackClipCycleIndex);
+  playerAttackCycleRef.current = playerAttackClipCycleIndex;
+  const monsterHurtStartRef = useRef(monsterHurtClipStartTimeSec);
+  monsterHurtStartRef.current = monsterHurtClipStartTimeSec;
 
-  useRootMotionLock(scene, shouldLockRootMotionForState(rest.visualState, !!rest.draculaLoopAngrySkill01));
+  const hurtHpKey =
+    rest.draculaHurtHp?.hp != null && rest.draculaHurtHp?.maxHp != null
+      ? `${rest.draculaHurtHp.hp}/${rest.draculaHurtHp.maxHp}`
+      : "—";
+  const hurtZoneKey = rest.draculaHurtStrikeZone ?? "—";
+  const attackToIdleRealignLockRef = useRef(false);
+
+  useCombatRootMotionLock(scene, rest.visualState, !!rest.draculaLoopAngrySkill01);
 
   useEffect(() => { useGLTF.preload(rest.url); }, [rest.url]);
 
   useEffect(() => {
+    if (onPairPlaybackMixerReady == null || pairPlaybackRole == null || pairGateToken == null) return;
+    /** No clips — still ack so face-off lab does not wait forever on `animationSyncKey` (static mesh only). */
+    if (animations.length === 0) {
+      onPairPlaybackMixerReady(pairPlaybackRole, pairGateToken);
+      return;
+    }
+    if (Object.keys(actions).length === 0) return;
+    onPairPlaybackMixerReady(pairPlaybackRole, pairGateToken);
+  }, [actions, animations.length, pairGateToken, pairPlaybackRole, onPairPlaybackMixerReady]);
+
+  useEffect(() => {
+    const syncKeyBump =
+      animationSyncKey != null &&
+      animationSyncKey !== prevAnimationSyncKeyRef.current;
+    if (syncKeyBump) prevAnimationSyncKeyRef.current = animationSyncKey;
+
     const prevState = prevVisualStateRef.current;
-    prevVisualStateRef.current = rest.visualState;
+
+    if (rest.visualState === "attack") attackToIdleRealignLockRef.current = false;
+    if (rest.visualState === "hunt" || rest.visualState === "rolling") {
+      attackToIdleRealignLockRef.current = false;
+    }
+
+    /**
+     * Do **not** treat `hurt` as “same as previous” — footer / lead-in / context can update while `visualState`
+     * stays `hurt`. Skipping the effect after cleanup faded the mixer leaves the rig frozen (no actions) until state
+     * changes (notably monster **light** strike vs merged player hurt timing).
+     */
     const sameAsClampedPrev =
+      playedClampedStateThisEffectRef.current &&
+      !syncKeyBump &&
+      prevState !== null &&
       prevState === rest.visualState &&
-      !shouldLoopVisualState(rest.visualState, !!rest.draculaLoopAngrySkill01);
+      !shouldLoopVisualState(rest.visualState, !!rest.draculaLoopAngrySkill01) &&
+      rest.visualState !== "hurt";
     if (sameAsClampedPrev) return;
-    const crossFade =
-      (prevState === "knockdown" && (rest.visualState === "recover" || rest.visualState === "defeated")) ||
-      (prevState === "hurt" && rest.visualState === "recover") ||
-      (prevState === "recover" && (rest.visualState === "idle" || rest.visualState === "neutral"));
-    const fadeDuration = crossFade ? 0.4 : 0.18;
-    if (!crossFade) mixer.stopAllAction();
+
+    if (
+      !syncKeyBump &&
+      attackToIdleRealignLockRef.current &&
+      prevState === "attack" &&
+      isMeshyPostAttackCalmState(rest.visualState) &&
+      rest.visualState !== "hunt" &&
+      rest.visualState !== "rolling"
+    ) {
+      return;
+    }
+
+    /** Same idea as `GltfSubject` recover chains — never `stopAllAction()` between these, or the rig flashes bind/T-pose. */
+    const recoverContinuityCrossFade =
+      !syncKeyBump &&
+      ((prevState === "knockdown" && (rest.visualState === "recover" || rest.visualState === "defeated")) ||
+        (prevState === "hurt" && rest.visualState === "recover") ||
+        (prevState === "recover" && (rest.visualState === "idle" || rest.visualState === "neutral")));
+    /**
+     * Hunt/rolling → strike: if we `stopAllAction()` when `pickDominantPlayingAction` returns null (e.g. low weight edge),
+     * the player snaps to rest pose before the attack clip — looks like a hard reset to “origin”. Keep the locomotion
+     * mixer alive and cross-fade into `attack` / `hurt` / `knockdown` instead.
+     */
+    const locomotionHandoffToStrike =
+      !syncKeyBump &&
+      (prevState === "hunt" || prevState === "rolling") &&
+      ((rest.isPlayerModel && rest.visualState === "attack") ||
+        (!rest.isPlayerModel &&
+          isMergedMeshyStrikePortraitType(rest.monsterType) &&
+          (rest.visualState === "attack" ||
+            rest.visualState === "hurt" ||
+            rest.visualState === "knockdown")));
+
+    const crossFade = recoverContinuityCrossFade || locomotionHandoffToStrike;
+    let fadeDuration = recoverContinuityCrossFade
+      ? 0.4
+      : locomotionHandoffToStrike
+        ? PLAYER_LOCOMOTION_TO_ATTACK_CROSSFADE_SEC
+        : 0.18;
+    if (!crossFade && rest.isPlayerModel && rest.visualState === "hurt") {
+      fadeDuration = Math.min(fadeDuration, 0.05);
+    }
+    if (syncKeyBump) fadeDuration = Math.min(fadeDuration, 0.06);
+
+    const tryWalkBack =
+      !syncKeyBump &&
+      !crossFade &&
+      prevState === "attack" &&
+      isMeshyPostAttackCalmState(rest.visualState) &&
+      rest.visualState !== "hunt" &&
+      rest.visualState !== "rolling" &&
+      (rest.isPlayerModel || isMergedMeshyStrikePortraitType(rest.monsterType));
+    if (tryWalkBack) {
+      const wb = resolveWalkFightBackClipName(rest.url, names, {
+        isPlayerModel: !!rest.isPlayerModel,
+        monsterType: rest.monsterType,
+      });
+      if (wb && actions[wb]) {
+        mixer.stopAllAction();
+        attackToIdleRealignLockRef.current = true;
+        const actWb = actions[wb]!;
+        actWb.reset();
+        actWb.setLoop(THREE.LoopOnce, 1);
+        actWb.clampWhenFinished = true;
+        let actForListener: THREE.AnimationAction | null = actWb;
+        let didNotify = false;
+        const notifyOnce = () => {
+          if (didNotify) return;
+          didNotify = true;
+          onFinishedRef.current?.();
+        };
+        const onWbFin = (e: THREE.AnimationMixerEventMap["finished"]) => {
+          if (e.action !== actForListener) return;
+          mixer.removeEventListener("finished", onWbFin);
+          actForListener = null;
+          const glbSlug = glbSlugFromPathOrUrl(rest.url);
+          const dHurt = draculaHurtRef.current;
+          const hurtCtx =
+            dHurt?.hp != null && dHurt?.maxHp != null ? { hp: dHurt.hp, maxHp: dHurt.maxHp } : dHurt ?? null;
+          const calmPick = rest.isPlayerModel
+            ? resolvePlayerAnimationClipName(rest.visualState, names, draculaVariantRef.current, {
+                fatalJumpKill: playerJumpKillRef.current,
+                playerHurtHpLost: playerHurtCtxRef.current?.hpLost,
+                playerHurtStrikeZone: playerHurtCtxRef.current?.strikeZone,
+                playerAttackClipCycleIndex: playerAttackCycleRef.current,
+              })
+            : resolveMonsterAnimationClipName(rest.visualState, names, {
+                monsterType: rest.monsterType,
+                glbSlug,
+                draculaAttackVariant: draculaVariantRef.current,
+                draculaHurtHp: hurtCtx,
+                draculaHurtStrikeZone: rest.draculaHurtStrikeZone ?? null,
+                draculaAngryLockSkill01: rest.draculaLoopAngrySkill01 && rest.visualState === "angry",
+              });
+          const loops = shouldLoopVisualState(rest.visualState, !!rest.draculaLoopAngrySkill01);
+          const onCalmFin = (ev: THREE.AnimationMixerEventMap["finished"]) => {
+            if (ev.action !== actForListener) return;
+            mixer.removeEventListener("finished", onCalmFin);
+            actForListener = null;
+            notifyOnce();
+          };
+          if (calmPick && actions[calmPick]) {
+            const act = actions[calmPick]!;
+            act.reset();
+            applyPlayerHurtClipContactSync(
+              act,
+              !!rest.isPlayerModel,
+              rest.visualState,
+              playerHurtStartRef.current,
+              !!playerJumpKillRef.current,
+            );
+            applyMonsterHurtClipContactSync(act, !!rest.isPlayerModel, rest.visualState, monsterHurtStartRef.current);
+            if (loops) {
+              act.setLoop(THREE.LoopRepeat, Infinity);
+              act.clampWhenFinished = false;
+            } else {
+              act.setLoop(THREE.LoopOnce, 1);
+              act.clampWhenFinished = true;
+              if (onFinishedRef.current) {
+                actForListener = act;
+                mixer.addEventListener("finished", onCalmFin);
+              }
+            }
+            act.fadeIn(fadeDuration).play();
+          }
+          attackToIdleRealignLockRef.current = false;
+          prevVisualStateRef.current = rest.visualState;
+          invalidate();
+        };
+        mixer.addEventListener("finished", onWbFin);
+        actWb.fadeIn(0.12).play();
+        playedClampedStateThisEffectRef.current = true;
+        invalidate();
+        return () => {
+          playedClampedStateThisEffectRef.current = false;
+          attackToIdleRealignLockRef.current = false;
+          mixer.removeEventListener("finished", onWbFin);
+          for (const a of Object.values(actions)) {
+            a?.fadeOut(0.12);
+          }
+        };
+      }
+    }
+
+    prevVisualStateRef.current = rest.visualState;
+
+    const mergedLocomotionIntoStrike = locomotionHandoffToStrike;
+
+    const outgoingLocomotion = mergedLocomotionIntoStrike
+      ? pickLocomotionHandoffOutgoing(
+          actions,
+          names,
+          rest.url,
+          prevState,
+          !!rest.isPlayerModel,
+          rest.monsterType,
+          draculaVariantRef.current,
+          {
+            draculaHurtHp: draculaHurtRef.current,
+            draculaHurtStrikeZone: rest.draculaHurtStrikeZone ?? null,
+          },
+        )
+      : null;
+
+    /**
+     * `crossFade` already covers `locomotionHandoffToStrike` so we skip `stopAllAction` and blend out hunt/rolling.
+     * Still allow an explicit `crossFadeTo` when we can name the outgoing action (often smoother than parallel fades).
+     */
+    if (!crossFade && !(mergedLocomotionIntoStrike && outgoingLocomotion)) {
+      mixer.stopAllAction();
+    }
 
     const glbSlug = glbSlugFromPathOrUrl(rest.url);
     const dHurt = draculaHurtRef.current;
@@ -391,12 +1005,16 @@ function PositionedGltfSubject(
     const pick = rest.isPlayerModel
       ? resolvePlayerAnimationClipName(rest.visualState, names, draculaVariantRef.current, {
           fatalJumpKill: playerJumpKillRef.current,
+          playerHurtHpLost: playerHurtCtxRef.current?.hpLost,
+          playerHurtStrikeZone: playerHurtCtxRef.current?.strikeZone,
+          playerAttackClipCycleIndex: playerAttackCycleRef.current,
         })
       : resolveMonsterAnimationClipName(rest.visualState, names, {
           monsterType: rest.monsterType,
           glbSlug,
           draculaAttackVariant: draculaVariantRef.current,
           draculaHurtHp: hurtCtx,
+          draculaHurtStrikeZone: rest.draculaHurtStrikeZone ?? null,
           draculaAngryLockSkill01: rest.draculaLoopAngrySkill01 && rest.visualState === "angry",
         });
     const loops = shouldLoopVisualState(rest.visualState, !!rest.draculaLoopAngrySkill01);
@@ -412,14 +1030,62 @@ function PositionedGltfSubject(
     if (pick && actions[pick]) {
       const act = actions[pick]!;
       act.reset();
+      applyPlayerHurtClipContactSync(
+        act,
+        !!rest.isPlayerModel,
+        rest.visualState,
+        playerHurtStartRef.current,
+        !!playerJumpKillRef.current,
+      );
+      applyMonsterHurtClipContactSync(act, !!rest.isPlayerModel, rest.visualState, monsterHurtStartRef.current);
+      applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackLeadRef.current);
       if (loops) { act.setLoop(THREE.LoopRepeat, Infinity); act.clampWhenFinished = false; }
       else { act.setLoop(THREE.LoopOnce, 1); act.clampWhenFinished = true; if (onFinishedRef.current) { actForListener = act; mixer.addEventListener("finished", onFin); } }
-      if (crossFade) { for (const a of Object.values(actions)) { if (a && a !== act) a.fadeOut(fadeDuration); } }
-      act.fadeIn(fadeDuration).play();
+      const useLocomotionCross =
+        mergedLocomotionIntoStrike &&
+        outgoingLocomotion &&
+        outgoingLocomotion !== act &&
+        (outgoingLocomotion.getEffectiveWeight() > 1e-4 || outgoingLocomotion.isRunning());
+      if (useLocomotionCross) {
+        act.play();
+        outgoingLocomotion.crossFadeTo(act, PLAYER_LOCOMOTION_TO_ATTACK_CROSSFADE_SEC, false);
+      } else {
+        if (crossFade) { for (const a of Object.values(actions)) { if (a && a !== act) a.fadeOut(fadeDuration); } }
+        act.fadeIn(fadeDuration).play();
+      }
+      playedClampedStateThisEffectRef.current = true;
     }
     invalidate();
-    return () => { if (actForListener) { mixer.removeEventListener("finished", onFin); actForListener = null; } for (const a of Object.values(actions)) { a?.fadeOut(0.12); } };
-  }, [actions, names, mixer, rest.url, rest.visualState, rest.monsterType, rest.draculaLoopAngrySkill01, rest.isPlayerModel]);
+    return () => {
+      playedClampedStateThisEffectRef.current = false;
+      if (actForListener) {
+        mixer.removeEventListener("finished", onFin);
+        actForListener = null;
+      }
+      for (const a of Object.values(actions)) {
+        a?.fadeOut(0.12);
+      }
+    };
+  }, [
+    actions,
+    names,
+    mixer,
+    rest.url,
+    rest.visualState,
+    rest.monsterType,
+    rest.draculaLoopAngrySkill01,
+    rest.isPlayerModel,
+    rest.draculaAttackVariant,
+    rest.playerFatalJumpKill,
+    rest.playerHurtClipStartTimeSec,
+    playerHurtAnimKey,
+    hurtHpKey,
+    hurtZoneKey,
+    animationSyncKey,
+    playerAttackClipLeadInSec,
+    playerAttackClipCycleIndex,
+    monsterHurtClipStartTimeSec,
+  ]);
 
   const scale = (rest.tightFraming ? 1.14 : 1) * (rest.isPlayerModel ? 0.9 : (rest.monsterType === "V" || rest.monsterType === "K" || rest.monsterType === "Z" || rest.monsterType === "S" || rest.monsterType === "L" ? 0.9 : 1));
 
@@ -481,6 +1147,7 @@ function Scene({
   monsterType,
   draculaAttackVariant,
   draculaHurtHp,
+  draculaHurtStrikeZone,
   draculaLoopAngrySkill01,
   onOneShotAnimationFinished,
   meshyCameraBases,
@@ -492,6 +1159,7 @@ function Scene({
   monsterType?: MonsterType | null;
   draculaAttackVariant?: "spell" | "skill" | "light";
   draculaHurtHp?: { hp: number; maxHp: number } | null;
+  draculaHurtStrikeZone?: StrikeTarget | null;
   draculaLoopAngrySkill01?: boolean;
   onOneShotAnimationFinished?: () => void;
   meshyCameraBases?: { baseZ: number; baseY: number; baseFov: number } | null;
@@ -518,6 +1186,7 @@ function Scene({
         monsterType={monsterType}
         draculaAttackVariant={draculaAttackVariant}
         draculaHurtHp={draculaHurtHp}
+        draculaHurtStrikeZone={draculaHurtStrikeZone}
         draculaLoopAngrySkill01={draculaLoopAngrySkill01}
         onOneShotAnimationFinished={onOneShotAnimationFinished}
         isPlayerModel={isPlayerModel}
@@ -534,6 +1203,7 @@ export function Monster3dGltfSceneContent({
   monsterType = null,
   draculaAttackVariant,
   draculaHurtHp,
+  draculaHurtStrikeZone,
   draculaLoopAngrySkill01,
   onOneShotAnimationFinished,
   meshyCameraBases = null,
@@ -544,6 +1214,7 @@ export function Monster3dGltfSceneContent({
   monsterType?: MonsterType | null;
   draculaAttackVariant?: "spell" | "skill" | "light";
   draculaHurtHp?: { hp: number; maxHp: number } | null;
+  draculaHurtStrikeZone?: StrikeTarget | null;
   draculaLoopAngrySkill01?: boolean;
   onOneShotAnimationFinished?: () => void;
   meshyCameraBases?: { baseZ: number; baseY: number; baseFov: number } | null;
@@ -556,6 +1227,7 @@ export function Monster3dGltfSceneContent({
       monsterType={monsterType}
       draculaAttackVariant={draculaAttackVariant}
       draculaHurtHp={draculaHurtHp}
+      draculaHurtStrikeZone={draculaHurtStrikeZone}
       draculaLoopAngrySkill01={draculaLoopAngrySkill01}
       onOneShotAnimationFinished={onOneShotAnimationFinished}
       meshyCameraBases={meshyCameraBases}
@@ -576,6 +1248,7 @@ export function MonsterModel3D({
   onOneShotAnimationFinished,
   draculaAttackVariant,
   draculaHurtHp,
+  draculaHurtStrikeZone,
   draculaLoopAngrySkill01,
 }: MonsterModel3DProps) {
   const isDracula = monsterType === "V";
@@ -653,6 +1326,7 @@ export function MonsterModel3D({
             monsterType={monsterType}
             draculaAttackVariant={draculaAttackVariant}
             draculaHurtHp={draculaHurtHp}
+            draculaHurtStrikeZone={draculaHurtStrikeZone}
             draculaLoopAngrySkill01={draculaLoopAngrySkill01}
             onOneShotAnimationFinished={onOneShotAnimationFinished}
             meshyCameraBases={meshyCameraBases}
@@ -826,9 +1500,21 @@ export interface CombatScene3DProps {
   draculaAttackVariant?: "spell" | "skill" | "light";
   playerAttackVariant?: "spell" | "skill" | "light";
   draculaHurtHp?: { hp: number; maxHp: number } | null;
+  /** Dracula: head/body/legs from strike pick — aim-based hurt clips; legs biases knockdown to `falling_down` first. */
+  draculaHurtStrikeZone?: StrikeTarget | null;
   draculaLoopAngrySkill01?: boolean;
   /** Lethal Jumping_Punch (spell) — player plays `Shot_and_Fall_Backward` while hurt. */
   playerFatalJumpKill?: boolean;
+  /** Monster hit: HP lost + optional strike zone for standing hurt clips (face / waist / fall). */
+  playerHurtAnimContext?: { hpLost: number; strikeZone?: StrikeTarget } | null;
+  /** Seconds to skip into player `hurt` clip for contact sync with merged monster attack. */
+  playerHurtClipStartTimeSec?: number;
+  /** Player `attack`: skip into clip (`combat3dContact` / `resolveCombat3dClipLeads`). */
+  playerAttackClipLeadInSec?: number;
+  /** Monster `hurt`: skip into reaction clip when player connects (spell/skill rows in `PLAYER_HITS_MONSTER`). */
+  monsterHurtClipStartTimeSec?: number;
+  /** Rotates player `attack` clip try-order when the same strike tier is picked repeatedly during one roll. */
+  playerAttackClipCycleIndex?: number;
   onOneShotAnimationFinished?: () => void;
   width: number;
   height: number;
@@ -840,6 +1526,11 @@ export interface CombatScene3DProps {
   onStrikeTargetPick?: (target: StrikeTarget) => void;
   /** While dice roll: 0–1 lerp from idle spacing toward close range (fighters advance). */
   rollingApproachBlend?: number;
+  /**
+   * When set (face-off lab only), both rigs restart their clips from the same key change — paired sync.
+   * Do not pass from `LabyrinthGame` (would restart every unrelated render if mis-keyed).
+   */
+  faceOffAnimationSyncKey?: string;
 }
 
 /** Same vertical splits as `CombatStrikeZonePicker` raycast (legs / body / head). */
@@ -888,6 +1579,88 @@ function CombatStrikeZonePicker({
     return () => el.removeEventListener("pointerdown", onDown);
   }, [enabled, camera, gl, monsterRootRef, ndc, raycaster]);
   return null;
+}
+
+/** Inside Canvas + Suspense: after both GLTF mixers exist, bump a stamp so clips start together (avoids staggered load). */
+function CombatFaceOffPairedSubjects({
+  faceOffAnimationSyncKey,
+  pUrl,
+  mUrl,
+  playerEl,
+  monsterEl,
+}: {
+  faceOffAnimationSyncKey: string;
+  pUrl: string;
+  mUrl: string;
+  playerEl: React.ReactElement;
+  monsterEl: React.ReactElement;
+}) {
+  const [pairStamp, setPairStamp] = useState(-1);
+  const [gateToken, setGateToken] = useState(0);
+  const gateReadyRef = useRef({ player: false, monster: false });
+  const ackTokenRef = useRef({ player: -1, monster: -1 });
+  /** Monotonic suffix so `|pairN` never collides after URL swaps (face-off key string may repeat). */
+  const pairSeqRef = useRef(0);
+  const syncBase = `${pUrl}\0${mUrl}\0${faceOffAnimationSyncKey}`;
+  const prevBaseRef = useRef("");
+
+  useLayoutEffect(() => {
+    if (prevBaseRef.current === syncBase) return;
+    const prev = prevBaseRef.current;
+    prevBaseRef.current = syncBase;
+    gateReadyRef.current = { player: false, monster: false };
+    ackTokenRef.current = { player: -1, monster: -1 };
+    setGateToken((t) => t + 1);
+    if (prev !== "") {
+      const [pp, pm] = prev.split("\0");
+      const [np, nm] = syncBase.split("\0");
+      if (pp !== np || pm !== nm) setPairStamp(-1);
+    }
+  }, [syncBase]);
+
+  const onPairPlaybackMixerReady = useCallback(
+    (role: "player" | "monster", token: number) => {
+      if (token !== gateToken) return;
+      if (role === "player") {
+        if (ackTokenRef.current.player === token) return;
+        ackTokenRef.current.player = token;
+      } else {
+        if (ackTokenRef.current.monster === token) return;
+        ackTokenRef.current.monster = token;
+      }
+      gateReadyRef.current[role] = true;
+      if (gateReadyRef.current.player && gateReadyRef.current.monster) {
+        setPairStamp((p) => {
+          if (p >= 0) return p;
+          pairSeqRef.current += 1;
+          return pairSeqRef.current;
+        });
+      }
+    },
+    [gateToken]
+  );
+
+  const animationSyncKey =
+    faceOffAnimationSyncKey && pairStamp >= 0
+      ? `${faceOffAnimationSyncKey}|pair${pairStamp}`
+      : undefined;
+
+  return (
+    <>
+      {React.cloneElement(playerEl, {
+        animationSyncKey,
+        pairGateToken: gateToken,
+        pairPlaybackRole: "player" as const,
+        onPairPlaybackMixerReady,
+      })}
+      {React.cloneElement(monsterEl, {
+        animationSyncKey,
+        pairGateToken: gateToken,
+        pairPlaybackRole: "monster" as const,
+        onPairPlaybackMixerReady,
+      })}
+    </>
+  );
 }
 
 /** Wheel / dolly zoom stays centered on the orbit target (no drei damping drift; no two-finger pan mixed into pinch). */
@@ -959,8 +1732,14 @@ export function CombatScene3D({
   draculaAttackVariant,
   playerAttackVariant,
   draculaHurtHp,
+  draculaHurtStrikeZone,
   draculaLoopAngrySkill01,
   playerFatalJumpKill = false,
+  playerHurtAnimContext = null,
+  playerHurtClipStartTimeSec = 0,
+  playerAttackClipLeadInSec = 0,
+  monsterHurtClipStartTimeSec = 0,
+  playerAttackClipCycleIndex = 0,
   onOneShotAnimationFinished,
   width,
   height,
@@ -969,6 +1748,7 @@ export function CombatScene3D({
   strikePickActive = false,
   onStrikeTargetPick,
   rollingApproachBlend = 0,
+  faceOffAnimationSyncKey,
 }: CombatScene3DProps) {
   const monsterHitRootRef = useRef<THREE.Group | null>(null);
   const isMergedMeshy = monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L";
@@ -1063,28 +1843,76 @@ export function CombatScene3D({
           <ambientLight intensity={0.38} />
           <directionalLight position={[3.2, 5.5, 2.8]} intensity={1.05} />
           <directionalLight position={[-2.5, 2.5, 4]} intensity={0.35} />
-          <PositionedGltfSubject
-            url={pUrl}
-            visualState={playerVisualState}
-            tightFraming={false}
-            isPlayerModel
-            draculaAttackVariant={playerAttackVariant}
-            playerFatalJumpKill={playerFatalJumpKill}
-            positionX={playerPosX}
-            weaponUrl={armourGltfPath}
-          />
-          <PositionedGltfSubject
-            url={mUrl}
-            visualState={monsterVisualState}
-            tightFraming={false}
-            monsterType={monsterType}
-            draculaAttackVariant={draculaAttackVariant}
-            draculaHurtHp={draculaHurtHp}
-            draculaLoopAngrySkill01={draculaLoopAngrySkill01}
-            onOneShotAnimationFinished={onOneShotAnimationFinished}
-            positionX={monsterPosX}
-            hitRootRef={monsterHitRootRef}
-          />
+          {faceOffAnimationSyncKey != null && faceOffAnimationSyncKey !== "" ? (
+            <CombatFaceOffPairedSubjects
+              faceOffAnimationSyncKey={faceOffAnimationSyncKey}
+              pUrl={pUrl}
+              mUrl={mUrl}
+              playerEl={
+                <PositionedGltfSubject
+                  url={pUrl}
+                  visualState={playerVisualState}
+                  tightFraming={false}
+                  isPlayerModel
+                  draculaAttackVariant={playerAttackVariant}
+                  playerFatalJumpKill={playerFatalJumpKill}
+                  playerHurtAnimContext={playerHurtAnimContext}
+                  playerHurtClipStartTimeSec={playerHurtClipStartTimeSec}
+                  playerAttackClipLeadInSec={playerAttackClipLeadInSec}
+                  playerAttackClipCycleIndex={playerAttackClipCycleIndex}
+                  positionX={playerPosX}
+                  weaponUrl={armourGltfPath}
+                />
+              }
+              monsterEl={
+                <PositionedGltfSubject
+                  url={mUrl}
+                  visualState={monsterVisualState}
+                  tightFraming={false}
+                  monsterType={monsterType}
+                  draculaAttackVariant={draculaAttackVariant}
+                  draculaHurtHp={draculaHurtHp}
+                  draculaHurtStrikeZone={draculaHurtStrikeZone}
+                  draculaLoopAngrySkill01={draculaLoopAngrySkill01}
+                  onOneShotAnimationFinished={onOneShotAnimationFinished}
+                  positionX={monsterPosX}
+                  hitRootRef={monsterHitRootRef}
+                  monsterHurtClipStartTimeSec={monsterHurtClipStartTimeSec}
+                />
+              }
+            />
+          ) : (
+            <>
+              <PositionedGltfSubject
+                url={pUrl}
+                visualState={playerVisualState}
+                tightFraming={false}
+                isPlayerModel
+                draculaAttackVariant={playerAttackVariant}
+                playerFatalJumpKill={playerFatalJumpKill}
+                playerHurtAnimContext={playerHurtAnimContext}
+                playerHurtClipStartTimeSec={playerHurtClipStartTimeSec}
+                playerAttackClipLeadInSec={playerAttackClipLeadInSec}
+                playerAttackClipCycleIndex={playerAttackClipCycleIndex}
+                positionX={playerPosX}
+                weaponUrl={armourGltfPath}
+              />
+              <PositionedGltfSubject
+                url={mUrl}
+                visualState={monsterVisualState}
+                tightFraming={false}
+                monsterType={monsterType}
+                draculaAttackVariant={draculaAttackVariant}
+                draculaHurtHp={draculaHurtHp}
+                draculaHurtStrikeZone={draculaHurtStrikeZone}
+                draculaLoopAngrySkill01={draculaLoopAngrySkill01}
+                onOneShotAnimationFinished={onOneShotAnimationFinished}
+                positionX={monsterPosX}
+                hitRootRef={monsterHitRootRef}
+                monsterHurtClipStartTimeSec={monsterHurtClipStartTimeSec}
+              />
+            </>
+          )}
           {strikePickActive && onStrikeTargetPick ? (
             <CombatStrikeZonePicker
               monsterRootRef={monsterHitRootRef}

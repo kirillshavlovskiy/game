@@ -1,5 +1,5 @@
-import dynamic from "next/dynamic";
 import type { MonsterType } from "@/lib/labyrinth";
+import { Monster3dAnimationsLabs } from "./Monster3dAnimationsLabs";
 import { getMonsterName } from "@/lib/labyrinth";
 import {
   getMonsterGltfPathForReference,
@@ -208,31 +208,6 @@ function formatTypeReferenceClips(type: MonsterType, state: Monster3DSpriteState
   return getPreferredClipNamesForState(state, type, slug).join(" → ");
 }
 
-const Monster3dReferenceViewer = dynamic(
-  () => import("@/components/Monster3dReferenceViewer").then((m) => m.Monster3dReferenceViewer),
-  {
-    ssr: false,
-    loading: () => (
-      <div
-        style={{
-          height: 320,
-          marginBottom: 32,
-          borderRadius: 12,
-          background: "rgba(0,0,0,0.35)",
-          border: "1px solid rgba(255,152,103,0.15)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#7a7088",
-          fontSize: "0.9rem",
-        }}
-      >
-        Loading 3D preview…
-      </div>
-    ),
-  }
-);
-
 export const metadata = {
   title: "Monster 3D — animation clip map",
   description:
@@ -281,6 +256,11 @@ export default function Monster3dAnimationsReferencePage() {
           match, and substitutes similar moves otherwise (e.g. <code>Left_Slash</code> / <code>Triple_Combo_Attack</code>{" "}
           instead of <code>Jumping_Punch</code>). See <code style={{ color: "#c4b8d4" }}>lib/monsterModels3d.ts</code>.
         </p>
+        <p style={{ marginBottom: 20, color: "#b8c8e8", fontSize: "0.9rem" }}>
+          <strong>Below:</strong> <em>Live 3D preview</em> — monster type + portrait state (and attack priority on merged rigs).{" "}
+          <em>Combat face-off lab</em> — only <strong>monster</strong> + <strong>scenario</strong> menus; spacing and clip sync
+          come from <code style={{ color: "#c4b8d4" }}>lib/combat3dContact.ts</code> (idle → hunt → fight).
+        </p>
 
         <div
           style={{
@@ -300,7 +280,7 @@ export default function Monster3dAnimationsReferencePage() {
           interrupted builds).
         </div>
 
-        <Monster3dReferenceViewer />
+        <Monster3dAnimationsLabs />
 
         <h2 style={{ fontSize: "1.15rem", marginBottom: 12, color: "#b8f0c8" }}>Portrait state → GLB + clip priority</h2>
         <div style={{ overflowX: "auto", marginBottom: 36 }}>
