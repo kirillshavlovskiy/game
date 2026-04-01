@@ -136,7 +136,8 @@ import {
   STORED_ARTIFACT_TOOLTIP,
   storedArtifactKindFromCell,
   peekRevealBatchSize,
-  isStoredArtifactMapOnly,
+  isStoredArtifactMazePhaseOnly,
+  isStoredArtifactCombatPhaseOnly,
   type MonsterType,
   type StoredArtifactKind,
   DEFAULT_PLAYER_HP,
@@ -639,13 +640,13 @@ function storedArtifactCount(
   }
 }
 
-/** Any stored stack the combat modal may show (map-only kinds are maze-phase only — see `isStoredArtifactMapOnly`). */
+/** Stored stacks the combat Skills row may offer (excludes maze-phase-only kinds). */
 function hasCombatVisibleStoredArtifacts(
   p: Parameters<typeof storedArtifactCount>[0]
 ): boolean {
   if (!p) return false;
   return STORED_ARTIFACT_ORDER.some(
-    (k) => !isStoredArtifactMapOnly(k) && storedArtifactCount(p, k) > 0
+    (k) => !isStoredArtifactMazePhaseOnly(k) && storedArtifactCount(p, k) > 0
   );
 }
 
@@ -3421,8 +3422,11 @@ export default function LabyrinthGame() {
     const actions: MobileDockAction[] = [];
     if ((p.bombs ?? 0) > 0) actions.push("bomb");
     if ((p.catapultCharges ?? 0) > 0) actions.push("catapultCharge");
+    const inCombatArtifacts = !!combatState;
     for (const k of STORED_ARTIFACT_ORDER) {
-      if (storedArtifactCount(p, k) > 0) actions.push(k);
+      if (storedArtifactCount(p, k) <= 0) continue;
+      if (isStoredArtifactCombatPhaseOnly(k) && !inCombatArtifacts) continue;
+      actions.push(k);
     }
     if (actions.length === 0) {
       setMobileDockAction(null);
@@ -3438,7 +3442,7 @@ export default function LabyrinthGame() {
       }
       return actions[0]!;
     });
-  }, [isMobile, lab, currentPlayer, winner, mobileDockExpanded, isoImmersiveUi]);
+  }, [isMobile, lab, currentPlayer, winner, mobileDockExpanded, isoImmersiveUi, combatState]);
 
   const fogIntensityMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -5577,8 +5581,8 @@ export default function LabyrinthGame() {
       if (!cp) return;
       const n = storedArtifactCount(cp, type);
       if (n <= 0) return;
-      /** Map-phase items: teleport / reveal / healing / torch are not spent during combat. */
-      if (inCombat && isStoredArtifactMapOnly(type)) return;
+      if (inCombat && isStoredArtifactMazePhaseOnly(type)) return;
+      if (!inCombat && isStoredArtifactCombatPhaseOnly(type)) return;
       if (type === "healing" && (cp.hp ?? DEFAULT_PLAYER_HP) >= DEFAULT_PLAYER_HP) return;
       if (type === "reveal") {
         const totalDiamonds = lab.players.reduce((s, pl) => s + (pl.diamonds ?? 0), 0);
@@ -5657,6 +5661,11 @@ export default function LabyrinthGame() {
         p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
         p.hp = Math.min(DEFAULT_PLAYER_HP, (p.hp ?? DEFAULT_PLAYER_HP) + 1);
         setHealingGained(true);
+      } else if (type === "torch") {
+        p.artifactTorch!--;
+        p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
+        p.hasTorch = true;
+        setTorchGained(true);
       } else if (type === "holySword") {
         p.artifactHolySword!--;
         p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
@@ -7683,7 +7692,8 @@ export default function LabyrinthGame() {
   const bombUseDisabled = !cp || (cp?.bombs ?? 0) <= 0 || (moveDisabled && !combatState);
   const artifactUseDisabledDock = (kind: StoredArtifactKind) => {
     if (!cp) return true;
-    if (inCombatDock && isStoredArtifactMapOnly(kind)) return true;
+    if (inCombatDock && isStoredArtifactMazePhaseOnly(kind)) return true;
+    if (!inCombatDock && isStoredArtifactCombatPhaseOnly(kind)) return true;
     if (kind === "healing" && (cp.hp ?? DEFAULT_PLAYER_HP) >= DEFAULT_PLAYER_HP) return true;
     if (kind === "reveal" && peekRevealBatchSize(lab, totalDiamondsDock) <= 0) return true;
     return false;
@@ -7709,7 +7719,9 @@ export default function LabyrinthGame() {
   if ((cp?.catapultCharges ?? 0) > 0) dockActions.push({ id: "catapultCharge", n: cp!.catapultCharges ?? 0 });
   for (const k of STORED_ARTIFACT_ORDER) {
     const n = storedArtifactCount(cp, k);
-    if (n > 0) dockActions.push({ id: k, n });
+    if (n <= 0) continue;
+    if (isStoredArtifactCombatPhaseOnly(k) && !inCombatDock) continue;
+    dockActions.push({ id: k, n });
   }
 
   /** While true, bottom “Items” / bomb row is replaced by slingshot · magic · teleport · immersive item prompts. */
@@ -9738,7 +9750,7 @@ export default function LabyrinthGame() {
                           {STORED_ARTIFACT_ORDER.map((kind) => {
                             const n = storedArtifactCount(cp, kind);
                             if (n <= 0) return null;
-                            if (isStoredArtifactMapOnly(kind)) return null;
+                            if (isStoredArtifactMazePhaseOnly(kind)) return null;
                             if (kind === "dice") {
                               return (
                                 <CombatSkillItemIcon
@@ -9805,7 +9817,7 @@ export default function LabyrinthGame() {
                             padding: "0 2px",
                           }}
                         >
-                          Artifacts {(cp.artifacts ?? 0)}/3 — map only
+                          Artifacts {(cp.artifacts ?? 0)}/3 — maze-phase only (use on map)
                         </span>
                       ) : (
                         <span
@@ -12042,12 +12054,13 @@ export default function LabyrinthGame() {
                                 {STORED_ARTIFACT_ORDER.map((kind) => {
                                   const n = storedArtifactCount(cp, kind);
                                   if (n <= 0) return null;
-                                  const mapOnlyLocked = inCombatDock && isStoredArtifactMapOnly(kind);
+                                  const mazeOnlyLocked = inCombatDock && isStoredArtifactMazePhaseOnly(kind);
+                                  const combatOnlyLocked = !inCombatDock && isStoredArtifactCombatPhaseOnly(kind);
                                   const healFull =
                                     kind === "healing" && (cp?.hp ?? DEFAULT_PLAYER_HP) >= DEFAULT_PLAYER_HP;
                                   const cantReveal =
                                     kind === "reveal" && peekRevealBatchSize(lab, totalDiamondsDock) <= 0;
-                                  const disabled = !cp || mapOnlyLocked || healFull || cantReveal;
+                                  const disabled = !cp || mazeOnlyLocked || combatOnlyLocked || healFull || cantReveal;
                                   return (
                                     <button
                                       key={kind}
@@ -12072,13 +12085,15 @@ export default function LabyrinthGame() {
                                       }}
                                       title={
                                         `${STORED_ARTIFACT_TITLE[kind]} ×${n} — ` +
-                                        (mapOnlyLocked
+                                        (mazeOnlyLocked
                                           ? `${STORED_ARTIFACT_TOOLTIP[kind]} (not during combat)`
-                                          : healFull
-                                            ? "Already at full HP"
-                                            : cantReveal
-                                              ? "Nothing hidden to reveal right now"
-                                              : STORED_ARTIFACT_TOOLTIP[kind])
+                                          : combatOnlyLocked
+                                            ? `${STORED_ARTIFACT_TOOLTIP[kind]} (use during combat)`
+                                            : healFull
+                                              ? "Already at full HP"
+                                              : cantReveal
+                                                ? "Nothing hidden to reveal right now"
+                                                : STORED_ARTIFACT_TOOLTIP[kind])
                                       }
                                     >
                                       <BottomDockInventoryIcon variant={storedArtifactIconVariant(kind)} />
@@ -13946,10 +13961,11 @@ export default function LabyrinthGame() {
                     {STORED_ARTIFACT_ORDER.map((kind) => {
                       const n = storedArtifactCount(cp, kind);
                       if (n <= 0) return null;
-                      const mapOnlyLocked = inCombatDock && isStoredArtifactMapOnly(kind);
+                      const mazeOnlyLocked = inCombatDock && isStoredArtifactMazePhaseOnly(kind);
+                      const combatOnlyLocked = !inCombatDock && isStoredArtifactCombatPhaseOnly(kind);
                       const healFull = kind === "healing" && (cp?.hp ?? DEFAULT_PLAYER_HP) >= DEFAULT_PLAYER_HP;
                       const cantReveal = kind === "reveal" && peekRevealBatchSize(lab, totalDiamondsDock) <= 0;
-                      const disabled = !cp || mapOnlyLocked || healFull || cantReveal;
+                      const disabled = !cp || mazeOnlyLocked || combatOnlyLocked || healFull || cantReveal;
                       return (
                         <button
                           key={kind}
@@ -13973,7 +13989,13 @@ export default function LabyrinthGame() {
                             fontWeight: 700,
                             opacity: disabled ? 0.45 : 1,
                           }}
-                          title={STORED_ARTIFACT_TOOLTIP[kind]}
+                          title={
+                            mazeOnlyLocked
+                              ? `${STORED_ARTIFACT_TOOLTIP[kind]} (not during combat)`
+                              : combatOnlyLocked
+                                ? `${STORED_ARTIFACT_TOOLTIP[kind]} (use during combat)`
+                                : STORED_ARTIFACT_TOOLTIP[kind]
+                          }
                         >
                           <BottomDockInventoryIcon variant={storedArtifactIconVariant(kind)} />
                           ×{n}
@@ -14315,10 +14337,11 @@ export default function LabyrinthGame() {
               {STORED_ARTIFACT_ORDER.map((kind) => {
                 const n = storedArtifactCount(cp, kind);
                 if (n <= 0) return null;
-                const mapOnlyLocked = inCombatDock && isStoredArtifactMapOnly(kind);
+                const mazeOnlyLocked = inCombatDock && isStoredArtifactMazePhaseOnly(kind);
+                const combatOnlyLocked = !inCombatDock && isStoredArtifactCombatPhaseOnly(kind);
                 const healFull = kind === "healing" && (cp?.hp ?? DEFAULT_PLAYER_HP) >= DEFAULT_PLAYER_HP;
                 const cantReveal = kind === "reveal" && peekRevealBatchSize(lab, totalDiamondsDock) <= 0;
-                const disabled = !cp || mapOnlyLocked || healFull || cantReveal;
+                const disabled = !cp || mazeOnlyLocked || combatOnlyLocked || healFull || cantReveal;
                 return (
                   <button
                     key={kind}
@@ -14329,7 +14352,7 @@ export default function LabyrinthGame() {
                       ...buttonStyle,
                               flex: "0 0 auto",
                               display: "flex",
-                              flexDirection: "column",
+                      flexDirection: "column",
                       alignItems: "center",
                               gap: 4,
                               padding: "8px 12px",
@@ -14343,12 +14366,14 @@ export default function LabyrinthGame() {
                     }}
                     title={
                               `${STORED_ARTIFACT_TITLE[kind]} ×${n} — ` +
-                              (mapOnlyLocked
+                              (mazeOnlyLocked
                         ? `${STORED_ARTIFACT_TOOLTIP[kind]} (not during combat)`
-                        : healFull
-                          ? "Already at full HP"
-                          : cantReveal
-                            ? "Nothing hidden to reveal right now"
+                        : combatOnlyLocked
+                          ? `${STORED_ARTIFACT_TOOLTIP[kind]} (use during combat)`
+                          : healFull
+                            ? "Already at full HP"
+                            : cantReveal
+                              ? "Nothing hidden to reveal right now"
                                     : STORED_ARTIFACT_TOOLTIP[kind])
                             }
                           >
