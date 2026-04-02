@@ -668,6 +668,7 @@ function PlayerMarker({
     fatalJump: boolean;
   } | null;
 }) {
+  const { camera } = useThree();
   const groupRef = useRef<THREE.Group>(null);
   const modelAnchorRef = useRef<THREE.Group>(null);
   const targetPos = useRef(new THREE.Vector3(playerX * CS, FLOOR_Y + 0.02, playerY * CS));
@@ -704,22 +705,22 @@ function PlayerMarker({
     queuedCombatPulseRef.current = true;
   }, [combatPulse]);
 
-  const { camera } = useThree();
-
   useFrame(() => {
     if (!groupRef.current) return;
-    const camToTarget = new THREE.Vector3().subVectors(targetPos.current, camera.position);
-    camToTarget.y = 0;
-    if (camToTarget.lengthSq() > 1e-6) {
-      targetYawRef.current = Math.atan2(camToTarget.x, camToTarget.z);
-    }
     if (!didInitPosRef.current) {
       groupRef.current.position.copy(targetPos.current);
       groupRef.current.rotation.y = targetYawRef.current;
       didInitPosRef.current = true;
     }
     groupRef.current.position.lerp(targetPos.current, 0.08);
-    // Smooth shortest-path turn to avoid 90-degree snap.
+
+    const cdx = groupRef.current.position.x - camera.position.x;
+    const cdz = groupRef.current.position.z - camera.position.z;
+    const cLen = Math.sqrt(cdx * cdx + cdz * cdz);
+    if (cLen > 0.01) {
+      targetYawRef.current = Math.atan2(cdx, cdz);
+    }
+
     const delta = THREE.MathUtils.euclideanModulo(targetYawRef.current - groupRef.current.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
     groupRef.current.rotation.y += delta * 0.14;
     const transit = groupRef.current.position.distanceTo(targetPos.current);
