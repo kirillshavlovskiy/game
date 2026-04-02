@@ -1301,8 +1301,18 @@ export function glbSlugFromPathOrUrl(pathOrUrl: string): string | null {
   return m ? m[1] : null;
 }
 
-/** Meshy `Walk_Fight_Back` exports (incl. numbered takes) — append to merged GLBs to enable post-attack reposition. */
-const MESHY_WALK_FIGHT_BACK_CLIP_ORDER = ["Walk_Fight_Back", "Walk_Fight_Back_1", "Walk_Fight_Back_2", "Walk_Fight_Back_3"] as const;
+/**
+ * Meshy retreat clips after forward attack root-motion. **Must exist inside** the runtime GLB (`wasteland-drifter.glb`
+ * for the player) — `CombatScene3D` / combat modal already chains them via `tryWalkBack` in `MonsterModel3D`.
+ * Source exports (merge in Blender → same armature as drifter): `public/models/player/animation-overrides/meshy-*.glb`.
+ */
+const MESHY_WALK_FIGHT_BACK_CLIP_ORDER = [
+  "Walk_Fight_Back",
+  "Walk_Fight_Back_1",
+  "Walk_Fight_Back_2",
+  "Walk_Fight_Back_3",
+  "Cautious_Crouch_Walk_Backward",
+] as const;
 
 function expandMeshyWalkFightBackTryList(
   glbPathOrUrl: string,
@@ -1364,7 +1374,16 @@ export function resolveWalkFightBackClipName(
 ): string | null {
   const tries = expandMeshyWalkFightBackTryList(glbPathOrUrl, opts.isPlayerModel, opts.monsterType ?? null);
   if (tries.length === 0) return null;
-  return firstPreferredMatchingInsensitive(tries, animationNames);
+  const fromPreferred = firstPreferredMatchingInsensitive(tries, animationNames);
+  if (fromPreferred) return fromPreferred;
+  /** Merged GLBs may only match by substring (e.g. `Armature|Walk_Fight_Back|baselayer` after Blender rename drift). */
+  for (const n of animationNames) {
+    if (/walk[_\s-]?fight[_\s-]?back/i.test(n)) return n;
+  }
+  for (const n of animationNames) {
+    if (/cautious[_\s-]?crouch[_\s-]?walk[_\s-]?backward/i.test(n)) return n;
+  }
+  return null;
 }
 
 /**

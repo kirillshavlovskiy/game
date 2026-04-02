@@ -19,6 +19,7 @@ import { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { MonsterType } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
 import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
+import { rowMonsterHitsPlayer, rowPlayerHitsMonster } from "@/lib/combat3dContact";
 import {
   glbSlugFromPathOrUrl,
   isMergedMeshyStrikePortraitType,
@@ -132,6 +133,18 @@ export function combatFaceOffPositions(args: {
     monsterVisualState === "knockdown" && playerVisualState === "angry";
 
   if (attackVsKnockdown || mirroredHeavyKnockdown) {
+    if (mAtk && !pAtk) {
+      const h = rowMonsterHitsPlayer(draculaAttackVariant, playerVisualState).separationHalf;
+      return { playerPosX: -h, monsterPosX: h };
+    }
+    if (pAtk && !mAtk) {
+      const h = rowPlayerHitsMonster(playerAttackVariant, monsterVisualState).separationHalf;
+      return { playerPosX: -h, monsterPosX: h };
+    }
+    if (mirroredHeavyKnockdown) {
+      const h = rowPlayerHitsMonster(playerAttackVariant, "knockdown").separationHalf;
+      return { playerPosX: -h, monsterPosX: h };
+    }
     const h = COMBAT_ATTACK_VS_KNOCKDOWN_HALF;
     return { playerPosX: -h, monsterPosX: h };
   }
@@ -154,7 +167,7 @@ export function combatFaceOffPositions(args: {
   /** Player light jab vs hurt monster (net win): same idea as spell/skill tight contact — 0.92 leaves thin air for short strikes. */
   const tightPlayerLightVsMonsterHurt =
     pAtk && !mAtk && playerAttackVariant === "light" && monsterVisualState === "hurt";
-  /** Skill tier now uses `Jumping_Punch` — same tight half as spell/light vs hurt so the lunge reads on the defender. */
+  /** Skill tier (`Jumping_Punch` lead): use table half for **hurt** (spell-like jump contact); recover stays looser. */
   const tightPlayerSkillVsMonsterHurtRecover =
     pAtk &&
     !mAtk &&
@@ -162,7 +175,12 @@ export function combatFaceOffPositions(args: {
     (monsterVisualState === "hurt" || monsterVisualState === "recover");
   if (tightMonsterLightVsPlayerHurt) {
     h = COMBAT_MONSTER_LIGHT_VS_PLAYER_HURT_HALF;
-  } else if (tightPlayerLightVsMonsterHurt || tightPlayerSkillVsMonsterHurtRecover) {
+  } else if (tightPlayerSkillVsMonsterHurtRecover) {
+    h =
+      monsterVisualState === "hurt"
+        ? rowPlayerHitsMonster("skill", "hurt").separationHalf
+        : COMBAT_SPELL_SKILL_TIGHT_CONTACT_HALF;
+  } else if (tightPlayerLightVsMonsterHurt) {
     h = COMBAT_SPELL_SKILL_TIGHT_CONTACT_HALF;
   } else if (tightSpellSkillRootMotion) {
     h = COMBAT_SPELL_SKILL_TIGHT_CONTACT_HALF;

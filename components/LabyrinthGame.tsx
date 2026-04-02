@@ -9463,6 +9463,16 @@ export default function LabyrinthGame() {
                     if (combatRecoveryPhase === "hurt") {
                       if (sp === "defeated") return "defeated";
                       if (sp === "playerHitHeavy") return "knockdown";
+                      /** Merged Meshy: spell/skill player wins use full crumple (`knockdown`), not only standing `hurt` — matches heavy tier + M-row spell feel (Jumping Punch is `skill` in dice but should fall like spell). */
+                      if (
+                        sp === "playerHit" &&
+                        (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S" || headerMt === "L") &&
+                        isMonster3DEnabled() &&
+                        (combatFooterSnapshot?.draculaAttackSegment === "spell" ||
+                          combatFooterSnapshot?.draculaAttackSegment === "skill")
+                      ) {
+                        return "knockdown";
+                      }
                       if (sp === "playerHit") return "hurt";
                       if (sp === "monsterHit") return "attack";
                       if (sp === "shield") return "angry";
@@ -9532,7 +9542,22 @@ export default function LabyrinthGame() {
                   case "attack": return "hurt";
                   case "angry": return "knockdown";
                   case "hurt": return "attack";
-                  case "knockdown": return "angry";
+                  /**
+                   * Heavy (`playerHitHeavy`): monster down + player `angry` reads as dominance. Net spell/skill wins
+                   * use merged `knockdown` on the monster but must keep player `attack` so Jumping_Punch / spell contact
+                   * still reads against the falling rig — not `angry` (wrong pose + mirrored-heavy spacing).
+                   */
+                  case "knockdown": {
+                    const merge3dKnockdownPlayerAttack =
+                      (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S" || headerMt === "L") &&
+                      isMonster3DEnabled() &&
+                      inActiveFight &&
+                      combatRecoveryPhase === "hurt" &&
+                      combatFooterSnapshot?.strikePortrait === "playerHit" &&
+                      (combatFooterSnapshot?.draculaAttackSegment === "spell" ||
+                        combatFooterSnapshot?.draculaAttackSegment === "skill");
+                    return merge3dKnockdownPlayerAttack ? "attack" : "angry";
+                  }
                   /** Monster hunt between rolls — player uses hunt locomotion too so the strike can cross-fade from crouch/walk, not from a hard idle cut. */
                   case "hunt": return "hunt";
                   /**
@@ -9572,6 +9597,17 @@ export default function LabyrinthGame() {
                 !!combatFooterSnapshot?.playerFatalJumpKill && playerGltfVisualState === "hurt";
               const isDracula3dCombatPortrait =
                 !!monsterGltfPath && (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "S" || headerMt === "L");
+              /** Player `skill` win uses `knockdown` pose but clip priority would prefer forward fall; treat as `spell` so backward shot-fall matches M spell strike. */
+              const monsterDraculaVariantForCombat3d =
+                isDracula3dCombatPortrait &&
+                isMonster3DEnabled() &&
+                gltfVisualState === "knockdown" &&
+                inActiveFight &&
+                combatRecoveryPhase === "hurt" &&
+                combatFooterSnapshot?.strikePortrait === "playerHit" &&
+                combatFooterSnapshot?.draculaAttackSegment === "skill"
+                  ? ("spell" as const)
+                  : combatDraculaStrikeSegment;
               const draculaAttackLikePortrait =
                 !isDracula3dCombatPortrait &&
                 headerMt === "V" &&
@@ -10141,7 +10177,7 @@ export default function LabyrinthGame() {
                           monsterVisualState={gltfVisualState}
                           playerVisualState={playerGltfVisualState}
                           monsterType={headerMt}
-                          draculaAttackVariant={combatDraculaStrikeSegment}
+                          draculaAttackVariant={monsterDraculaVariantForCombat3d}
                           playerAttackVariant={playerAttackVariant}
                           playerFatalJumpKill={playerFatalJumpKill3d}
                           playerHurtAnimContext={playerHurtAnimContextFor3d}
@@ -10971,7 +11007,7 @@ export default function LabyrinthGame() {
                             monsterVisualState={gltfVisualState}
                             playerVisualState={playerGltfVisualState}
                             monsterType={headerMt}
-                            draculaAttackVariant={combatDraculaStrikeSegment}
+                            draculaAttackVariant={monsterDraculaVariantForCombat3d}
                             playerAttackVariant={playerAttackVariant}
                             playerFatalJumpKill={playerFatalJumpKill3d}
                             playerHurtAnimContext={playerHurtAnimContextFor3d}

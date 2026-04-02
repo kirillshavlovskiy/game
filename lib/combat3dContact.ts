@@ -91,10 +91,13 @@ export const PLAYER_HITS_MONSTER: Record<Combat3dStrikeTier, Record<Combat3dDefe
   },
   skill: {
     hurt: {
-      separationHalf: 0.68,
-      /** Jumping_Punch / skill chain: match player lunge end to contact + standing flinch onset. */
-      attackerLeadInSec: 0.4,
-      defenderReactionLeadInSec: 0.18,
+      /**
+       * Mirror **monster spell → player hurt** (Jumping_Punch vs flinch): tight X + deep skips on **both** clips so
+       * jump apex / landing lines up with monster standing hurt (same “one beat” feel as M.spell / P.hurt).
+       */
+      separationHalf: 0.42,
+      attackerLeadInSec: 0.6,
+      defenderReactionLeadInSec: 0.48,
     },
     knockdown: {
       separationHalf: 0.42,
