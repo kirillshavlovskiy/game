@@ -39,14 +39,6 @@ const COMBAT_IDLE_SEPARATION_HALF = 1.38;
 /** Same half used during strike-pick / dice roll — kept for **all** resolved-hit face-offs so jump/skill clips align with contact (variant-tiny halves read as long-range hits). */
 const COMBAT_STRIKE_PICK_SEPARATION_HALF = 0.92;
 /**
- * Player **spell** jump-ins and monster **skill** grounded strikes need a shorter half than 0.92 so contact reads on merged rigs.
- */
-const COMBAT_SPELL_SKILL_TIGHT_CONTACT_HALF = 0.68;
-/**
- * Monster **light** (e.g. charged cast) vs player **hurt** — shorter still than 0.92 / 0.68 so the strike reads on the defender.
- */
-const COMBAT_MONSTER_LIGHT_VS_PLAYER_HURT_HALF = 0.56;
-/**
  * Standing attacker vs **knockdown** defender — tighter than `COMBAT_STRIKE_PICK_SEPARATION_HALF` so the blow reads on the
  * downed figure (merged rigs are `Center`‑ed; 0.92 leaves too much air for knockdown clips).
  */
@@ -158,33 +150,30 @@ export function combatFaceOffPositions(args: {
     return { playerPosX: -half, monsterPosX: half };
   }
 
-  let h = COMBAT_STRIKE_PICK_SEPARATION_HALF;
-  const tightSpellSkillRootMotion =
-    (pAtk && !mAtk && playerAttackVariant === "spell") ||
-    (mAtk && !pAtk && draculaAttackVariant === "skill");
-  const tightMonsterLightVsPlayerHurt =
-    mAtk && !pAtk && draculaAttackVariant === "light" && playerVisualState === "hurt";
-  /** Player light jab vs hurt monster (net win): same idea as spell/skill tight contact — 0.92 leaves thin air for short strikes. */
-  const tightPlayerLightVsMonsterHurt =
-    pAtk && !mAtk && playerAttackVariant === "light" && monsterVisualState === "hurt";
-  /** Skill tier (`Jumping_Punch` lead): use table half for **hurt** (spell-like jump contact); recover stays looser. */
-  const tightPlayerSkillVsMonsterHurtRecover =
-    pAtk &&
-    !mAtk &&
-    playerAttackVariant === "skill" &&
-    (monsterVisualState === "hurt" || monsterVisualState === "recover");
-  if (tightMonsterLightVsPlayerHurt) {
-    h = COMBAT_MONSTER_LIGHT_VS_PLAYER_HURT_HALF;
-  } else if (tightPlayerSkillVsMonsterHurtRecover) {
-    h =
-      monsterVisualState === "hurt"
-        ? rowPlayerHitsMonster("skill", "hurt").separationHalf
-        : COMBAT_SPELL_SKILL_TIGHT_CONTACT_HALF;
-  } else if (tightPlayerLightVsMonsterHurt) {
-    h = COMBAT_SPELL_SKILL_TIGHT_CONTACT_HALF;
-  } else if (tightSpellSkillRootMotion) {
-    h = COMBAT_SPELL_SKILL_TIGHT_CONTACT_HALF;
+  /**
+   * Monster `attack` vs non-attacking player (hunt / hurt / idle / …): use `MONSTER_HITS_PLAYER` halves — same as
+   * `resolveCombat3dFaceOffSeparationHalf`. The old path kept **spell** at 0.92 and **skill** at 0.68 (e.g. skeleton
+   * strikes read long-range and out of sync with the table-tuned clip leads).
+   */
+  if (mAtk && !pAtk) {
+    const h = rowMonsterHitsPlayer(draculaAttackVariant, playerVisualState).separationHalf;
+    return { playerPosX: -h, monsterPosX: h };
   }
+
+  /**
+   * Player `attack` vs calm monster (`hunt` / `idle` / …): must use `rowPlayerHitsMonster` (defender pose → **hurt** column),
+   * same as `resolveCombat3dFaceOffSeparationHalf`. Defaulting to 0.92 here left skill jump clips (tight table half 0.42 +
+   * `attackerLeadInSec` 0) starting with huge air — root motion read as the player jumping **past** the defender.
+   */
+  if (pAtk && !mAtk) {
+    let h = rowPlayerHitsMonster(playerAttackVariant, monsterVisualState).separationHalf;
+    if (playerAttackVariant === "skill" && monsterVisualState === "recover") {
+      h = rowPlayerHitsMonster("spell", "hurt").separationHalf;
+    }
+    return { playerPosX: -h, monsterPosX: h };
+  }
+
+  const h = COMBAT_STRIKE_PICK_SEPARATION_HALF;
   return { playerPosX: -h, monsterPosX: h };
 }
 
@@ -260,14 +249,14 @@ function applyPlayerHurtClipContactSync(
   act.time = Math.min(startSec, Math.max(0, clip.duration - 0.04));
 }
 
-/** Skip Meshy wind-up at t=0 on monster `hurt` when the player lands a strike — pairs with `PLAYER_HITS_MONSTER` in `combat3dContact`. */
+/** Skip Meshy wind-up at t=0 on monster `hurt` / `knockdown` when the player lands a strike — pairs with `PLAYER_HITS_MONSTER` + `resolveCombat3dClipLeads`. */
 function applyMonsterHurtClipContactSync(
   act: THREE.AnimationAction,
   isPlayerModel: boolean,
   visualState: Monster3DSpriteState,
   startSec: number,
 ): void {
-  if (isPlayerModel || visualState !== "hurt" || !(startSec > 0)) return;
+  if (isPlayerModel || (visualState !== "hurt" && visualState !== "knockdown") || !(startSec > 0)) return;
   const clip = act.getClip();
   if (!clip || clip.duration <= 0) return;
   act.time = Math.min(startSec, Math.max(0, clip.duration - 0.04));
@@ -302,6 +291,24 @@ class ModelErrorBoundary extends Component<
 
   render(): ReactNode {
     if (this.state.hasError) return this.props.fallback;
+    return this.props.children;
+  }
+}
+
+/** Optional weapon GLB: load failures must not unmount the whole combat `Canvas`. */
+class WeaponLoadErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.warn("[WeaponLoadErrorBoundary]", error?.message ?? error, info?.componentStack);
+  }
+
+  render(): ReactNode {
+    if (this.state.hasError) return null;
     return this.props.children;
   }
 }
@@ -434,9 +441,13 @@ function GltfSubject({
   /** Skip this many seconds into player `hurt` so impact matches merged monster contact. */
   playerHurtClipStartTimeSec?: number;
 }) {
-  const groupRef = useRef<THREE.Group>(null);
+  /** Mixer root = glTF scene (not the scaled wrapper group) — matches skinned-clip roots across merged Meshy exports. */
+  const animSceneRootRef = useRef<THREE.Object3D | null>(null);
   const { scene, animations } = useGLTF(url);
-  const { actions, names, mixer } = useAnimations(animations, groupRef);
+  useLayoutEffect(() => {
+    animSceneRootRef.current = scene;
+  }, [scene]);
+  const { actions, names, mixer } = useAnimations(animations, animSceneRootRef);
   const onFinishedRef = useRef(onOneShotAnimationFinished);
   onFinishedRef.current = onOneShotAnimationFinished;
   /** `null` until first clip run — keeps `attack → walk-back` chains (prev stays `attack` until realign ends). */
@@ -509,7 +520,10 @@ function GltfSubject({
     const crossFade =
       (prevState === "knockdown" && (visualState === "recover" || visualState === "defeated")) ||
       (prevState === "hurt" && visualState === "recover") ||
-      (prevState === "recover" && (visualState === "idle" || visualState === "neutral"));
+      (prevState === "recover" && (visualState === "idle" || visualState === "neutral")) ||
+      (isPlayerModel &&
+        (prevState === "hunt" || prevState === "rolling") &&
+        (visualState === "hurt" || visualState === "knockdown"));
     let fadeDuration = crossFade ? 0.4 : 0.18;
     if (!crossFade && isPlayerModel && visualState === "hurt") {
       fadeDuration = Math.min(fadeDuration, 0.05);
@@ -712,11 +726,13 @@ function GltfSubject({
   }, [url, tightFraming]);
 
   /** Merged Meshy rigs (Dracula + skeleton): same scale in combat so framing matches. */
-  const scale = (tightFraming ? 1.14 : 1) * (isPlayerModel ? 0.9 : (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L" ? 0.9 : 1));
+  const scale =
+    (tightFraming ? 1.14 : 1) *
+    (isPlayerModel ? 0.9 : monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "G" || monsterType === "S" || monsterType === "L" ? 0.9 : 1);
 
   return (
     <Center>
-      <group ref={groupRef} scale={scale} rotation={isPlayerModel ? [0, Math.PI, 0] : undefined}>
+      <group scale={scale} rotation={isPlayerModel ? [0, Math.PI, 0] : undefined}>
         <primitive object={scene} />
       </group>
     </Center>
@@ -747,6 +763,12 @@ function PositionedGltfSubject(
     playerAttackClipCycleIndex?: number;
     /** Monster `hurt`: seconds into reaction clip when player connects (player `attack` beat). */
     monsterHurtClipStartTimeSec?: number;
+    /**
+     * Hunt/rolling → player `attack` crossfade duration (sec). Shorter = jump clips begin visible sooner; omit for default {@link PLAYER_LOCOMOTION_TO_ATTACK_CROSSFADE_SEC}.
+     */
+    playerLocomotionToAttackCrossfadeSec?: number;
+    /** Merged monster: hunt/roll → `attack` blend (`MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER` from `resolveCombat3dClipLeads`). */
+    monsterLocomotionToAttackCrossfadeSec?: number;
   }
 ) {
   const {
@@ -760,6 +782,8 @@ function PositionedGltfSubject(
     playerAttackClipLeadInSec = 0,
     playerAttackClipCycleIndex = 0,
     monsterHurtClipStartTimeSec = 0,
+    playerLocomotionToAttackCrossfadeSec,
+    monsterLocomotionToAttackCrossfadeSec,
     ...rest
   } = props;
   const groupRef = useRef<THREE.Group | null>(null);
@@ -796,14 +820,36 @@ function PositionedGltfSubject(
   const monsterHurtStartRef = useRef(monsterHurtClipStartTimeSec);
   monsterHurtStartRef.current = monsterHurtClipStartTimeSec;
 
+  const locomotionToAttackFadeSec =
+    rest.isPlayerModel && typeof playerLocomotionToAttackCrossfadeSec === "number"
+      ? playerLocomotionToAttackCrossfadeSec
+      : !rest.isPlayerModel && typeof monsterLocomotionToAttackCrossfadeSec === "number"
+        ? monsterLocomotionToAttackCrossfadeSec
+        : PLAYER_LOCOMOTION_TO_ATTACK_CROSSFADE_SEC;
+
   const hurtHpKey =
     rest.draculaHurtHp?.hp != null && rest.draculaHurtHp?.maxHp != null
       ? `${rest.draculaHurtHp.hp}/${rest.draculaHurtHp.maxHp}`
       : "—";
   const hurtZoneKey = rest.draculaHurtStrikeZone ?? "—";
   const attackToIdleRealignLockRef = useRef(false);
+  const prevPlayerAttackTimingKeyRef = useRef("");
+  const playerAttackTimingKey =
+    rest.isPlayerModel && rest.visualState === "attack"
+      ? `${playerAttackClipLeadInSec}:${playerAttackClipCycleIndex}`
+      : "";
+  const playerAttackTimingKeyChanged =
+    rest.isPlayerModel &&
+    rest.visualState === "attack" &&
+    prevPlayerAttackTimingKeyRef.current !== playerAttackTimingKey;
 
   useCombatRootMotionLock(scene, rest.visualState, !!rest.draculaLoopAngrySkill01);
+
+  useEffect(() => {
+    if (!rest.isPlayerModel || rest.visualState !== "attack") {
+      prevPlayerAttackTimingKeyRef.current = "";
+    }
+  }, [rest.isPlayerModel, rest.visualState]);
 
   useEffect(() => { useGLTF.preload(rest.url); }, [rest.url]);
 
@@ -839,6 +885,7 @@ function PositionedGltfSubject(
     const sameAsClampedPrev =
       playedClampedStateThisEffectRef.current &&
       !syncKeyBump &&
+      !playerAttackTimingKeyChanged &&
       prevState !== null &&
       prevState === rest.visualState &&
       !shouldLoopVisualState(rest.visualState, !!rest.draculaLoopAngrySkill01) &&
@@ -870,7 +917,10 @@ function PositionedGltfSubject(
     const locomotionHandoffToStrike =
       !syncKeyBump &&
       (prevState === "hunt" || prevState === "rolling") &&
-      ((rest.isPlayerModel && rest.visualState === "attack") ||
+      ((rest.isPlayerModel &&
+        (rest.visualState === "attack" ||
+          rest.visualState === "hurt" ||
+          rest.visualState === "knockdown")) ||
         (!rest.isPlayerModel &&
           isMergedMeshyStrikePortraitType(rest.monsterType) &&
           (rest.visualState === "attack" ||
@@ -878,10 +928,17 @@ function PositionedGltfSubject(
             rest.visualState === "knockdown")));
 
     const crossFade = recoverContinuityCrossFade || locomotionHandoffToStrike;
+    /** Player hunt→defender hit: do not reuse short spell/skill hunt→attack fades — those snap hurt on too early. */
+    const locomotionHandoffFadeSec =
+      locomotionHandoffToStrike &&
+      rest.isPlayerModel &&
+      (rest.visualState === "hurt" || rest.visualState === "knockdown")
+        ? PLAYER_LOCOMOTION_TO_ATTACK_CROSSFADE_SEC
+        : locomotionToAttackFadeSec;
     let fadeDuration = recoverContinuityCrossFade
       ? 0.4
       : locomotionHandoffToStrike
-        ? PLAYER_LOCOMOTION_TO_ATTACK_CROSSFADE_SEC
+        ? locomotionHandoffFadeSec
         : 0.18;
     if (!crossFade && rest.isPlayerModel && rest.visualState === "hurt") {
       fadeDuration = Math.min(fadeDuration, 0.05);
@@ -1066,12 +1123,17 @@ function PositionedGltfSubject(
         (outgoingLocomotion.getEffectiveWeight() > 1e-4 || outgoingLocomotion.isRunning());
       if (useLocomotionCross) {
         act.play();
-        outgoingLocomotion.crossFadeTo(act, PLAYER_LOCOMOTION_TO_ATTACK_CROSSFADE_SEC, false);
+        outgoingLocomotion.crossFadeTo(act, locomotionHandoffFadeSec, false);
+        /** `crossFadeTo` can leave the incoming action at t≈0 for the blend — re-seek player strike contact. */
+        applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackLeadRef.current);
       } else {
         if (crossFade) { for (const a of Object.values(actions)) { if (a && a !== act) a.fadeOut(fadeDuration); } }
         act.fadeIn(fadeDuration).play();
       }
       playedClampedStateThisEffectRef.current = true;
+      if (rest.isPlayerModel && rest.visualState === "attack") {
+        prevPlayerAttackTimingKeyRef.current = playerAttackTimingKey;
+      }
     }
     invalidate();
     return () => {
@@ -1103,9 +1165,22 @@ function PositionedGltfSubject(
     playerAttackClipLeadInSec,
     playerAttackClipCycleIndex,
     monsterHurtClipStartTimeSec,
+    locomotionToAttackFadeSec,
+    monsterLocomotionToAttackCrossfadeSec,
   ]);
 
-  const scale = (rest.tightFraming ? 1.14 : 1) * (rest.isPlayerModel ? 0.9 : (rest.monsterType === "V" || rest.monsterType === "K" || rest.monsterType === "Z" || rest.monsterType === "S" || rest.monsterType === "L" ? 0.9 : 1));
+  const scale =
+    (rest.tightFraming ? 1.14 : 1) *
+    (rest.isPlayerModel
+      ? 0.9
+      : rest.monsterType === "V" ||
+          rest.monsterType === "K" ||
+          rest.monsterType === "Z" ||
+          rest.monsterType === "G" ||
+          rest.monsterType === "S" ||
+          rest.monsterType === "L"
+        ? 0.9
+        : 1);
 
   const yRotation = rest.isPlayerModel ? Math.PI / 2 : -Math.PI / 2;
 
@@ -1119,7 +1194,11 @@ function PositionedGltfSubject(
         </Center>
       </group>
       {rest.isPlayerModel && weaponUrl ? (
-        <BoneAttachedWeapon parentScene={scene} url={weaponUrl} />
+        <WeaponLoadErrorBoundary key={weaponUrl}>
+          <Suspense fallback={null}>
+            <BoneAttachedWeapon parentScene={scene} url={weaponUrl} />
+          </Suspense>
+        </WeaponLoadErrorBoundary>
       ) : null}
     </>
   );
@@ -1135,25 +1214,26 @@ function MeshyCombatCameraFraming({
   baseZ,
   baseY,
   baseFov,
+  /** Bump when the viewed GLB set changes so camera + FOV re-apply (no sticky one-shot after monster swap). */
+  frameKey,
 }: {
   enabled: boolean;
   visualState: Monster3DSpriteState;
   baseZ: number;
   baseY: number;
   baseFov: number;
+  frameKey: string;
 }) {
   const { camera } = useThree();
-  const appliedRef = useRef(false);
 
   useLayoutEffect(() => {
-    if (!enabled || appliedRef.current) return;
-    appliedRef.current = true;
+    if (!enabled) return;
     const cam = camera as THREE.PerspectiveCamera;
     cam.position.set(0, baseY, baseZ);
     cam.fov = baseFov;
     cam.updateProjectionMatrix();
     invalidate();
-  }, [camera, enabled, baseZ, baseY, baseFov]);
+  }, [camera, enabled, baseZ, baseY, baseFov, frameKey]);
 
   return null;
 }
@@ -1187,11 +1267,20 @@ function Scene({
     <>
       {meshyCameraBases ? (
         <MeshyCombatCameraFraming
-          enabled={isPlayerModel || monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L"}
+          enabled={
+            isPlayerModel ||
+            monsterType === "V" ||
+            monsterType === "K" ||
+            monsterType === "Z" ||
+            monsterType === "G" ||
+            monsterType === "S" ||
+            monsterType === "L"
+          }
           visualState={visualState}
           baseZ={meshyCameraBases.baseZ}
           baseY={meshyCameraBases.baseY}
           baseFov={meshyCameraBases.baseFov}
+          frameKey={url}
         />
       ) : null}
       <ambientLight intensity={0.38} />
@@ -1274,7 +1363,8 @@ export function MonsterModel3D({
   const isZombie = monsterType === "Z";
   const isSpider = monsterType === "S";
   const isLava = monsterType === "L";
-  const mergedMeshyCombat = isDracula || isSkeleton || isZombie || isSpider || isLava;
+  const isGhost = monsterType === "G";
+  const mergedMeshyCombat = isDracula || isSkeleton || isZombie || isGhost || isSpider || isLava;
   const cameraZBase = referenceViewerStyle ? (tightFraming ? 2.2 : 2.85) : tightFraming ? 2.12 : 2.82;
   const cameraYBase = referenceViewerStyle ? (tightFraming ? 0.95 : 1.05) : tightFraming ? 0.98 : 1.06;
   const mergedMeshyCameraZExtra = mergedMeshyCombat ? 0.62 : 0;
@@ -1367,37 +1457,73 @@ function StaticGltfProp({ url, position, scale: s = 0.5, rotationY = 0 }: { url:
   );
 }
 
-/** Common hand-bone names across Mixamo / Meshy rigs (right hand preferred for weapons). */
-const HAND_BONE_CANDIDATES = [
+/**
+ * Exact names for the **right hand** bone only — never forearm (weapon was sinking “above the wrist” when
+ * `RightForeArm` matched before a differently named hand bone).
+ */
+const RIGHT_HAND_EXACT_NAMES: readonly string[] = [
   "mixamorigRightHand",
   "RightHand",
   "rightHand",
   "Right_Hand",
   "hand_R",
   "Hand_R",
-  "mixamorigRightForeArm",
-  "RightForeArm",
-  "mixamorigLeftHand",
-  "LeftHand",
-] as const;
+  "CC_Base_R_Hand",
+  "R_Hand",
+  "Bip001 R Hand",
+  "Bip001_R_Hand",
+];
+
+function boneNameLooksForearmOrUpper(name: string): boolean {
+  const n = name.replace(/\s/g, "");
+  return /forearm|lowerarm|upperarm|shoulder|clavicle|elbow|spine|chest|neck|head/i.test(n);
+}
 
 function findHandBone(root: THREE.Object3D): THREE.Bone | null {
-  for (const name of HAND_BONE_CANDIDATES) {
+  for (const name of RIGHT_HAND_EXACT_NAMES) {
     const found = root.getObjectByName(name);
     if (found && (found as THREE.Bone).isBone) return found as THREE.Bone;
   }
-  let fallback: THREE.Bone | null = null;
+
+  let rightHand: THREE.Bone | null = null;
+  let anyHand: THREE.Bone | null = null;
+  let leftHand: THREE.Bone | null = null;
   root.traverse((child) => {
-    if (!fallback && (child as THREE.Bone).isBone && /hand|wrist/i.test(child.name)) {
-      fallback = child as THREE.Bone;
-    }
+    if (!(child as THREE.Bone).isBone) return;
+    const n = child.name;
+    if (!/(hand|wrist)/i.test(n)) return;
+    if (boneNameLooksForearmOrUpper(n)) return;
+    const compact = n.replace(/\s/g, "");
+    const isRight =
+      /right|hand_r|^r_hand|_r_hand|mixamorigright|\.r\.|_r\./i.test(compact) || /Hand_R|HAND_R/i.test(n);
+    const isLeft =
+      /left|hand_l|^l_hand|_l_hand|mixamorigleft|\.l\.|_l\.|Hand_L|HAND_L/i.test(compact);
+    const b = child as THREE.Bone;
+    if (isRight && !isLeft) rightHand = b;
+    else if (isLeft && !isRight) {
+      if (!leftHand) leftHand = b;
+    } else if (!isLeft && !isRight && !anyHand) anyHand = b;
   });
-  return fallback;
+  if (rightHand) return rightHand;
+  if (anyHand) return anyHand;
+  if (leftHand) return leftHand;
+
+  for (const name of ["mixamorigLeftHand", "LeftHand", "leftHand", "Left_Hand", "hand_L", "Hand_L"] as const) {
+    const found = root.getObjectByName(name);
+    if (found && (found as THREE.Bone).isBone) return found as THREE.Bone;
+  }
+
+  for (const name of ["mixamorigRightForeArm", "RightForeArm", "rightForeArm"] as const) {
+    const found = root.getObjectByName(name);
+    if (found && (found as THREE.Bone).isBone) return found as THREE.Bone;
+  }
+
+  return null;
 }
 
 const WEAPON_GRIP_FRACTION_FROM_END = 0.12;
 
-function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D; url: string }) {
+export function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D; url: string }) {
   const { scene: weaponScene } = useGLTF(url);
   const weaponClone = React.useMemo(() => weaponScene.clone(true), [weaponScene]);
   const attachedRef = useRef<{ bone: THREE.Bone; container: THREE.Group; alignFromLocal: THREE.Vector3 } | null>(null);
@@ -1510,7 +1636,7 @@ function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D;
 export interface CombatScene3DProps {
   monsterGltfPath: string;
   playerGltfPath: string;
-  /** Optional weapon/armour GLB rendered as a static prop near the player. Empty string = none. */
+  /** Optional weapon/armour GLB parented to the player rig hand (see `BoneAttachedWeapon`). Empty string = none. */
   armourGltfPath?: string | null;
   monsterVisualState: Monster3DSpriteState;
   playerVisualState: Monster3DSpriteState;
@@ -1529,6 +1655,10 @@ export interface CombatScene3DProps {
   playerHurtClipStartTimeSec?: number;
   /** Player `attack`: skip into clip (`combat3dContact` / `resolveCombat3dClipLeads`). */
   playerAttackClipLeadInSec?: number;
+  /** Player hunt→attack blend per strike tier (`PLAYER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER` / `resolveCombat3dClipLeads`). */
+  playerLocomotionToAttackCrossfadeSec?: number;
+  /** Monster hunt→attack blend per tier (`MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER`). */
+  monsterLocomotionToAttackCrossfadeSec?: number;
   /** Monster `hurt`: skip into reaction clip when player connects (spell/skill rows in `PLAYER_HITS_MONSTER`). */
   monsterHurtClipStartTimeSec?: number;
   /** Rotates player `attack` clip try-order when the same strike tier is picked repeatedly during one roll. */
@@ -1689,6 +1819,9 @@ function CombatOrbitControls({
   minPolarAngle,
   maxPolarAngle,
   enabled = true,
+  /** When GLB paths change, reset camera + target so fighters are not framed “nowhere” after orbit drift / canvas reuse. */
+  sceneAnchorKey,
+  initialCameraPosition,
 }: {
   orbitMinD: number;
   orbitMaxD: number;
@@ -1696,13 +1829,30 @@ function CombatOrbitControls({
   minPolarAngle: number;
   maxPolarAngle: number;
   enabled?: boolean;
+  sceneAnchorKey: string;
+  initialCameraPosition: readonly [number, number, number];
 }) {
+  const { camera } = useThree();
   const orbitRef = useRef<OrbitControlsImpl>(null);
   const targetArr = useMemo(
     (): [number, number, number] => [0, orbitTargetY, 0],
     [orbitTargetY]
   );
   const syncedRef = useRef(false);
+
+  useEffect(() => {
+    const c = camera as THREE.PerspectiveCamera;
+    c.position.set(initialCameraPosition[0], initialCameraPosition[1], initialCameraPosition[2]);
+    c.up.set(0, 1, 0);
+    c.updateProjectionMatrix();
+    const oc = orbitRef.current;
+    if (oc) {
+      oc.target.set(0, orbitTargetY, 0);
+      oc.update();
+    }
+    syncedRef.current = false;
+    invalidate();
+  }, [sceneAnchorKey, camera, initialCameraPosition, orbitTargetY]);
 
   useFrame(() => {
     const oc = orbitRef.current;
@@ -1756,6 +1906,8 @@ export function CombatScene3D({
   playerHurtAnimContext = null,
   playerHurtClipStartTimeSec = 0,
   playerAttackClipLeadInSec = 0,
+  playerLocomotionToAttackCrossfadeSec,
+  monsterLocomotionToAttackCrossfadeSec,
   monsterHurtClipStartTimeSec = 0,
   playerAttackClipCycleIndex = 0,
   onOneShotAnimationFinished,
@@ -1769,7 +1921,8 @@ export function CombatScene3D({
   faceOffAnimationSyncKey,
 }: CombatScene3DProps) {
   const monsterHitRootRef = useRef<THREE.Group | null>(null);
-  const isMergedMeshy = monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L";
+  const isMergedMeshy =
+    monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "G" || monsterType === "S" || monsterType === "L";
   const cameraZ = compactCombatViewport ? 3.28 : 5.35;
   const cameraY = compactCombatViewport ? 0.92 : 1.0;
   const fov = compactCombatViewport ? 50 : 40;
@@ -1803,32 +1956,59 @@ export function CombatScene3D({
     ]
   );
 
+  /** Keep in sync with props immediately — delayed updates caused wrong GLB + new `monsterType` (clip lists) in labs/combat. */
   const [mUrl, setMUrl] = useState(monsterGltfPath);
   const [pUrl, setPUrl] = useState(playerGltfPath);
 
   useEffect(() => {
-    if (monsterGltfPath === mUrl) return;
-    let c = false;
-    const ac = new AbortController();
-    (async () => {
-      try { const r = await fetch(monsterGltfPath, { signal: ac.signal }); if (!r.ok) throw 0; await r.arrayBuffer(); await Promise.resolve(useGLTF.preload(monsterGltfPath) as PromiseLike<unknown> | undefined); } catch { if (c) return; }
-      if (!c) setMUrl(monsterGltfPath);
-    })();
-    return () => { c = true; ac.abort(); };
-  }, [monsterGltfPath, mUrl]);
+    setMUrl(monsterGltfPath);
+  }, [monsterGltfPath]);
 
   useEffect(() => {
-    if (playerGltfPath === pUrl) return;
-    let c = false;
-    const ac = new AbortController();
-    (async () => {
-      try { const r = await fetch(playerGltfPath, { signal: ac.signal }); if (!r.ok) throw 0; await r.arrayBuffer(); await Promise.resolve(useGLTF.preload(playerGltfPath) as PromiseLike<unknown> | undefined); } catch { if (c) return; }
-      if (!c) setPUrl(playerGltfPath);
-    })();
-    return () => { c = true; ac.abort(); };
-  }, [playerGltfPath, pUrl]);
+    setPUrl(playerGltfPath);
+  }, [playerGltfPath]);
 
-  const canvasKey = `combat-${monsterType ?? "?"}-${width}`;
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const r = await fetch(monsterGltfPath, { signal: ac.signal });
+        if (!r.ok) throw 0;
+        await r.arrayBuffer();
+        await Promise.resolve(useGLTF.preload(monsterGltfPath) as PromiseLike<unknown> | undefined);
+      } catch {
+        /* preload best-effort — `mUrl` already matches prop */
+      }
+    })();
+    return () => {
+      ac.abort();
+    };
+  }, [monsterGltfPath]);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const r = await fetch(playerGltfPath, { signal: ac.signal });
+        if (!r.ok) throw 0;
+        await r.arrayBuffer();
+        await Promise.resolve(useGLTF.preload(playerGltfPath) as PromiseLike<unknown> | undefined);
+      } catch {
+        /* preload best-effort */
+      }
+    })();
+    return () => {
+      ac.abort();
+    };
+  }, [playerGltfPath]);
+
+  /** Stable canvas identity: not monster type / URLs — swapping GLB only remounts `PositionedGltfSubject` via `key={url}`. */
+  const canvasKey = `meshy-combat-${width}`;
+  const sceneAnchorKey = `${monsterGltfPath}|${playerGltfPath}`;
+  const initialCombatCamera = useMemo(
+    (): readonly [number, number, number] => [0, cameraY, cameraZ],
+    [cameraY, cameraZ],
+  );
 
   return (
     <ModelErrorBoundary key={canvasKey} fallback={fallback}>
@@ -1849,6 +2029,7 @@ export function CombatScene3D({
             baseZ={meshyCameraBases.baseZ}
             baseY={meshyCameraBases.baseY}
             baseFov={meshyCameraBases.baseFov}
+            frameKey={sceneAnchorKey}
           />
           <CombatOrbitControls
             orbitMinD={orbitMinD}
@@ -1857,6 +2038,8 @@ export function CombatScene3D({
             minPolarAngle={Math.PI / 6}
             maxPolarAngle={Math.PI / 2}
             enabled={!strikePickActive}
+            sceneAnchorKey={sceneAnchorKey}
+            initialCameraPosition={initialCombatCamera}
           />
           <ambientLight intensity={0.38} />
           <directionalLight position={[3.2, 5.5, 2.8]} intensity={1.05} />
@@ -1868,6 +2051,7 @@ export function CombatScene3D({
               mUrl={mUrl}
               playerEl={
                 <PositionedGltfSubject
+                  key={pUrl}
                   url={pUrl}
                   visualState={playerVisualState}
                   tightFraming={false}
@@ -1877,6 +2061,7 @@ export function CombatScene3D({
                   playerHurtAnimContext={playerHurtAnimContext}
                   playerHurtClipStartTimeSec={playerHurtClipStartTimeSec}
                   playerAttackClipLeadInSec={playerAttackClipLeadInSec}
+                  playerLocomotionToAttackCrossfadeSec={playerLocomotionToAttackCrossfadeSec}
                   playerAttackClipCycleIndex={playerAttackClipCycleIndex}
                   positionX={playerPosX}
                   weaponUrl={armourGltfPath}
@@ -1884,6 +2069,7 @@ export function CombatScene3D({
               }
               monsterEl={
                 <PositionedGltfSubject
+                  key={mUrl}
                   url={mUrl}
                   visualState={monsterVisualState}
                   tightFraming={false}
@@ -1896,12 +2082,14 @@ export function CombatScene3D({
                   positionX={monsterPosX}
                   hitRootRef={monsterHitRootRef}
                   monsterHurtClipStartTimeSec={monsterHurtClipStartTimeSec}
+                  monsterLocomotionToAttackCrossfadeSec={monsterLocomotionToAttackCrossfadeSec}
                 />
               }
             />
           ) : (
             <>
               <PositionedGltfSubject
+                key={pUrl}
                 url={pUrl}
                 visualState={playerVisualState}
                 tightFraming={false}
@@ -1911,11 +2099,13 @@ export function CombatScene3D({
                 playerHurtAnimContext={playerHurtAnimContext}
                 playerHurtClipStartTimeSec={playerHurtClipStartTimeSec}
                 playerAttackClipLeadInSec={playerAttackClipLeadInSec}
+                playerLocomotionToAttackCrossfadeSec={playerLocomotionToAttackCrossfadeSec}
                 playerAttackClipCycleIndex={playerAttackClipCycleIndex}
                 positionX={playerPosX}
                 weaponUrl={armourGltfPath}
               />
               <PositionedGltfSubject
+                key={mUrl}
                 url={mUrl}
                 visualState={monsterVisualState}
                 tightFraming={false}
@@ -1928,6 +2118,7 @@ export function CombatScene3D({
                 positionX={monsterPosX}
                 hitRootRef={monsterHitRootRef}
                 monsterHurtClipStartTimeSec={monsterHurtClipStartTimeSec}
+                monsterLocomotionToAttackCrossfadeSec={monsterLocomotionToAttackCrossfadeSec}
               />
             </>
           )}

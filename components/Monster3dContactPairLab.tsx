@@ -6,15 +6,31 @@ import type { MonsterType } from "@/lib/labyrinth";
 import { getMonsterName } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
 import { combatFaceOffPositions } from "@/components/MonsterModel3D";
+import { resolveCombat3dClipLeads } from "@/lib/combat3dContact";
 import {
   draculaAttackVariantFromStrikeTarget,
   getMonsterGltfPathForReference,
-  mergedMeshyMonsterHitPlayerHurtClipStartTimeSec,
+  isMergedMeshyStrikePortraitType,
   MONSTER_3D_VISUAL_STATES,
   playerHurtVariantFromStrikeTarget,
   PLAYER_3D_GLB,
   type Monster3DSpriteState,
 } from "@/lib/monsterModels3d";
+import { DEFAULT_LAB_PLAYER_WEAPON_GLB, PLAYER_ARMOUR_GLB_OPTIONS } from "@/lib/playerArmourGlbs";
+
+async function glbReachable(url: string): Promise<boolean> {
+  try {
+    const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+    if (r.ok) return true;
+    if (r.status === 405 || r.status === 404) {
+      const g = await fetch(url, { method: "GET", cache: "no-store" });
+      return g.ok;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 const CombatScene3D = dynamic(
   () => import("@/components/MonsterModel3D").then((m) => m.CombatScene3D),
@@ -66,6 +82,7 @@ const STRIKE_PRESETS: Preset[] = [
   { label: "Player net win · P skill strike / M hurt", player: "attack", monster: "hurt", pVar: "skill", mVar: "skill" },
   { label: "Player net win · P light strike / M hurt", player: "attack", monster: "hurt", pVar: "light", mVar: "light" },
   { label: "Player net win · P spell strike / M knockdown", player: "attack", monster: "knockdown", pVar: "spell", mVar: "spell" },
+  { label: "Player net win · P skill strike / M knockdown", player: "attack", monster: "knockdown", pVar: "skill", mVar: "skill" },
   { label: "Monster net win · M spell strike / P hurt", player: "hurt", monster: "attack", pVar: "spell", mVar: "spell" },
   { label: "Monster net win · M skill strike / P hurt", player: "hurt", monster: "attack", pVar: "skill", mVar: "skill" },
   { label: "Monster net win · M light strike / P hurt", player: "hurt", monster: "attack", pVar: "light", mVar: "light" },
@@ -123,7 +140,8 @@ export function Monster3dContactPairLab() {
   const [monsterVariant, setMonsterVariant] = useState<(typeof VARIANTS)[number]>("spell");
   /** Matches combat: aim overlay + locked orbit during tuning; face-off **spacing** is unchanged (always strike-range for hit beats). */
   const [strikePick, setStrikePick] = useState(true);
-  const [approach, setApproach] = useState(0);
+  /** Default 1 = same strike-pick half as in-game merged 3D between rolls (`combat3dRollingApproachBlend`). */
+  const [approach, setApproach] = useState(1);
   const [hurtHp, setHurtHp] = useState(LAB_PLAYER_WIN_MONSTER_HURT_HP);
   const [hurtMax, setHurtMax] = useState(9);
   const [fatalJump, setFatalJump] = useState(false);
@@ -141,6 +159,25 @@ export function Monster3dContactPairLab() {
   const [draculaMonsterAttackAim, setDraculaMonsterAttackAim] = useState<DraculaMonsterAttackAimSource>("preset");
   /** Player **hurt**: scenario spell/skill/light vs strike-aim → same tier as monster segment (head/body/legs). */
   const [playerHurtClipSource, setPlayerHurtClipSource] = useState<PlayerHurtClipSource>("preset");
+  /** Same `armourGltfPath` as combat / maze — `BoneAttachedWeapon` on player rig. */
+  const [labPlayerWeaponGlb, setLabPlayerWeaponGlb] = useState<string | null>(DEFAULT_LAB_PLAYER_WEAPON_GLB);
+  const [weaponFileOk, setWeaponFileOk] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!labPlayerWeaponGlb) {
+      setWeaponFileOk(null);
+      return;
+    }
+    let cancelled = false;
+    setWeaponFileOk(null);
+    void (async () => {
+      const ok = await glbReachable(labPlayerWeaponGlb);
+      if (!cancelled) setWeaponFileOk(ok);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [labPlayerWeaponGlb]);
 
   const monsterPath = getMonsterGltfPathForReference(monsterType, "idle");
 
@@ -198,10 +235,28 @@ export function Monster3dContactPairLab() {
     return { hpLost, strikeZone };
   }, [playerState, playerVariant, playerHurtClipSource]);
 
-  const playerHurtClipStartTimeSec = useMemo(() => {
-    if (playerState !== "hurt" || monsterState !== "attack") return 0;
-    return mergedMeshyMonsterHitPlayerHurtClipStartTimeSec(monsterType, effectiveMonsterVariant);
-  }, [playerState, monsterState, monsterType, effectiveMonsterVariant]);
+  const meshyCombat3dClipLeads = useMemo(
+    () =>
+      resolveCombat3dClipLeads({
+        isMergedMeshy: isMergedMeshyStrikePortraitType(monsterType),
+        monsterType,
+        playerVisualState: playerState,
+        monsterVisualState: monsterState,
+        draculaAttackVariant: effectiveMonsterVariant,
+        playerAttackVariant: effectivePlayerVariant,
+        playerFatalJumpKill: fatalJump && playerState === "hurt",
+        rollingApproachBlend: approach,
+      }),
+    [
+      monsterType,
+      playerState,
+      monsterState,
+      effectiveMonsterVariant,
+      effectivePlayerVariant,
+      fatalJump,
+      approach,
+    ]
+  );
 
   /**
    * Paired GLB restart key — **must not** include `rollingApproachBlend` / approach lerp: during connected sequence that
@@ -224,6 +279,7 @@ export function Monster3dContactPairLab() {
         seqPhase,
         draculaMonsterAttackAim,
         playerHurtClipSource,
+        labPlayerWeaponGlb ?? "",
       ].join("|"),
     [
       monsterType,
@@ -241,6 +297,7 @@ export function Monster3dContactPairLab() {
       seqPhase,
       draculaMonsterAttackAim,
       playerHurtClipSource,
+      labPlayerWeaponGlb,
     ]
   );
 
@@ -350,7 +407,7 @@ export function Monster3dContactPairLab() {
       }}
     >
       <h2 style={{ fontSize: "1.2rem", marginTop: 0, marginBottom: 8, color: "#9ee8ff" }}>
-        Face-off lab — player + monster (spacing math only)
+        Face-off lab — player + monster (spacing + Meshy clip timing)
       </h2>
       <p
         style={{
@@ -361,7 +418,10 @@ export function Monster3dContactPairLab() {
           maxWidth: viewportW,
         }}
       >
-        Same spacing as the real combat face-off. With <strong style={{ color: "#dce6f0" }}>Connected approach → strike</strong> on,
+        Same <strong style={{ color: "#dce6f0" }}>X spacing</strong> and{" "}
+        <strong style={{ color: "#dce6f0" }}>player/monster clip lead-ins</strong> as the combat modal for merged Meshy (V/K/Z/S/L) via{" "}
+        <code style={{ color: "#c4e8ff" }}>resolveCombat3dClipLeads</code>. With{" "}
+        <strong style={{ color: "#dce6f0" }}>Connected approach → strike</strong> on,
         each scenario runs <strong style={{ color: "#dce6f0" }}>idle</strong> → both <strong style={{ color: "#dce6f0" }}>hunt</strong> while
         the fighters <strong style={{ color: "#dce6f0" }}>close in</strong> (approach blend), then the strike result. Dracula’s{" "}
         <strong style={{ color: "#dce6f0" }}>Jumping_Punch</strong> is reserved for the <strong style={{ color: "#dce6f0" }}>spell</strong>{" "}
@@ -369,11 +429,67 @@ export function Monster3dContactPairLab() {
         <strong style={{ color: "#dce6f0" }}>Advanced</strong> for tiers, Dracula hurt/attack clip source, and readouts.
       </p>
 
+      <div
+        style={{
+          width: "100%",
+          maxWidth: viewportW,
+          margin: "0 auto 12px",
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 10,
+          fontSize: "0.8rem",
+          color: "#c8d8e8",
+        }}
+      >
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <span style={{ color: "#9ee8ff", fontWeight: 600 }}>Player weapon</span>
+          <select
+            value={labPlayerWeaponGlb ?? ""}
+            onChange={(e) => setLabPlayerWeaponGlb(e.target.value === "" ? null : e.target.value)}
+            style={selectStyle}
+          >
+            <option value="">None</option>
+            {PLAYER_ARMOUR_GLB_OPTIONS.map((o) => (
+              <option key={o.path} value={o.path}>
+                {o.emoji} {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span style={{ fontSize: "0.72rem", color: "#8a9aac", lineHeight: 1.4 }}>
+          Same GLBs as in-game armour — wired to <code style={{ color: "#c4e8ff" }}>CombatScene3D</code>{" "}
+          <code style={{ color: "#c4e8ff" }}>armourGltfPath</code> (hand attach). Default = first weapon in the list.
+        </span>
+      </div>
+      {labPlayerWeaponGlb && weaponFileOk === false ? (
+        <div
+          style={{
+            width: "100%",
+            maxWidth: viewportW,
+            margin: "0 auto 10px",
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(180, 50, 50, 0.2)",
+            border: "1px solid rgba(255,120,100,0.45)",
+            fontSize: "0.78rem",
+            color: "#ffc8c0",
+            lineHeight: 1.45,
+          }}
+        >
+          <strong>Weapon GLB not found:</strong> <code style={{ color: "#fff" }}>{labPlayerWeaponGlb}</code>
+          <br />
+          Add files under <code style={{ color: "#c4e8ff" }}>public/models/armour/</code> (see{" "}
+          <code style={{ color: "#c4e8ff" }}>lib/playerArmourGlbs.ts</code>) or pick <strong>None</strong>. Without assets the
+          battle scene still runs but no weapon mesh appears.
+        </div>
+      ) : null}
+
       <div style={{ width: "100%", maxWidth: viewportW, margin: "0 auto" }}>
         <CombatScene3D
           monsterGltfPath={monsterPath}
           playerGltfPath={playerPath}
-          armourGltfPath={null}
+          armourGltfPath={labPlayerWeaponGlb}
           monsterVisualState={monsterState}
           playerVisualState={playerState}
           monsterType={monsterType}
@@ -384,7 +500,11 @@ export function Monster3dContactPairLab() {
           draculaLoopAngrySkill01={false}
           playerFatalJumpKill={fatalJump && playerState === "hurt"}
           playerHurtAnimContext={playerHurtAnimContext}
-          playerHurtClipStartTimeSec={playerHurtClipStartTimeSec}
+          playerHurtClipStartTimeSec={meshyCombat3dClipLeads.meshyPlayerHurtLeadInSec}
+          playerAttackClipLeadInSec={meshyCombat3dClipLeads.meshyPlayerAttackLeadInSec}
+          playerLocomotionToAttackCrossfadeSec={meshyCombat3dClipLeads.meshyPlayerHuntToAttackCrossfadeSec}
+          monsterLocomotionToAttackCrossfadeSec={meshyCombat3dClipLeads.meshyMonsterHuntToAttackCrossfadeSec}
+          monsterHurtClipStartTimeSec={meshyCombat3dClipLeads.meshyMonsterHurtLeadInSec}
           width={viewportW}
           height={viewportH}
           compactCombatViewport
@@ -579,7 +699,9 @@ export function Monster3dContactPairLab() {
             value={monsterType}
             onChange={(e) => {
               cancelLabSequence();
+              setApproach(1);
               setMonsterType(e.target.value as MonsterType);
+              setReplayNonce((n) => n + 1);
             }}
             style={selectStyle}
           >

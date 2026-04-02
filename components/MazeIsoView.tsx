@@ -32,6 +32,7 @@ import {
   mapRotationLog,
   mapRotationLogSnapshot,
 } from "@/lib/mapRotationDebug";
+import { BoneAttachedWeapon } from "@/components/MonsterModel3D";
 
 type MiniMonster = { x: number; y: number; type?: string; draculaState?: DraculaState };
 
@@ -120,6 +121,8 @@ type Props = {
   combatRunDisabled?: boolean;
   /** Dynamic player GLB path based on selected avatar. Falls back to wasteland-drifter. */
   playerGlbPath?: string;
+  /** Optional weapon/armour GLB — same hand attach as combat `CombatScene3D` (`BoneAttachedWeapon`). */
+  playerWeaponGltfPath?: string | null;
   /** Last resolved strike cue (dice + shield + portrait) — read when combat pulse fires. */
   isoCombatPlayerCue?: {
     moment: IsoCombatPlayerMoment;
@@ -558,11 +561,14 @@ function PlayerAvatar3D({
   visualState,
   actionVersion = 0,
   glbPath,
+  weaponGltfPath,
   combatPlayback,
 }: {
   visualState: "idle" | "hunt" | "attack";
   actionVersion?: number;
   glbPath?: string;
+  /** When set, uses the same bone attach as combat 3D (`BoneAttachedWeapon`). */
+  weaponGltfPath?: string | null;
   /** One-shot combat clip (strike / counter / shield) — overrides locomotion visualState. */
   combatPlayback?: {
     moment: IsoCombatPlayerMoment;
@@ -572,17 +578,13 @@ function PlayerAvatar3D({
 }) {
   const url = glbPath || PLAYER_3D_GLB;
   const rootRef = useRef<THREE.Group>(null);
-  const rightHandNodeRef = useRef<THREE.Object3D | null>(null);
+  const [placeholderHand, setPlaceholderHand] = useState<THREE.Object3D | null>(null);
   const { scene, animations } = useGLTF(url);
   const clonedScene = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   const { actions, names } = useAnimations(animations, rootRef);
 
   useEffect(() => {
-    let rightHand: THREE.Object3D | null = null;
     clonedScene.traverse((obj) => {
-      if (!rightHand && /(hand|wrist).*(right|\.r|\br\b)|\br_hand\b|hand_r|right_hand/i.test(obj.name)) {
-        rightHand = obj;
-      }
       if (obj instanceof THREE.Light) {
         obj.visible = false;
         return;
@@ -592,8 +594,21 @@ function PlayerAvatar3D({
         obj.receiveShadow = true;
       }
     });
-    rightHandNodeRef.current = rightHand;
   }, [clonedScene]);
+
+  useEffect(() => {
+    if (weaponGltfPath) {
+      setPlaceholderHand(null);
+      return;
+    }
+    let rightHand: THREE.Object3D | null = null;
+    clonedScene.traverse((obj) => {
+      if (!rightHand && /(hand|wrist).*(right|\.r|\br\b)|\br_hand\b|hand_r|right_hand/i.test(obj.name)) {
+        rightHand = obj;
+      }
+    });
+    setPlaceholderHand(rightHand);
+  }, [clonedScene, weaponGltfPath]);
 
   useEffect(() => {
     let clip: string | null = null;
@@ -633,9 +648,10 @@ function PlayerAvatar3D({
   return (
     <group ref={rootRef} scale={0.9} rotation={[0, Math.PI / 2, 0]}>
       <primitive object={clonedScene} />
-      {rightHandNodeRef.current ? (
-        <primitive object={rightHandNodeRef.current}>
-          {/* Placeholder hand armor piece (gauntlet + bracer) until final asset is chosen. */}
+      {weaponGltfPath ? <BoneAttachedWeapon parentScene={clonedScene} url={weaponGltfPath} /> : null}
+      {!weaponGltfPath && placeholderHand ? (
+        <primitive object={placeholderHand}>
+          {/* Placeholder gauntlet when no equipped weapon GLB. */}
           <group position={[0.015, -0.01, 0.035]} rotation={[0.1, 0.25, -0.12]}>
             <mesh castShadow receiveShadow>
               <boxGeometry args={[0.065, 0.08, 0.07]} />
@@ -659,9 +675,10 @@ function combatHoldSeconds(moment: IsoCombatPlayerMoment, fatalJump: boolean): n
 }
 
 function PlayerMarker({
-  playerX, playerY, facingDx, facingDy, combatPulse = 0, playerGlbPath, isoCombatPlayerCue,
+  playerX, playerY, facingDx, facingDy, combatPulse = 0, playerGlbPath, playerWeaponGltfPath, isoCombatPlayerCue,
 }: {
   playerX: number; playerY: number; facingDx: number; facingDy: number; combatPulse?: number; playerGlbPath?: string;
+  playerWeaponGltfPath?: string | null;
   isoCombatPlayerCue?: {
     moment: IsoCombatPlayerMoment;
     variant: "spell" | "skill" | "light";
@@ -783,6 +800,7 @@ function PlayerMarker({
             visualState={visualState}
             actionVersion={actionVersion}
             glbPath={playerGlbPath}
+            weaponGltfPath={playerWeaponGltfPath}
             combatPlayback={combatPlayback}
           />
         </Suspense>
@@ -2568,6 +2586,11 @@ function MonsterModel3DInMaze({
   );
 }
 
+/** Cap iso maze monster foot lift so unstable skinned bounds cannot spike the rig above the cell. */
+const MAZE_MONSTER_GROUND_LIFT_MAX = 0.5;
+const MAZE_MONSTER_BBOX_HEIGHT_MIN = 0.015;
+const MAZE_MONSTER_BBOX_HEIGHT_MAX = 28;
+
 function MonsterInMaze({
   x, y, playerX, playerY, type, combatPulse = 0,
 }: {
@@ -2650,10 +2673,26 @@ function MonsterInMaze({
     if (model) {
       if (!isGhost) {
         groundBox.setFromObject(model);
-        const desiredMinY = FLOOR_Y + 0.015;
-        const neededLift = Math.max(0, desiredMinY - groundBox.min.y);
-        // Keep feet above floor even if animation clips dip root/bones down.
-        groundLiftRef.current = Math.max(groundLiftRef.current * 0.9, neededLift);
+        const bboxH = groundBox.max.y - groundBox.min.y;
+        const bboxOk =
+          Number.isFinite(groundBox.min.y) &&
+          Number.isFinite(groundBox.max.y) &&
+          bboxH >= MAZE_MONSTER_BBOX_HEIGHT_MIN &&
+          bboxH <= MAZE_MONSTER_BBOX_HEIGHT_MAX;
+        if (!bboxOk) {
+          groundLiftRef.current = Math.min(
+            MAZE_MONSTER_GROUND_LIFT_MAX,
+            groundLiftRef.current * 0.88
+          );
+        } else {
+          const desiredMinY = FLOOR_Y + 0.015;
+          const neededLift = Math.max(0, desiredMinY - groundBox.min.y);
+          // Keep feet above floor even if animation clips dip root/bones down.
+          groundLiftRef.current = Math.min(
+            MAZE_MONSTER_GROUND_LIFT_MAX,
+            Math.max(groundLiftRef.current * 0.9, neededLift)
+          );
+        }
         model.position.y = groundLiftRef.current;
       } else {
         groundLiftRef.current = 0;
@@ -2765,6 +2804,7 @@ function MazeScene({
   orbitLookApplierRef,
   orbitRingPointerHeldRef,
   playerGlbPath,
+  playerWeaponGltfPath,
   isoCombatPlayerCue,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
@@ -2842,6 +2882,7 @@ function MazeScene({
         facingDy={facingDy}
         combatPulse={combatPulseVersion}
         playerGlbPath={playerGlbPath}
+        playerWeaponGltfPath={playerWeaponGltfPath}
         isoCombatPlayerCue={isoCombatPlayerCue}
       />
       {magicPortalPreviewOptions &&
@@ -3193,6 +3234,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     combatShieldAvailable = false,
     combatRunDisabled = false,
     playerGlbPath,
+    playerWeaponGltfPath = null,
     isoCombatPlayerCue = null,
     teleportPickTimerOverlay = null,
     fillViewport = false,
@@ -3396,6 +3438,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           orbitLookApplierRef={orbitLookApplierRef}
           orbitRingPointerHeldRef={orbitRingPointerHeldRef}
           playerGlbPath={playerGlbPath}
+          playerWeaponGltfPath={playerWeaponGltfPath}
           isoCombatPlayerCue={isoCombatPlayerCue}
         />
       </Canvas>

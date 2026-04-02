@@ -258,8 +258,9 @@ export default function Monster3dAnimationsReferencePage() {
         </p>
         <p style={{ marginBottom: 20, color: "#b8c8e8", fontSize: "0.9rem" }}>
           <strong>Below:</strong> <em>Live 3D preview</em> — monster type + portrait state (and attack priority on merged rigs).{" "}
-          <em>Combat face-off lab</em> — only <strong>monster</strong> + <strong>scenario</strong> menus; spacing and clip sync
-          come from <code style={{ color: "#c4b8d4" }}>lib/combat3dContact.ts</code> (idle → hunt → fight).
+          <em>Combat face-off lab</em> — <strong>monster</strong> + <strong>scenario</strong> menus, optional{" "}
+          <strong>player weapon</strong> GLB (same paths as in-game armour, hand-attached like combat 3D); spacing and clip
+          sync come from <code style={{ color: "#c4b8d4" }}>lib/combat3dContact.ts</code> (idle → hunt → fight).
         </p>
 
         <div

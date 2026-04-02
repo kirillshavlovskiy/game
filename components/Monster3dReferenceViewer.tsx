@@ -69,6 +69,7 @@ export function Monster3dReferenceViewer() {
   useEffect(() => {
     let cancelled = false;
     setChecking(true);
+    setGlbUrl(null);
     void (async () => {
       const ok = await glbExists(path);
       if (!cancelled) {
@@ -81,11 +82,11 @@ export function Monster3dReferenceViewer() {
     };
   }, [path]);
 
-  const canSequenceDefeat = monsterType !== "G" && (visualState === "defeated" || visualState === "knockdown");
+  const canSequenceDefeat = visualState === "defeated" || visualState === "knockdown";
 
   useEffect(() => {
     queuedVisualStateRef.current = null;
-    if (visualState === "defeated" && defeatPreviewMode === "sequence" && monsterType !== "G") {
+    if (visualState === "defeated" && defeatPreviewMode === "sequence") {
       setPlaybackVisualState("knockdown");
       queuedVisualStateRef.current = "defeated";
       return;
@@ -94,7 +95,8 @@ export function Monster3dReferenceViewer() {
   }, [monsterType, visualState, defeatPreviewMode, previewRunId]);
 
   const mergedAttackVariant =
-    (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "S" || monsterType === "L") && playbackVisualState === "attack"
+    (monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "G" || monsterType === "S" || monsterType === "L") &&
+    playbackVisualState === "attack"
       ? draculaAttackVariant
       : undefined;
 
@@ -246,7 +248,7 @@ export function Monster3dReferenceViewer() {
         </button>
       </div>
 
-      {(visualState === "defeated" || visualState === "knockdown") && monsterType !== "G" ? (
+      {visualState === "defeated" || visualState === "knockdown" ? (
         <p style={{ margin: "0 0 8px", fontSize: "0.8rem", color: "#b8afc8" }}>
           {defeatPreviewMode === "sequence"
             ? "Preview mode: knockdown fall first, then final defeated pose."
@@ -282,7 +284,7 @@ export function Monster3dReferenceViewer() {
           <Suspense fallback={null}>
             {glbUrl ? (
               <Monster3dGltfSceneContent
-                key={`${glbUrl}-${tight}-${mergedAttackVariant ?? "na"}-${demoHurtHp ? "hurt" : "nh"}-${previewRunId}`}
+                key={`${monsterType}-${glbUrl}-${tight}-${mergedAttackVariant ?? "na"}-${demoHurtHp ? "hurt" : "nh"}-${previewRunId}`}
                 url={glbUrl}
                 visualState={playbackVisualState}
                 tightFraming={tight}

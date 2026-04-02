@@ -16,11 +16,13 @@ Place one binary glTF per creature (`.glb`):
 | `dracula.glb`   | Dracula        | `V`           |
 | `zombie.glb`    | Zombie         | `Z`           |
 | `spider.glb`    | Spider         | `S`           |
-| `ghost.glb`     | Ghost          | `G`           |
+| `ghost.glb`     | Ghost (Ripped Bride biped — merge via `scripts/blender_merge_ghost_animation_glbs.py` + `scripts/retarget-glb-animation-nodes.mjs`) | `G`           |
 | `skeleton.glb`  | Skeleton       | `K`           |
 | `lava.glb`      | Lava elemental | `L`           |
 
 Paths are served as `/models/monsters/<name>.glb` (mapping lives in `lib/monsterModels3d.ts` in the repo root).
+
+**Ghost 2D billboards** (`public/monsters/ghost/*.png`): run `python3 scripts/generate-ghost-sprites.py` (requires Pillow) to regenerate placeholder sprites for the 2D labyrinth UI and combat fallback when 3D is off.
 
 ## Export conventions
 
