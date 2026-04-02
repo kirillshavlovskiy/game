@@ -1,0 +1,4 @@
+{
+  "id": "clown",
+  "states": ["idle", "hunt", "attack", "hurt", "defeated", "recover"]
+}
