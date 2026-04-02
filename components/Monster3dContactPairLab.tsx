@@ -266,6 +266,7 @@ export function Monster3dContactPairLab() {
   const faceOffAnimationSyncKey = useMemo(
     () =>
       [
+        monsterPath,
         monsterType,
         playerState,
         monsterState,
@@ -282,6 +283,7 @@ export function Monster3dContactPairLab() {
         labPlayerWeaponGlb ?? "",
       ].join("|"),
     [
+      monsterPath,
       monsterType,
       playerState,
       monsterState,

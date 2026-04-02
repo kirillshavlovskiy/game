@@ -1956,18 +1956,6 @@ export function CombatScene3D({
     ]
   );
 
-  /** Keep in sync with props immediately — delayed updates caused wrong GLB + new `monsterType` (clip lists) in labs/combat. */
-  const [mUrl, setMUrl] = useState(monsterGltfPath);
-  const [pUrl, setPUrl] = useState(playerGltfPath);
-
-  useEffect(() => {
-    setMUrl(monsterGltfPath);
-  }, [monsterGltfPath]);
-
-  useEffect(() => {
-    setPUrl(playerGltfPath);
-  }, [playerGltfPath]);
-
   useEffect(() => {
     const ac = new AbortController();
     void (async () => {
@@ -2002,9 +1990,15 @@ export function CombatScene3D({
     };
   }, [playerGltfPath]);
 
-  /** Stable canvas identity: not monster type / URLs — swapping GLB only remounts `PositionedGltfSubject` via `key={url}`. */
-  const canvasKey = `meshy-combat-${width}`;
-  const sceneAnchorKey = `${monsterGltfPath}|${playerGltfPath}`;
+  /**
+   * Remount Canvas when monster/player **asset** changes so WebGL + drei `useGLTF` state cannot keep stale bounds/poses
+   * while face-off X and camera reset already target the new file (was one source of wrong spacing after lab monster swap).
+   */
+  const monsterAssetKey = glbSlugFromPathOrUrl(monsterGltfPath) ?? "monster";
+  const playerAssetKey = glbSlugFromPathOrUrl(playerGltfPath) ?? "player";
+  const canvasKey = `meshy-combat-${width}-${monsterAssetKey}-${playerAssetKey}`;
+  /** Include `monsterType` so orbit + meshy framing reset if type changes even when URL is reused. */
+  const sceneAnchorKey = `${monsterGltfPath}|${playerGltfPath}|${monsterType ?? ""}`;
   const initialCombatCamera = useMemo(
     (): readonly [number, number, number] => [0, cameraY, cameraZ],
     [cameraY, cameraZ],
@@ -2047,12 +2041,12 @@ export function CombatScene3D({
           {faceOffAnimationSyncKey != null && faceOffAnimationSyncKey !== "" ? (
             <CombatFaceOffPairedSubjects
               faceOffAnimationSyncKey={faceOffAnimationSyncKey}
-              pUrl={pUrl}
-              mUrl={mUrl}
+              pUrl={playerGltfPath}
+              mUrl={monsterGltfPath}
               playerEl={
                 <PositionedGltfSubject
-                  key={pUrl}
-                  url={pUrl}
+                  key={playerGltfPath}
+                  url={playerGltfPath}
                   visualState={playerVisualState}
                   tightFraming={false}
                   isPlayerModel
@@ -2069,8 +2063,8 @@ export function CombatScene3D({
               }
               monsterEl={
                 <PositionedGltfSubject
-                  key={mUrl}
-                  url={mUrl}
+                  key={monsterGltfPath}
+                  url={monsterGltfPath}
                   visualState={monsterVisualState}
                   tightFraming={false}
                   monsterType={monsterType}
@@ -2089,8 +2083,8 @@ export function CombatScene3D({
           ) : (
             <>
               <PositionedGltfSubject
-                key={pUrl}
-                url={pUrl}
+                key={playerGltfPath}
+                url={playerGltfPath}
                 visualState={playerVisualState}
                 tightFraming={false}
                 isPlayerModel
@@ -2105,8 +2099,8 @@ export function CombatScene3D({
                 weaponUrl={armourGltfPath}
               />
               <PositionedGltfSubject
-                key={mUrl}
-                url={mUrl}
+                key={monsterGltfPath}
+                url={monsterGltfPath}
                 visualState={monsterVisualState}
                 tightFraming={false}
                 monsterType={monsterType}
