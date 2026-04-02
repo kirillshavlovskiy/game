@@ -27,6 +27,11 @@ import {
   resolvePlayerShieldBlockClipName,
   type IsoCombatPlayerMoment,
 } from "@/lib/monsterModels3d";
+import {
+  mapRotationDebugEnabled,
+  mapRotationLog,
+  mapRotationLogSnapshot,
+} from "@/lib/mapRotationDebug";
 
 type MiniMonster = { x: number; y: number; type?: string; draculaState?: DraculaState };
 
@@ -96,6 +101,11 @@ type Props = {
    * `IsoDockGridMiniMap`’s `atan2(dy,dx)+90`. Lets the mini-map rotate with orbit, not only cardinal facing snaps.
    */
   onIsoCameraBearingDeg?: (deg: number) => void;
+  /**
+   * Bump when the parent clears `isoCameraBearingDeg` (e.g. left 3D mode) so the next ISO session re-emits bearing.
+   * Otherwise `lastEmittedBearingDegRef` can match the unchanged camera and the minimap falls back to cardinal facing.
+   */
+  isoBearingSyncKey?: number;
   /** In-maze combat flow: click 3D view to roll, then play attack pulses in-scene. */
   combatActive?: boolean;
   combatRolling?: boolean;
@@ -694,8 +704,15 @@ function PlayerMarker({
     queuedCombatPulseRef.current = true;
   }, [combatPulse]);
 
+  const { camera } = useThree();
+
   useFrame(() => {
     if (!groupRef.current) return;
+    const camToTarget = new THREE.Vector3().subVectors(targetPos.current, camera.position);
+    camToTarget.y = 0;
+    if (camToTarget.lengthSq() > 1e-6) {
+      targetYawRef.current = Math.atan2(camToTarget.x, camToTarget.z);
+    }
     if (!didInitPosRef.current) {
       groupRef.current.position.copy(targetPos.current);
       groupRef.current.rotation.y = targetYawRef.current;
@@ -1530,6 +1547,7 @@ function CameraController({
   touchUi,
   onTouchCameraForwardGrid,
   onIsoCameraBearingDeg,
+  isoBearingSyncKey = 0,
   orbitLookApplierRef,
   orbitRingPointerHeldRef,
 }: {
@@ -1550,6 +1568,7 @@ function CameraController({
   touchUi: boolean;
   onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
   onIsoCameraBearingDeg?: (deg: number) => void;
+  isoBearingSyncKey?: number;
   orbitLookApplierRef: MutableRefObject<((dxPx: number, dyPx: number) => void) | null>;
   orbitRingPointerHeldRef: MutableRefObject<boolean>;
 }) {
@@ -1557,6 +1576,8 @@ function CameraController({
   const controlsRef = useRef<any>(null);
   const prevResetTick = useRef(resetTick);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
+  /** Desktop: left-drag orbits without snapping walk facing; right-drag (or touch) syncs N/E/S/W forward. */
+  const mouseOrbitButtonRef = useRef<number | null>(null);
   const dragAccumRef = useRef(0);
   /** True for exactly the frame when orbitLookByPixelDelta (minimap ring) applied a delta — synchronous guard like dragRef. */
   const lastOrbitRingApplyMsRef = useRef(0);
@@ -1587,6 +1608,7 @@ function CameraController({
 
   useLayoutEffect(() => {
     orbitLookApplierRef.current = (dxPx: number, dyPx: number) => {
+      mapRotationLog("orbitLookByPixelDelta", { dxPx, dyPx, source: "ringOrCanvasRef" }, 60);
       applyManualOrbitFromDelta(camera, controlsRef, dxPx, dyPx, hasManualCameraRef, manualOffsetRef);
       lastOrbitRingApplyMsRef.current =
         typeof performance !== "undefined" ? performance.now() : typeof Date !== "undefined" ? Date.now() : 0;
@@ -1599,6 +1621,11 @@ function CameraController({
   useEffect(() => {
     lastTouchForwardGridRef.current = null;
   }, [focusVersion, playerX, playerY]);
+
+  useEffect(() => {
+    lastEmittedBearingDegRef.current = null;
+    mapRotationLog("isoBearingSyncKey", { clearedLastEmittedBearing: true, isoBearingSyncKey });
+  }, [isoBearingSyncKey]);
 
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera) {
@@ -1625,7 +1652,7 @@ function CameraController({
 
   /* Camera orbit: left/right mouse-drag uses 1:1 pixels. One-finger canvas swipe: same 1:1 when not touchUi
      (match desktop + minimap ring); boosted only in touchUi “tilt / coarse pointer” mode. */
-  const TOUCH_ORBIT_SENSITIVITY = 3.2;
+  const TOUCH_ORBIT_SENSITIVITY = 2.45;
   useEffect(() => {
     const canvas = gl.domElement;
     const touchSens = touchUi ? TOUCH_ORBIT_SENSITIVITY : 1;
@@ -1633,7 +1660,9 @@ function CameraController({
     const onMouseDown = (e: MouseEvent) => {
       if (e.button === 0 || e.button === 2) {
         dragRef.current = { x: e.clientX, y: e.clientY };
+        mouseOrbitButtonRef.current = e.button;
         dragAccumRef.current = 0;
+        mapRotationLog("canvasPointer", { phase: "down", button: e.button, touchUi });
         e.preventDefault();
       }
     };
@@ -1643,19 +1672,23 @@ function CameraController({
       const dy = e.clientY - dragRef.current.y;
       dragAccumRef.current += Math.abs(dx) + Math.abs(dy);
       dragRef.current = { x: e.clientX, y: e.clientY };
+      mapRotationLog("canvasOrbitDelta", { dx, dy, kind: "mouse", touchUi }, 80);
       applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
     const onMouseUp = () => {
       if (dragAccumRef.current > DRAG_SUPPRESS_THRESHOLD_PX) {
         _suppressNextFloorClick = true;
       }
+      mapRotationLog("canvasPointer", { phase: "up", touchUi });
       dragRef.current = null;
+      mouseOrbitButtonRef.current = null;
       dragAccumRef.current = 0;
     };
     const onContextMenu = (e: MouseEvent) => { e.preventDefault(); };
     const onWheel = () => {
       const ctrl = controlsRef.current;
       if (!ctrl) return;
+      mapRotationLog("canvasWheel", { action: "marksManualCameraOffset" });
       hasManualCameraRef.current = true;
       manualOffsetRef.current = camera.position.clone().sub(ctrl.target);
     };
@@ -1665,6 +1698,7 @@ function CameraController({
       e.preventDefault();
       dragRef.current = { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY };
       dragAccumRef.current = 0;
+      mapRotationLog("canvasPointer", { phase: "touchStart", touchUi, touchSens });
     };
     const onTouchMove = (e: TouchEvent) => {
       if (!dragRef.current || e.touches.length !== 1) return;
@@ -1676,12 +1710,14 @@ function CameraController({
       const dx = rawDx * touchSens;
       const dy = rawDy * touchSens;
       dragRef.current = { x: t.clientX, y: t.clientY };
+      mapRotationLog("canvasOrbitDelta", { dx, dy, rawDx, rawDy, kind: "touch", touchUi }, 80);
       applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
     const onTouchEnd = () => {
       if (dragAccumRef.current > DRAG_SUPPRESS_THRESHOLD_PX) {
         _suppressNextFloorClick = true;
       }
+      mapRotationLog("canvasPointer", { phase: "touchEnd", touchUi });
       dragRef.current = null;
       dragAccumRef.current = 0;
     };
@@ -1821,6 +1857,11 @@ function CameraController({
     const prevPosForMove = prevPlayerPosRef.current;
     const movedFar = Math.hypot(playerX - prevPosForMove.x, playerY - prevPosForMove.y) > 1.01;
     if (movedFar && !rotateMode && !dragRef.current && !orbitRingGesture && !lockCameraToAutoFraming) {
+      mapRotationLog("manualCameraCleared", {
+        reason: "playerMovedFar_noOrbitGesture",
+        playerX,
+        playerY,
+      });
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       transitionBlendRef.current = Math.max(transitionBlendRef.current, 0.42);
@@ -1857,6 +1898,7 @@ function CameraController({
 
     if (prevResetTick.current !== resetTick) {
       prevResetTick.current = resetTick;
+      mapRotationLog("manualCameraCleared", { reason: "resetCameraView_resetTick" });
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       transitionBlendRef.current = 0;
@@ -1870,6 +1912,7 @@ function CameraController({
     }
 
     if (turnChanged) {
+      mapRotationLog("manualCameraCleared", { reason: "focusTurnChanged", focusVersion });
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       const facingCandidate = {
@@ -1888,9 +1931,13 @@ function CameraController({
      * Do not clear manual orbit when the player facing flips to a cardinal **because** we are orbiting:
      * `onTouchCameraForwardGrid` snaps view→grid to N/E/S/W while the minimap ring or canvas drag runs.
      * `activateRotate()` commits one frame late; without this guard, `facingChanged && !rotateMode` wiped
-     * `manualOffsetRef` and the camera jumped in ~90° steps (especially on mobile landscape ring drag).
+     * `manualOffsetRef` and the camera jumped in coarse steps (especially on mobile landscape ring drag).
      */
     if (facingChanged && !rotateMode && !dragRef.current && !orbitRingGesture) {
+      mapRotationLog("manualCameraCleared", {
+        reason: "gridFacingChanged_whileNotOrbiting",
+        facingNow,
+      });
       hasManualCameraRef.current = false;
       manualOffsetRef.current = null;
       autoDirRef.current = desiredDir;
@@ -1917,11 +1964,16 @@ function CameraController({
       ctrl.update();
     }
 
-    /* Walk “forward” = into the view: camera→pawn on XZ, snapped to cardinals. Touch: always. Desktop: while aiming. */
+    /* Walk “forward” = into the view: camera→pawn on XZ, snapped to cardinals.
+     * Touch: any orbit / manual aim. Desktop: explicit rotate (Ctrl/button), right-drag, or minimap ring only —
+     * left-drag orbit must not snap facing every 90° or twitch at axis boundaries. */
     const cameraDrivesFacingGrid =
       !!onTouchCameraForwardGridRef.current &&
       !lockCameraToAutoFraming &&
-      (touchUi || hasManualCameraRef.current || dragRef.current != null || orbitRingGesture || rotateMode);
+      (orbitRingGesture ||
+        rotateMode ||
+        (touchUi && (dragRef.current != null || hasManualCameraRef.current)) ||
+        (!touchUi && dragRef.current != null && mouseOrbitButtonRef.current === 2));
     if (cameraDrivesFacingGrid) {
       const toPawn = new THREE.Vector3().subVectors(ctrl.target, camera.position);
       toPawn.y = 0;
@@ -1954,13 +2006,49 @@ function CameraController({
         toB.multiplyScalar(1 / hB);
         const bearingDeg = (Math.atan2(toB.z, toB.x) * 180) / Math.PI + 90;
         const prevB = lastEmittedBearingDegRef.current;
-        const bearingThresh =
-          hasManualCameraRef.current || dragRef.current != null || orbitRingGesture || rotateMode ? 0.04 : 0.12;
-        if (prevB == null || Math.abs(bearingDeg - prevB) > bearingThresh) {
+        // Emit whenever bearing changes (no degree-step gate): threshold caused visible 90°-ish minimap jumps
+        // when parent fell back to cardinal `playerFacing` between sparse updates.
+        const deltaB = prevB == null ? 999 : Math.abs(bearingDeg - prevB);
+        const wrappedDelta = prevB == null ? 999 : Math.min(deltaB, 360 - deltaB);
+        if (prevB == null || wrappedDelta > 1e-4) {
           lastEmittedBearingDegRef.current = bearingDeg;
           onIsoCameraBearingDegRef.current(bearingDeg);
+          mapRotationLog(
+            "bearingEmitted",
+            { bearingDeg: Math.round(bearingDeg * 1000) / 1000, wrappedDelta },
+            120,
+          );
         }
       }
+    }
+
+    if (mapRotationDebugEnabled()) {
+      let hBLen: number | null = null;
+      let bearingDiag: string;
+      if (lockCameraToAutoFraming) bearingDiag = "blocked_catapultLock";
+      else if (!onIsoCameraBearingDegRef.current) {
+        bearingDiag = "blocked_noParentCallback_isGridOrUnwired";
+      } else {
+        const toBD = new THREE.Vector3().subVectors(ctrl.target, camera.position);
+        toBD.y = 0;
+        hBLen = toBD.length();
+        bearingDiag = hBLen <= 1e-4 ? "blocked_degenerateCameraRay" : "emitting_ok";
+      }
+      mapRotationLogSnapshot("cameraController", {
+        rotateMode,
+        dragActive: !!dragRef.current,
+        mouseOrbitBtn: mouseOrbitButtonRef.current,
+        touchUi,
+        orbitRingPointerHeld: orbitRingPointerHeldRef.current,
+        orbitRingRecently,
+        orbitRingGesture,
+        lockCameraToAutoFraming,
+        hasManualCamera: hasManualCameraRef.current,
+        autoFollowLerping: !rotateMode && !dragRef.current && !orbitRingGesture,
+        cameraDrivesFacingGrid,
+        bearingDiag,
+        hB_len: hBLen,
+      });
     }
 
   });
@@ -2672,6 +2760,7 @@ function MazeScene({
   touchUi = false,
   onTouchCameraForwardGrid,
   onIsoCameraBearingDeg,
+  isoBearingSyncKey = 0,
   orbitLookApplierRef,
   orbitRingPointerHeldRef,
   playerGlbPath,
@@ -2785,6 +2874,7 @@ function MazeScene({
         touchUi={touchUi}
         onTouchCameraForwardGrid={onTouchCameraForwardGrid}
         onIsoCameraBearingDeg={onIsoCameraBearingDeg}
+        isoBearingSyncKey={isoBearingSyncKey}
         orbitLookApplierRef={orbitLookApplierRef}
         orbitRingPointerHeldRef={orbitRingPointerHeldRef}
       />
@@ -3105,11 +3195,12 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     isoCombatPlayerCue = null,
     teleportPickTimerOverlay = null,
     fillViewport = false,
-    touchUi = false,
-    onRotateModeChange,
-    onTouchCameraForwardGrid,
-    onIsoCameraBearingDeg,
-  }: Props,
+  touchUi = false,
+  onRotateModeChange,
+  onTouchCameraForwardGrid,
+  onIsoCameraBearingDeg,
+  isoBearingSyncKey = 0,
+}: Props,
   ref: Ref<MazeIsoViewImperativeHandle>,
 ) {
   const canvasCameraRef = useRef<THREE.Camera | null>(null);
@@ -3129,11 +3220,23 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     setResetTick((t) => t + 1);
   }, []);
 
+  /** Auto-exit rotate mode after inactivity — disabled while the minimap orbit ring is held so long drags never cut out. */
+  const scheduleRotateSessionEnd = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (orbitRingPointerHeldRef.current) {
+      timerRef.current = null;
+      mapRotationLog("rotateSessionTimer", { action: "cleared_ringHeld_noExpiryWhileDragging" }, 800);
+      return;
+    }
+    timerRef.current = setTimeout(() => setBtnRotate(false), ROTATE_TIMEOUT_MS);
+    mapRotationLog("rotateSessionTimer", { action: "scheduled", ms: ROTATE_TIMEOUT_MS }, 500);
+  }, []);
+
   const activateRotate = useCallback(() => {
     const enable = () => {
       setBtnRotate(true);
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => setBtnRotate(false), ROTATE_TIMEOUT_MS);
+      mapRotationLog("activateRotate", { touchUi, ringHeld: orbitRingPointerHeldRef.current }, 400);
+      scheduleRotateSessionEnd();
     };
     btnRotateRef.current = true;
     /**
@@ -3150,13 +3253,12 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       }
     }
     enable();
-  }, [touchUi]);
+  }, [touchUi, scheduleRotateSessionEnd]);
 
   const bumpRotateSession = useCallback(() => {
     if (!btnRotateRef.current) return;
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setBtnRotate(false), ROTATE_TIMEOUT_MS);
-  }, []);
+    scheduleRotateSessionEnd();
+  }, [scheduleRotateSessionEnd]);
 
   useImperativeHandle(
     ref,
@@ -3165,7 +3267,14 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       bumpRotateSession,
       resetCameraView,
       setOrbitRingPointerHeld: (held: boolean) => {
+        mapRotationLog("orbitRingPointerHeld", { held });
         orbitRingPointerHeldRef.current = held;
+        if (held) {
+          if (timerRef.current) clearTimeout(timerRef.current);
+          timerRef.current = null;
+        } else if (btnRotateRef.current) {
+          scheduleRotateSessionEnd();
+        }
       },
       orbitLookByPixelDelta: (dxPx: number, dyPx: number) => {
         orbitLookApplierRef.current?.(dxPx, dyPx);
@@ -3177,7 +3286,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
         return computeSlingLaunchScreenPull(from, clientX, clientY, cam as THREE.PerspectiveCamera, el);
       },
     }),
-    [activateRotate, bumpRotateSession, resetCameraView],
+    [activateRotate, bumpRotateSession, resetCameraView, scheduleRotateSessionEnd],
   );
 
   useEffect(() => {
@@ -3282,6 +3391,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           touchUi={touchUi}
           onTouchCameraForwardGrid={onTouchCameraForwardGrid}
           onIsoCameraBearingDeg={onIsoCameraBearingDeg}
+          isoBearingSyncKey={isoBearingSyncKey}
           orbitLookApplierRef={orbitLookApplierRef}
           orbitRingPointerHeldRef={orbitRingPointerHeldRef}
           playerGlbPath={playerGlbPath}
