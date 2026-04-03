@@ -16,7 +16,36 @@ export type ArtifactIconVariant =
   | "trap"
   | "holySword"
   | "holyCross"
+  | "dragonFuryAxe"
+  | "eternalFrostblade"
+  | "zweihandhammer"
+  | "azureDragonShield"
+  | "nordicShield"
+  | "wardShield"
   | "artifact"; // Generic artifact/box (treasure from monster bonus)
+
+/** Combat Skills row accent (gold = strike moves / weapon line, green = shield line). */
+export function artifactCombatSkillAccent(variant: ArtifactIconVariant): "gold" | "green" | "violet" {
+  if (
+    variant === "shield" ||
+    variant === "holyCross" ||
+    variant === "azureDragonShield" ||
+    variant === "nordicShield" ||
+    variant === "wardShield"
+  ) {
+    return "green";
+  }
+  if (
+    variant === "dice" ||
+    variant === "holySword" ||
+    variant === "dragonFuryAxe" ||
+    variant === "eternalFrostblade" ||
+    variant === "zweihandhammer"
+  ) {
+    return "gold";
+  }
+  return "violet";
+}
 
 const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
   bomb: "artifacts/bmb.PNG",
@@ -33,6 +62,12 @@ const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
   trap: "artifacts/trap.PNG",
   holySword: "artifacts/holy-sword.png",
   holyCross: "artifacts/holy-cross.png",
+  dragonFuryAxe: "artifacts/holy-sword.png",
+  eternalFrostblade: "artifacts/holy-sword.png",
+  zweihandhammer: "artifacts/holy-sword.png",
+  azureDragonShield: "artifacts/holy-cross.png",
+  nordicShield: "artifacts/holy-cross.png",
+  wardShield: "artifacts/holy-cross.png",
   artifact: "artifacts/diamond.png",
 };
 
@@ -93,6 +128,39 @@ export function ArtifactIcon({ variant, size = 28, style, title, opacity = 1, cl
         }}
       >
         ❤️
+      </span>
+    );
+  }
+  const emojiArtifact: Record<string, { label: string; emoji: string; scale?: number }> = {
+    dragonFuryAxe: { label: "Dragon Fury Axe", emoji: "🪓", scale: 0.92 },
+    eternalFrostblade: { label: "Eternal Frostblade", emoji: "❄️", scale: 0.88 },
+    zweihandhammer: { label: "Zweihandhammer", emoji: "🔨", scale: 0.9 },
+    azureDragonShield: { label: "Azure Dragon Shield", emoji: "🐉", scale: 0.85 },
+    nordicShield: { label: "Nordic Shield", emoji: "🛡️", scale: 0.88 },
+    wardShield: { label: "Warden Shield", emoji: "🛡️", scale: 0.88 },
+  };
+  const em = emojiArtifact[variant];
+  if (em) {
+    const sc = (em.scale ?? 0.9) * EMOJI_ARTIFACT_SCALE;
+    return (
+      <span
+        role="img"
+        aria-label={em.label}
+        title={title}
+        className={className}
+        style={{
+          fontSize: size * sc,
+          lineHeight: 1,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: size,
+          height: size,
+          opacity,
+          ...style,
+        }}
+      >
+        {em.emoji}
       </span>
     );
   }

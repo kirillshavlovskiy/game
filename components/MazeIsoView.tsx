@@ -18,7 +18,13 @@ import { Canvas, useThree, useFrame, ThreeEvent } from "@react-three/fiber";
 import { OrbitControls, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { MAZE_FLOOR_TEXTURE, MAZE_ISO_WALL_SIDE_TEXTURE } from "@/lib/mazeCellTheme";
-import { WALL, type DraculaState, type MonsterType } from "@/lib/labyrinth";
+import {
+  WALL,
+  type DraculaState,
+  type MonsterType,
+  type StoredArtifactKind,
+} from "@/lib/labyrinth";
+import { ARTIFACT_KIND_VISUAL_GLB, COLLECTIBLE_ARTIFACT_GLB_URLS } from "@/lib/storedArtifactGlbs";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import {
   getMonsterGltfPathForReference,
@@ -125,6 +131,8 @@ type Props = {
   playerGlbPath?: string;
   /** Optional weapon/armour GLB — same hand attach as combat `CombatScene3D` (`BoneAttachedWeapon`). */
   playerWeaponGltfPath?: string | null;
+  /** Rotating 3D pickups for artifact cells (grid indices; hidden/fog excluded by parent). */
+  artifactPickups?: Array<{ x: number; y: number; kind: StoredArtifactKind }>;
   /** Last resolved strike cue (dice + shield + portrait) — read when combat pulse fires. */
   isoCombatPlayerCue?: {
     moment: IsoCombatPlayerMoment;
@@ -1255,6 +1263,90 @@ function HorrorCornerRelics({
             </mesh>
           </group>
         );
+      })}
+    </>
+  );
+}
+
+for (const _mazeArtifactPreloadUrl of COLLECTIBLE_ARTIFACT_GLB_URLS) {
+  void useGLTF.preload(_mazeArtifactPreloadUrl);
+}
+
+function GenericRotatingArtifactOrb({ x, y }: { x: number; y: number }) {
+  const ref = useRef<THREE.Group>(null);
+  useFrame((_, dt) => {
+    if (ref.current) ref.current.rotation.y += dt * 1.25;
+  });
+  const px = x * CS + CS * 0.5;
+  const pz = y * CS + CS * 0.5;
+  return (
+    <group ref={ref} position={[px, FLOOR_Y + 0.36, pz]}>
+      <mesh castShadow>
+        <octahedronGeometry args={[0.2, 0]} />
+        <meshStandardMaterial
+          color="#9b87f5"
+          emissive="#5b21b6"
+          emissiveIntensity={0.5}
+          metalness={0.35}
+          roughness={0.38}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+function RotatingArtifactGlbPickup({ x, y, url }: { x: number; y: number; url: string }) {
+  const { scene } = useGLTF(url);
+  const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
+  const spinRef = useRef<THREE.Group>(null);
+  useEffect(() => {
+    clone.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+      }
+    });
+  }, [clone]);
+  useLayoutEffect(() => {
+    clone.scale.setScalar(1);
+    const box = new THREE.Box3().setFromObject(clone);
+    const size = box.getSize(new THREE.Vector3());
+    const maxD = Math.max(size.x, size.y, size.z, 1e-4);
+    const u = 0.54 / maxD;
+    clone.scale.setScalar(u);
+    clone.updateMatrixWorld(true);
+    const b2 = new THREE.Box3().setFromObject(clone);
+    clone.position.set(0, -b2.min.y + 0.02, 0);
+  }, [clone]);
+  useFrame((_, dt) => {
+    if (spinRef.current) spinRef.current.rotation.y += dt * 1.05;
+  });
+  const px = x * CS + CS * 0.5;
+  const pz = y * CS + CS * 0.5;
+  return (
+    <group position={[px, FLOOR_Y + 0.02, pz]}>
+      <group ref={spinRef}>
+        <primitive object={clone} />
+      </group>
+    </group>
+  );
+}
+
+function MazeArtifactPickups({
+  pickups,
+}: {
+  pickups: Array<{ x: number; y: number; kind: StoredArtifactKind }>;
+}) {
+  if (!pickups.length) return null;
+  return (
+    <>
+      {pickups.map((p) => {
+        const url = ARTIFACT_KIND_VISUAL_GLB[p.kind];
+        const key = `${p.x},${p.y},${p.kind}`;
+        if (url) {
+          return <RotatingArtifactGlbPickup key={key} x={p.x} y={p.y} url={url} />;
+        }
+        return <GenericRotatingArtifactOrb key={key} x={p.x} y={p.y} />;
       })}
     </>
   );
@@ -2661,7 +2753,13 @@ function MonsterInMaze({
       nearPlayerRef.current = false;
     }
     const transitDist = smoothPosRef.current.distanceTo(targetPosRef.current);
-    const movingAcrossTiles = transitDist > 0.05;
+    /**
+     * Non-ghost: `hunt` = walk/run clip while lerping toward a new grid cell.
+     * Ghost (`G`): never use `hunt` for animation — smooth drift + bob already sells motion; the prior
+     * `transitDist > 0.05` gate stayed true almost always (lerp tail + target updates), so Walking loop
+     * never dropped to idle.
+     */
+    const movingAcrossTiles = type !== "G" && transitDist > 0.05;
     const reacting = t < attackUntilRef.current;
     const next: "idle" | "hunt" | "attack" = reacting ? "attack" : (movingAcrossTiles ? "hunt" : "idle");
     if (next !== visualStateRef.current) {
@@ -2818,6 +2916,7 @@ function MazeScene({
   playerGlbPath,
   playerWeaponGltfPath,
   isoCombatPlayerCue,
+  artifactPickups,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
   resetTick: number;
@@ -2877,6 +2976,9 @@ function MazeScene({
         fogIntensityMap={fogIntensityMap}
       />
       <HorrorCornerRelics grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
+      <Suspense fallback={null}>
+        <MazeArtifactPickups pickups={artifactPickups ?? []} />
+      </Suspense>
       <WallBlocks grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
       {miniMonsters && miniMonsters.length > 0 && (
         <Monsters3D
@@ -3285,6 +3387,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     combatRunDisabled = false,
     playerGlbPath,
     playerWeaponGltfPath = null,
+    artifactPickups,
     isoCombatPlayerCue = null,
     teleportPickTimerOverlay = null,
     fillViewport = false,
@@ -3489,6 +3592,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           orbitRingPointerHeldRef={orbitRingPointerHeldRef}
           playerGlbPath={playerGlbPath}
           playerWeaponGltfPath={playerWeaponGltfPath}
+          artifactPickups={artifactPickups}
           isoCombatPlayerCue={isoCombatPlayerCue}
         />
       </Canvas>

@@ -14,6 +14,12 @@ export const PLAYER_ARMOUR_GLB_OPTIONS = [
   { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Stormbreaker_Axe_0329003533_texture.glb`, label: "Stormbreaker Axe", emoji: "⛏️" },
   { path: `${ARMOUR_GLB_PREFIX}Meshy_AI__0329003550_texture.glb`, label: "Dark Relic", emoji: "🔮" },
   { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Reaper_s_Edge_0329003602_texture.glb`, label: "Reaper's Edge", emoji: "💀" },
+  { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Dragon_Fury_Axe_0403170000_texture.glb`, label: "Dragon Fury Axe", emoji: "🪓" },
+  { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Eternal_Frostblade_0403174010_texture.glb`, label: "Eternal Frostblade", emoji: "❄️" },
+  { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Zweihandhammer_Doppe_0403170009_texture.glb`, label: "Zweihandhammer", emoji: "🔨" },
+  { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Azure_Dragon_Shield_0403173852_texture.glb`, label: "Azure Dragon Shield", emoji: "🐉" },
+  { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Nordic_Shield_Design__0403170042_texture.glb`, label: "Nordic Shield", emoji: "🛡️" },
+  { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_shield_0403170046_texture.glb`, label: "Warden Shield", emoji: "🛡️" },
 ] as const;
 
 export type PlayerArmourGlbOption = (typeof PLAYER_ARMOUR_GLB_OPTIONS)[number];

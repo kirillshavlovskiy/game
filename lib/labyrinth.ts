@@ -20,7 +20,7 @@ export const TRAP_HARM = "!";
 export const TRAP_TELEPORT = "P";
 export const TRAP_SLOW = "Q"; // Q for slow (S conflicts with Start display)
 
-/** Artifact cell types (A1–A8) */
+/** Artifact cell types (A1–A14) */
 export const ARTIFACT_DICE = "A1";
 export const ARTIFACT_SHIELD = "A2";
 export const ARTIFACT_TELEPORT = "A3";
@@ -29,6 +29,12 @@ export const ARTIFACT_HEALING = "A5";
 export const ARTIFACT_TORCH = "A6";
 export const ARTIFACT_HOLY_SWORD = "A7";
 export const ARTIFACT_HOLY_CROSS = "A8";
+export const ARTIFACT_DRAGON_FURY_AXE = "A9";
+export const ARTIFACT_ETERNAL_FROSTBLADE = "A10";
+export const ARTIFACT_ZWEIHANDHAMMER = "A11";
+export const ARTIFACT_AZURE_DRAGON_SHIELD = "A12";
+export const ARTIFACT_NORDIC_SHIELD = "A13";
+export const ARTIFACT_WARD_SHIELD = "A14";
 
 export const MAX_ROUNDS = 15;
 export const DEFAULT_PLAYER_HP = 5;
@@ -42,7 +48,13 @@ export type StoredArtifactKind =
   | "healing"
   | "torch"
   | "holySword"
-  | "holyCross";
+  | "holyCross"
+  | "dragonFuryAxe"
+  | "eternalFrostblade"
+  | "zweihandhammer"
+  | "azureDragonShield"
+  | "nordicShield"
+  | "wardShield";
 
 export const STORED_ARTIFACT_ORDER: StoredArtifactKind[] = [
   "dice",
@@ -53,6 +65,12 @@ export const STORED_ARTIFACT_ORDER: StoredArtifactKind[] = [
   "torch",
   "holySword",
   "holyCross",
+  "dragonFuryAxe",
+  "eternalFrostblade",
+  "zweihandhammer",
+  "azureDragonShield",
+  "nordicShield",
+  "wardShield",
 ];
 
 /** Short name — matches Diamonds / Bombs sidebar rows (`Name: n`). */
@@ -65,6 +83,12 @@ export const STORED_ARTIFACT_TITLE: Record<StoredArtifactKind, string> = {
   torch: "Torch",
   holySword: "Holy sword",
   holyCross: "Holy cross",
+  dragonFuryAxe: "Dragon Fury Axe",
+  eternalFrostblade: "Eternal Frostblade",
+  zweihandhammer: "Zweihandhammer",
+  azureDragonShield: "Azure Dragon Shield",
+  nordicShield: "Nordic Shield",
+  wardShield: "Warden Shield",
 };
 
 /** One-line entry for `artifactsCollected` / logs (same wording everywhere). */
@@ -77,6 +101,18 @@ export const STORED_ARTIFACT_LINE: Record<StoredArtifactKind, string> = {
   torch: "Torch — clears fog (map only)",
   holySword: "Holy sword — map: roll d6 for moves; combat: +1 to your next strike die (monster damage)",
   holyCross: "Holy cross — map: +1 shield charge; combat: +1 to your next strike die (monster damage)",
+  dragonFuryAxe:
+    "Dragon Fury Axe — map: roll d6 for moves; combat: +1 to your next strike die; equips axe when spent",
+  eternalFrostblade:
+    "Eternal Frostblade — map: roll d6 for moves; combat: +1 to your next strike die; equips blade when spent",
+  zweihandhammer:
+    "Zweihandhammer — map: roll d6 for moves; combat: +1 to your next strike die; equips hammer when spent",
+  azureDragonShield:
+    "Azure Dragon Shield — map: +1 shield charge; combat: +1 to your next strike die; equips shield when spent",
+  nordicShield:
+    "Nordic Shield — map: +1 shield charge; combat: +1 to your next strike die; equips shield when spent",
+  wardShield:
+    "Warden Shield — map: +1 shield charge; combat: +1 to your next strike die; equips shield when spent",
 };
 
 export const STORED_ARTIFACT_TOOLTIP: Record<StoredArtifactKind, string> = {
@@ -88,6 +124,12 @@ export const STORED_ARTIFACT_TOOLTIP: Record<StoredArtifactKind, string> = {
   torch: "Spend on map: light torch and clear fog zones. Not usable during combat.",
   holySword: "Map: spend for d6 bonus moves. Combat: spend for +1 on your next strike die (only holy sword/cross add to combat offense).",
   holyCross: "Map: spend for +1 shield charge. Combat: spend for +1 on your next strike die (only holy sword/cross add to combat offense).",
+  dragonFuryAxe: "Same as holy sword, plus equips the Dragon Fury Axe on your character when you spend it.",
+  eternalFrostblade: "Same as holy sword, plus equips the Eternal Frostblade when you spend it.",
+  zweihandhammer: "Same as holy sword, plus equips the Zweihandhammer when you spend it.",
+  azureDragonShield: "Same as holy cross, plus equips the Azure Dragon Shield when you spend it.",
+  nordicShield: "Same as holy cross, plus equips the Nordic shield when you spend it.",
+  wardShield: "Same as holy cross, plus equips the warden shield when you spend it.",
 };
 
 export function storedArtifactKindFromCell(cell: string): StoredArtifactKind | null {
@@ -99,7 +141,33 @@ export function storedArtifactKindFromCell(cell: string): StoredArtifactKind | n
   if (cell === ARTIFACT_TORCH) return "torch";
   if (cell === ARTIFACT_HOLY_SWORD) return "holySword";
   if (cell === ARTIFACT_HOLY_CROSS) return "holyCross";
+  if (cell === ARTIFACT_DRAGON_FURY_AXE) return "dragonFuryAxe";
+  if (cell === ARTIFACT_ETERNAL_FROSTBLADE) return "eternalFrostblade";
+  if (cell === ARTIFACT_ZWEIHANDHAMMER) return "zweihandhammer";
+  if (cell === ARTIFACT_AZURE_DRAGON_SHIELD) return "azureDragonShield";
+  if (cell === ARTIFACT_NORDIC_SHIELD) return "nordicShield";
+  if (cell === ARTIFACT_WARD_SHIELD) return "wardShield";
   return null;
+}
+
+/** Holy sword and weapon-style artifacts: d6 moves on map, +1 next strike die in combat. */
+export function isWeaponStrikeArtifactKind(kind: StoredArtifactKind): boolean {
+  return (
+    kind === "holySword" ||
+    kind === "dragonFuryAxe" ||
+    kind === "eternalFrostblade" ||
+    kind === "zweihandhammer"
+  );
+}
+
+/** Holy cross and shield-style artifacts: +1 shield on map, +1 next strike die in combat. */
+export function isDefenderStrikeArtifactKind(kind: StoredArtifactKind): boolean {
+  return (
+    kind === "holyCross" ||
+    kind === "azureDragonShield" ||
+    kind === "nordicShield" ||
+    kind === "wardShield"
+  );
 }
 
 /** Upper bound on how many cells `revealHiddenCells` would reveal (same formula, no mutation). */
@@ -145,6 +213,12 @@ export function getDefaultStarterArtifacts(playerIndex: number): {
   artifactTorch: number;
   artifactHolySword: number;
   artifactHolyCross: number;
+  artifactDragonFuryAxe: number;
+  artifactEternalFrostblade: number;
+  artifactZweihandhammer: number;
+  artifactAzureDragonShield: number;
+  artifactNordicShield: number;
+  artifactWardShield: number;
 } {
   const base = {
     artifacts: 1,
@@ -157,6 +231,12 @@ export function getDefaultStarterArtifacts(playerIndex: number): {
     artifactTorch: 0,
     artifactHolySword: 0,
     artifactHolyCross: 0,
+    artifactDragonFuryAxe: 0,
+    artifactEternalFrostblade: 0,
+    artifactZweihandhammer: 0,
+    artifactAzureDragonShield: 0,
+    artifactNordicShield: 0,
+    artifactWardShield: 0,
   };
   switch (playerIndex % 8) {
     case 0:
@@ -300,7 +380,13 @@ export function isArtifactCell(cell: string): boolean {
     cell === ARTIFACT_HEALING ||
     cell === ARTIFACT_TORCH ||
     cell === ARTIFACT_HOLY_SWORD ||
-    cell === ARTIFACT_HOLY_CROSS
+    cell === ARTIFACT_HOLY_CROSS ||
+    cell === ARTIFACT_DRAGON_FURY_AXE ||
+    cell === ARTIFACT_ETERNAL_FROSTBLADE ||
+    cell === ARTIFACT_ZWEIHANDHAMMER ||
+    cell === ARTIFACT_AZURE_DRAGON_SHIELD ||
+    cell === ARTIFACT_NORDIC_SHIELD ||
+    cell === ARTIFACT_WARD_SHIELD
   );
 }
 
@@ -381,6 +467,12 @@ export class Labyrinth {
     artifactTorch?: number;
     artifactHolySword?: number;
     artifactHolyCross?: number;
+    artifactDragonFuryAxe?: number;
+    artifactEternalFrostblade?: number;
+    artifactZweihandhammer?: number;
+    artifactAzureDragonShield?: number;
+    artifactNordicShield?: number;
+    artifactWardShield?: number;
     diceBonus?: number; // +1 to next roll from A1
     attackBonus?: number; // +1 to movement roll (map, capped at 6) — not used in combat strikes
     catapultCharges?: number; // bonus from monster defeat - launch without standing on C cell
@@ -627,6 +719,12 @@ export class Labyrinth {
       ARTIFACT_TORCH,
       ARTIFACT_HOLY_SWORD,
       ARTIFACT_HOLY_CROSS,
+      ARTIFACT_DRAGON_FURY_AXE,
+      ARTIFACT_ETERNAL_FROSTBLADE,
+      ARTIFACT_ZWEIHANDHAMMER,
+      ARTIFACT_AZURE_DRAGON_SHIELD,
+      ARTIFACT_NORDIC_SHIELD,
+      ARTIFACT_WARD_SHIELD,
     ];
     for (let i = 0; i < artifactCells.length; i++) {
       const [x, y] = artifactCells[i];
@@ -1129,6 +1227,12 @@ export class Labyrinth {
       ARTIFACT_TORCH,
       ARTIFACT_HOLY_SWORD,
       ARTIFACT_HOLY_CROSS,
+      ARTIFACT_DRAGON_FURY_AXE,
+      ARTIFACT_ETERNAL_FROSTBLADE,
+      ARTIFACT_ZWEIHANDHAMMER,
+      ARTIFACT_AZURE_DRAGON_SHIELD,
+      ARTIFACT_NORDIC_SHIELD,
+      ARTIFACT_WARD_SHIELD,
     ];
     const artifactCount = Math.min(8, pathCells.length);
     for (let i = 0; i < artifactCount && pathCells.length > 0; i++) {

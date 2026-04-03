@@ -110,7 +110,11 @@ const CombatScene3D = dynamic(
   () => import("@/components/MonsterModel3D").then((m) => m.CombatScene3D),
   { ssr: false }
 );
-import { ArtifactIcon, type ArtifactIconVariant } from "@/components/ArtifactIcon";
+import {
+  ArtifactIcon,
+  artifactCombatSkillAccent,
+  type ArtifactIconVariant,
+} from "@/components/ArtifactIcon";
 import {
   Labyrinth,
   PATH,
@@ -153,10 +157,13 @@ import {
   peekRevealBatchSize,
   isStoredArtifactMazePhaseOnly,
   isStoredArtifactCombatPhaseOnly,
+  isWeaponStrikeArtifactKind,
+  isDefenderStrikeArtifactKind,
   type MonsterType,
   type StoredArtifactKind,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
+import { ARTIFACT_KIND_VISUAL_GLB } from "@/lib/storedArtifactGlbs";
 import {
   adjacentWallFogFromIntensityMap,
   basePathStyle,
@@ -634,6 +641,12 @@ function storedArtifactCount(
         artifactTorch?: number;
         artifactHolySword?: number;
         artifactHolyCross?: number;
+        artifactDragonFuryAxe?: number;
+        artifactEternalFrostblade?: number;
+        artifactZweihandhammer?: number;
+        artifactAzureDragonShield?: number;
+        artifactNordicShield?: number;
+        artifactWardShield?: number;
       }
     | undefined
     | null,
@@ -657,6 +670,18 @@ function storedArtifactCount(
       return p.artifactHolySword ?? 0;
     case "holyCross":
       return p.artifactHolyCross ?? 0;
+    case "dragonFuryAxe":
+      return p.artifactDragonFuryAxe ?? 0;
+    case "eternalFrostblade":
+      return p.artifactEternalFrostblade ?? 0;
+    case "zweihandhammer":
+      return p.artifactZweihandhammer ?? 0;
+    case "azureDragonShield":
+      return p.artifactAzureDragonShield ?? 0;
+    case "nordicShield":
+      return p.artifactNordicShield ?? 0;
+    case "wardShield":
+      return p.artifactWardShield ?? 0;
   }
 }
 
@@ -681,6 +706,12 @@ function storedArtifactIconVariant(kind: StoredArtifactKind): ArtifactIconVarian
   if (kind === "torch") return "torch";
   if (kind === "holySword") return "holySword";
   if (kind === "holyCross") return "holyCross";
+  if (kind === "dragonFuryAxe") return "dragonFuryAxe";
+  if (kind === "eternalFrostblade") return "eternalFrostblade";
+  if (kind === "zweihandhammer") return "zweihandhammer";
+  if (kind === "azureDragonShield") return "azureDragonShield";
+  if (kind === "nordicShield") return "nordicShield";
+  if (kind === "wardShield") return "wardShield";
   return kind as ArtifactIconVariant;
 }
 
@@ -696,6 +727,12 @@ function decrementOneStoredArtifactSlot(p: {
   artifactTorch?: number;
   artifactHolySword?: number;
   artifactHolyCross?: number;
+  artifactDragonFuryAxe?: number;
+  artifactEternalFrostblade?: number;
+  artifactZweihandhammer?: number;
+  artifactAzureDragonShield?: number;
+  artifactNordicShield?: number;
+  artifactWardShield?: number;
 }): void {
   for (const k of STORED_ARTIFACT_ORDER) {
     if (storedArtifactCount(p, k) <= 0) continue;
@@ -723,6 +760,24 @@ function decrementOneStoredArtifactSlot(p: {
         break;
       case "holyCross":
         p.artifactHolyCross = Math.max(0, (p.artifactHolyCross ?? 0) - 1);
+        break;
+      case "dragonFuryAxe":
+        p.artifactDragonFuryAxe = Math.max(0, (p.artifactDragonFuryAxe ?? 0) - 1);
+        break;
+      case "eternalFrostblade":
+        p.artifactEternalFrostblade = Math.max(0, (p.artifactEternalFrostblade ?? 0) - 1);
+        break;
+      case "zweihandhammer":
+        p.artifactZweihandhammer = Math.max(0, (p.artifactZweihandhammer ?? 0) - 1);
+        break;
+      case "azureDragonShield":
+        p.artifactAzureDragonShield = Math.max(0, (p.artifactAzureDragonShield ?? 0) - 1);
+        break;
+      case "nordicShield":
+        p.artifactNordicShield = Math.max(0, (p.artifactNordicShield ?? 0) - 1);
+        break;
+      case "wardShield":
+        p.artifactWardShield = Math.max(0, (p.artifactWardShield ?? 0) - 1);
         break;
     }
     p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
@@ -2231,6 +2286,12 @@ const STORED_ARTIFACT_BUTTON_STYLE: Record<StoredArtifactKind, { background: str
   torch: { background: "#ff9944", color: "#111" },
   holySword: { background: "#ddeeff", color: "#111" },
   holyCross: { background: "#ffeedd", color: "#111" },
+  dragonFuryAxe: { background: "#dde8f8", color: "#111" },
+  eternalFrostblade: { background: "#d8f0ff", color: "#111" },
+  zweihandhammer: { background: "#e8e0d8", color: "#111" },
+  azureDragonShield: { background: "#e6f5ee", color: "#111" },
+  nordicShield: { background: "#eef2e8", color: "#111" },
+  wardShield: { background: "#eae8f0", color: "#111" },
 };
 
 function SpiderWebCell() {
@@ -2419,12 +2480,9 @@ function CombatSkillItemIcon({
   onClick?: () => void;
   stackCount?: number;
 }) {
+  const accentTone = artifactCombatSkillAccent(variant);
   const accent =
-    variant === "shield" || variant === "holyCross"
-      ? "#44ff88"
-      : variant === "dice" || variant === "holySword"
-        ? "#ffcc00"
-        : "#8877bb";
+    accentTone === "green" ? "#44ff88" : accentTone === "gold" ? "#ffcc00" : "#8877bb";
   /** Dice emoji uses a square span; keep ≤ slot minus border so it sits inside the outline */
   const rawPx = mode === "locked" ? COMBAT_SKILL_IMG_LOCKED_PX : COMBAT_SKILL_IMG_PX;
   const borderAllowance = mode === "locked" ? 2 : 4;
@@ -2443,12 +2501,16 @@ function CombatSkillItemIcon({
       : mode === "toggle" && !selected
         ? "rgba(0,0,0,0.25)"
         : mode === "toggle" && selected
-          ? variant === "shield" || variant === "holyCross"
+          ? accentTone === "green"
             ? "rgba(68,255,136,0.12)"
-            : "rgba(255,204,0,0.1)"
-          : variant === "shield" || variant === "holyCross"
+            : accentTone === "gold"
+              ? "rgba(255,204,0,0.1)"
+              : "rgba(136,119,187,0.12)"
+          : accentTone === "green"
             ? "rgba(68,255,136,0.1)"
-            : "rgba(255,204,0,0.1)";
+            : accentTone === "gold"
+              ? "rgba(255,204,0,0.1)"
+              : "rgba(136,119,187,0.1)";
   const opacity = mode === "locked" ? 0.55 : disabled ? 0.45 : mode === "toggle" && !selected ? 0.72 : 1;
   const inner = (
     <>
@@ -2538,7 +2600,15 @@ function CombatSkillItemIcon({
         overflow: "hidden",
         lineHeight: 0,
         cursor: disabled ? "default" : "pointer",
-        boxShadow: active ? `0 0 10px ${variant === "shield" ? "rgba(68,255,136,0.25)" : variant === "dice" ? "rgba(255,204,0,0.2)" : "rgba(136,119,187,0.2)"}` : "none",
+        boxShadow: active
+          ? `0 0 10px ${
+              accentTone === "green"
+                ? "rgba(68,255,136,0.25)"
+                : accentTone === "gold"
+                  ? "rgba(255,204,0,0.2)"
+                  : "rgba(136,119,187,0.2)"
+            }`
+          : "none",
       }}
     >
       {inner}
@@ -3530,6 +3600,23 @@ export default function LabyrinthGame() {
     }
     return map;
   }, [lab]);
+
+  const mazeIsoArtifactPickups = useMemo(() => {
+    if (!lab) return [];
+    const out: { x: number; y: number; kind: StoredArtifactKind }[] = [];
+    for (let y = 0; y < lab.height; y++) {
+      for (let x = 0; x < lab.width; x++) {
+        if (lab.hiddenCells.has(`${x},${y}`)) continue;
+        const cell = lab.grid[y]?.[x] ?? "";
+        if (!isArtifactCell(cell)) continue;
+        const fog = fogIntensityMap.get(`${x},${y}`) ?? 0;
+        if (fog > 0.1) continue;
+        const kind = storedArtifactKindFromCell(cell);
+        if (kind) out.push({ x, y, kind });
+      }
+    }
+    return out;
+  }, [lab, fogIntensityMap]);
 
   const scheduleDraculaAction = useCallback((mi: number, action: "teleport" | "attack", delayMs: number) => {
     setTimeout(() => {
@@ -4933,6 +5020,12 @@ export default function LabyrinthGame() {
         artifactTorch: pl.artifactTorch ?? 0,
         artifactHolySword: pl.artifactHolySword ?? 0,
         artifactHolyCross: pl.artifactHolyCross ?? 0,
+        artifactDragonFuryAxe: pl.artifactDragonFuryAxe ?? 0,
+        artifactEternalFrostblade: pl.artifactEternalFrostblade ?? 0,
+        artifactZweihandhammer: pl.artifactZweihandhammer ?? 0,
+        artifactAzureDragonShield: pl.artifactAzureDragonShield ?? 0,
+        artifactNordicShield: pl.artifactNordicShield ?? 0,
+        artifactWardShield: pl.artifactWardShield ?? 0,
       }));
       next.hiddenCells = new Map(prev.hiddenCells);
       next.webPositions = [...(prev.webPositions || [])];
@@ -5119,9 +5212,7 @@ export default function LabyrinthGame() {
         br.type === "storedArtifact"
           ? br.kind
           : br.type === "artifact"
-            ? (["dice", "shield", "teleport", "reveal", "healing", "torch", "holySword", "holyCross"] as StoredArtifactKind[])[
-                Math.floor(Math.random() * 8)
-              ]!
+            ? STORED_ARTIFACT_ORDER[Math.floor(Math.random() * STORED_ARTIFACT_ORDER.length)]!
           : null;
       /** Commit lab before dismiss so labRef / UI see new artifacts (avoids race with modal close + effects). */
       flushSync(() => {
@@ -5145,6 +5236,12 @@ export default function LabyrinthGame() {
           artifactTorch: pl.artifactTorch ?? 0,
           artifactHolySword: pl.artifactHolySword ?? 0,
           artifactHolyCross: pl.artifactHolyCross ?? 0,
+          artifactDragonFuryAxe: pl.artifactDragonFuryAxe ?? 0,
+          artifactEternalFrostblade: pl.artifactEternalFrostblade ?? 0,
+          artifactZweihandhammer: pl.artifactZweihandhammer ?? 0,
+          artifactAzureDragonShield: pl.artifactAzureDragonShield ?? 0,
+          artifactNordicShield: pl.artifactNordicShield ?? 0,
+          artifactWardShield: pl.artifactWardShield ?? 0,
           artifactsCollected: pl.artifactsCollected ?? [],
           diceBonus: pl.diceBonus ?? 0,
         }));
@@ -5180,7 +5277,19 @@ export default function LabyrinthGame() {
           else if (artifactTypePicked === "healing") p.artifactHealing = (p.artifactHealing ?? 0) + br.amount;
           else if (artifactTypePicked === "torch") p.artifactTorch = (p.artifactTorch ?? 0) + br.amount;
           else if (artifactTypePicked === "holySword") p.artifactHolySword = (p.artifactHolySword ?? 0) + br.amount;
-          else p.artifactHolyCross = (p.artifactHolyCross ?? 0) + br.amount;
+          else if (artifactTypePicked === "holyCross") p.artifactHolyCross = (p.artifactHolyCross ?? 0) + br.amount;
+          else if (artifactTypePicked === "dragonFuryAxe")
+            p.artifactDragonFuryAxe = (p.artifactDragonFuryAxe ?? 0) + br.amount;
+          else if (artifactTypePicked === "eternalFrostblade")
+            p.artifactEternalFrostblade = (p.artifactEternalFrostblade ?? 0) + br.amount;
+          else if (artifactTypePicked === "zweihandhammer")
+            p.artifactZweihandhammer = (p.artifactZweihandhammer ?? 0) + br.amount;
+          else if (artifactTypePicked === "azureDragonShield")
+            p.artifactAzureDragonShield = (p.artifactAzureDragonShield ?? 0) + br.amount;
+          else if (artifactTypePicked === "nordicShield")
+            p.artifactNordicShield = (p.artifactNordicShield ?? 0) + br.amount;
+          else if (artifactTypePicked === "wardShield")
+            p.artifactWardShield = (p.artifactWardShield ?? 0) + br.amount;
         }
         if (br.type === "bomb") {
           p.bombs = (p.bombs ?? 0) + br.amount;
@@ -5687,6 +5796,12 @@ export default function LabyrinthGame() {
         artifactTorch: p.artifactTorch ?? 0,
         artifactHolySword: p.artifactHolySword ?? 0,
         artifactHolyCross: p.artifactHolyCross ?? 0,
+        artifactDragonFuryAxe: p.artifactDragonFuryAxe ?? 0,
+        artifactEternalFrostblade: p.artifactEternalFrostblade ?? 0,
+        artifactZweihandhammer: p.artifactZweihandhammer ?? 0,
+        artifactAzureDragonShield: p.artifactAzureDragonShield ?? 0,
+        artifactNordicShield: p.artifactNordicShield ?? 0,
+        artifactWardShield: p.artifactWardShield ?? 0,
       }));
       next.hiddenCells = new Map(lab.hiddenCells);
       next.webPositions = [...(lab.webPositions || [])];
@@ -5749,9 +5864,32 @@ export default function LabyrinthGame() {
         p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
         p.hasTorch = true;
         setTorchGained(true);
-      } else if (type === "holySword") {
-        p.artifactHolySword!--;
+      } else if (isWeaponStrikeArtifactKind(type)) {
+        switch (type) {
+          case "holySword":
+            p.artifactHolySword!--;
+            break;
+          case "dragonFuryAxe":
+            p.artifactDragonFuryAxe!--;
+            break;
+          case "eternalFrostblade":
+            p.artifactEternalFrostblade!--;
+            break;
+          case "zweihandhammer":
+            p.artifactZweihandhammer!--;
+            break;
+          default:
+            break;
+        }
         p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
+        const equipUrl = ARTIFACT_KIND_VISUAL_GLB[type];
+        if (equipUrl) {
+          setPlayerArmour((prev) => {
+            const arr = [...prev];
+            if (currentPlayer >= 0 && currentPlayer < arr.length) arr[currentPlayer] = equipUrl;
+            return arr;
+          });
+        }
         if (inCombat) {
           combatHolyStrikeBonusRef.current += 1;
         } else {
@@ -5760,9 +5898,32 @@ export default function LabyrinthGame() {
           setMovesLeft(movesLeftRef.current);
           setBonusMovesGained(roll);
         }
-      } else if (type === "holyCross") {
-        p.artifactHolyCross!--;
+      } else if (isDefenderStrikeArtifactKind(type)) {
+        switch (type) {
+          case "holyCross":
+            p.artifactHolyCross!--;
+            break;
+          case "azureDragonShield":
+            p.artifactAzureDragonShield!--;
+            break;
+          case "nordicShield":
+            p.artifactNordicShield!--;
+            break;
+          case "wardShield":
+            p.artifactWardShield!--;
+            break;
+          default:
+            break;
+        }
         p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
+        const equipDefUrl = ARTIFACT_KIND_VISUAL_GLB[type];
+        if (equipDefUrl) {
+          setPlayerArmour((prev) => {
+            const arr = [...prev];
+            if (currentPlayer >= 0 && currentPlayer < arr.length) arr[currentPlayer] = equipDefUrl;
+            return arr;
+          });
+        }
         if (inCombat) {
           combatHolyStrikeBonusRef.current += 1;
         } else {
@@ -5772,7 +5933,7 @@ export default function LabyrinthGame() {
       }
       setLab(next);
     },
-    [lab, winner, currentPlayer, setCombatUseDiceBonus, setCombatUseShield]
+    [lab, winner, currentPlayer, setCombatUseDiceBonus, setCombatUseShield, setPlayerArmour]
   );
 
   const applyMobileDockSelection = useCallback(() => {
@@ -5890,6 +6051,12 @@ export default function LabyrinthGame() {
         artifactTorch: p.artifactTorch ?? 0,
         artifactHolySword: p.artifactHolySword ?? 0,
         artifactHolyCross: p.artifactHolyCross ?? 0,
+        artifactDragonFuryAxe: p.artifactDragonFuryAxe ?? 0,
+        artifactEternalFrostblade: p.artifactEternalFrostblade ?? 0,
+        artifactZweihandhammer: p.artifactZweihandhammer ?? 0,
+        artifactAzureDragonShield: p.artifactAzureDragonShield ?? 0,
+        artifactNordicShield: p.artifactNordicShield ?? 0,
+        artifactWardShield: p.artifactWardShield ?? 0,
         diceBonus: p.diceBonus ?? 0,
       }));
       next.hiddenCells = new Map(lab.hiddenCells);
@@ -6033,8 +6200,20 @@ export default function LabyrinthGame() {
                 p.artifactTorch = (p.artifactTorch ?? 0) + 1;
               } else if (kind === "holySword") {
                 p.artifactHolySword = (p.artifactHolySword ?? 0) + 1;
-              } else {
+              } else if (kind === "holyCross") {
                 p.artifactHolyCross = (p.artifactHolyCross ?? 0) + 1;
+              } else if (kind === "dragonFuryAxe") {
+                p.artifactDragonFuryAxe = (p.artifactDragonFuryAxe ?? 0) + 1;
+              } else if (kind === "eternalFrostblade") {
+                p.artifactEternalFrostblade = (p.artifactEternalFrostblade ?? 0) + 1;
+              } else if (kind === "zweihandhammer") {
+                p.artifactZweihandhammer = (p.artifactZweihandhammer ?? 0) + 1;
+              } else if (kind === "azureDragonShield") {
+                p.artifactAzureDragonShield = (p.artifactAzureDragonShield ?? 0) + 1;
+              } else if (kind === "nordicShield") {
+                p.artifactNordicShield = (p.artifactNordicShield ?? 0) + 1;
+              } else if (kind === "wardShield") {
+                p.artifactWardShield = (p.artifactWardShield ?? 0) + 1;
               }
               setArtifactGained(kind);
               p.artifactsCollected = [...ac, STORED_ARTIFACT_LINE[kind]];
@@ -6066,7 +6245,21 @@ export default function LabyrinthGame() {
             if (revealed > 0) setCellsRevealed(revealed);
             // Random hidden gem in some diamonds: shield, jump, torch, stored healing artifact, or (last) teleport picker
             if (Math.random() < 0.45) {
-              const gems = ["shield", "jump", "teleport", "torch", "healing", "holySword", "holyCross"] as const;
+              const gems = [
+                "shield",
+                "jump",
+                "teleport",
+                "torch",
+                "healing",
+                "holySword",
+                "holyCross",
+                "dragonFuryAxe",
+                "eternalFrostblade",
+                "zweihandhammer",
+                "azureDragonShield",
+                "nordicShield",
+                "wardShield",
+              ] as const;
               const gem = gems[Math.floor(Math.random() * gems.length)];
               if (gem === "shield") {
                 p.shield = (p.shield ?? 0) + 1;
@@ -6098,6 +6291,42 @@ export default function LabyrinthGame() {
                 const ac = p.artifactsCollected ?? [];
                 p.artifactsCollected = [...ac, STORED_ARTIFACT_LINE.holyCross];
                 setArtifactGained("holyCross");
+              } else if (gem === "dragonFuryAxe") {
+                p.artifacts = (p.artifacts ?? 0) + 1;
+                p.artifactDragonFuryAxe = (p.artifactDragonFuryAxe ?? 0) + 1;
+                const ac = p.artifactsCollected ?? [];
+                p.artifactsCollected = [...ac, STORED_ARTIFACT_LINE.dragonFuryAxe];
+                setArtifactGained("dragonFuryAxe");
+              } else if (gem === "eternalFrostblade") {
+                p.artifacts = (p.artifacts ?? 0) + 1;
+                p.artifactEternalFrostblade = (p.artifactEternalFrostblade ?? 0) + 1;
+                const ac = p.artifactsCollected ?? [];
+                p.artifactsCollected = [...ac, STORED_ARTIFACT_LINE.eternalFrostblade];
+                setArtifactGained("eternalFrostblade");
+              } else if (gem === "zweihandhammer") {
+                p.artifacts = (p.artifacts ?? 0) + 1;
+                p.artifactZweihandhammer = (p.artifactZweihandhammer ?? 0) + 1;
+                const ac = p.artifactsCollected ?? [];
+                p.artifactsCollected = [...ac, STORED_ARTIFACT_LINE.zweihandhammer];
+                setArtifactGained("zweihandhammer");
+              } else if (gem === "azureDragonShield") {
+                p.artifacts = (p.artifacts ?? 0) + 1;
+                p.artifactAzureDragonShield = (p.artifactAzureDragonShield ?? 0) + 1;
+                const ac = p.artifactsCollected ?? [];
+                p.artifactsCollected = [...ac, STORED_ARTIFACT_LINE.azureDragonShield];
+                setArtifactGained("azureDragonShield");
+              } else if (gem === "nordicShield") {
+                p.artifacts = (p.artifacts ?? 0) + 1;
+                p.artifactNordicShield = (p.artifactNordicShield ?? 0) + 1;
+                const ac = p.artifactsCollected ?? [];
+                p.artifactsCollected = [...ac, STORED_ARTIFACT_LINE.nordicShield];
+                setArtifactGained("nordicShield");
+              } else if (gem === "wardShield") {
+                p.artifacts = (p.artifacts ?? 0) + 1;
+                p.artifactWardShield = (p.artifactWardShield ?? 0) + 1;
+                const ac = p.artifactsCollected ?? [];
+                p.artifactsCollected = [...ac, STORED_ARTIFACT_LINE.wardShield];
+                setArtifactGained("wardShield");
               } else {
                 const fromX = p.x;
                 const fromY = p.y;
@@ -9563,9 +9792,17 @@ export default function LabyrinthGame() {
                 !combatResult &&
                 combatRecoveryPhase === "ready" &&
                 headerMonsterCombatState !== "defeated";
-              const gltfVisualState: MonsterSpriteState = dracula3dAwaitingRollIdle
+              /** Ghost / lava: merged calm uses `hunt` locomotion lists (walk/run). In combat, keep them on true idle clips like other Meshy rigs. */
+              const gltfVisualStateBase: MonsterSpriteState = dracula3dAwaitingRollIdle
                 ? "idle"
                 : headerMonsterCombatState;
+              const gltfVisualState: MonsterSpriteState =
+                inActiveFight &&
+                isMonster3DEnabled() &&
+                (headerMt === "G" || headerMt === "L") &&
+                (gltfVisualStateBase === "hunt" || gltfVisualStateBase === "neutral")
+                  ? "idle"
+                  : gltfVisualStateBase;
               const monsterGltfPath =
                 headerMt && isMonster3DEnabled()
                   ? getMonsterGltfPath(headerMt, gltfVisualState, {
@@ -10027,28 +10264,30 @@ export default function LabyrinthGame() {
                                 />
                               );
                             }
-                            if (kind === "holySword") {
+                            if (isWeaponStrikeArtifactKind(kind)) {
+                              const iv = storedArtifactIconVariant(kind);
                               return (
                                 <CombatSkillItemIcon
                                   key={kind}
                                   mode="consume"
-                                  variant="holySword"
+                                  variant={iv}
                                   disabled={rolling}
-                                  onClick={() => !rolling && handleUseArtifact("holySword")}
-                                  title={`${STORED_ARTIFACT_LINE.holySword}. ${STORED_ARTIFACT_TOOLTIP.holySword}`}
+                                  onClick={() => !rolling && handleUseArtifact(kind)}
+                                  title={`${STORED_ARTIFACT_LINE[kind]}. ${STORED_ARTIFACT_TOOLTIP[kind]}`}
                                   stackCount={n}
                                 />
                               );
                             }
-                            if (kind === "holyCross") {
+                            if (isDefenderStrikeArtifactKind(kind)) {
+                              const iv = storedArtifactIconVariant(kind);
                               return (
                                 <CombatSkillItemIcon
                                   key={kind}
                                   mode="consume"
-                                  variant="holyCross"
+                                  variant={iv}
                                   disabled={rolling}
-                                  onClick={() => !rolling && handleUseArtifact("holyCross")}
-                                  title={`${STORED_ARTIFACT_LINE.holyCross}. ${STORED_ARTIFACT_TOOLTIP.holyCross}`}
+                                  onClick={() => !rolling && handleUseArtifact(kind)}
+                                  title={`${STORED_ARTIFACT_LINE[kind]}. ${STORED_ARTIFACT_TOOLTIP[kind]}`}
                                   stackCount={n}
                                 />
                               );
@@ -11903,6 +12142,7 @@ export default function LabyrinthGame() {
                 focusVersion={currentPlayer}
                 miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
             fogIntensityMap={fogIntensityMap}
+                artifactPickups={mazeIsoArtifactPickups}
                 combatActive={mazeMapView === "iso" && !!combatState}
                 combatRolling={rolling}
                 combatRollFace={isoCombatRollFace}
@@ -13047,7 +13287,11 @@ export default function LabyrinthGame() {
                   const kind = storedArtifactKindFromCell(cellType);
                   const title = kind ? `${STORED_ARTIFACT_LINE[kind]}. ${STORED_ARTIFACT_TOOLTIP[kind]}` : "Artifact";
                   content = (
-                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }} title={title}>
+                    <span
+                      className="artifact-spin-wrap"
+                      style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                      title={title}
+                    >
                       {kind ? (
                         <ArtifactIcon variant={storedArtifactIconVariant(kind)} size={42} />
                       ) : (

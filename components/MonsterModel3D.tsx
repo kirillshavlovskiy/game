@@ -546,13 +546,15 @@ function GltfSubject({
       fadeDuration = Math.min(fadeDuration, 0.05);
     }
 
+    /** Retreat stride after attack (`Walk_Fight_Back`) — merged monsters only; player stays planted at face-off X. */
     const tryWalkBack =
       !crossFade &&
       prevState === "attack" &&
       isMeshyPostAttackCalmState(visualState) &&
       visualState !== "hunt" &&
       visualState !== "rolling" &&
-      (isPlayerModel || isMergedMeshyStrikePortraitType(monsterType));
+      !isPlayerModel &&
+      isMergedMeshyStrikePortraitType(monsterType);
     if (tryWalkBack) {
       const wb = resolveWalkFightBackClipName(url, names, { isPlayerModel, monsterType });
       if (wb && actions[wb]) {
@@ -977,7 +979,8 @@ function PositionedGltfSubject(
       isMeshyPostAttackCalmState(rest.visualState) &&
       rest.visualState !== "hunt" &&
       rest.visualState !== "rolling" &&
-      (rest.isPlayerModel || isMergedMeshyStrikePortraitType(rest.monsterType));
+      !rest.isPlayerModel &&
+      isMergedMeshyStrikePortraitType(rest.monsterType);
     if (tryWalkBack) {
       const wb = resolveWalkFightBackClipName(rest.url, names, {
         isPlayerModel: !!rest.isPlayerModel,

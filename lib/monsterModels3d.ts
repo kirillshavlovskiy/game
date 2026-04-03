@@ -1064,7 +1064,8 @@ export function zombieMergedAttackClipPriority(variant: "spell" | "skill" | "lig
  * Walking, Zombie_Scream, falling_down. No `Dead` / `Walk_Fight_Back` — defeat uses shot-fall + `Arise` recover.
  * ──────────────────────────────────────────────────────────────────── */
 
-const GHOST_IDLE_CLIPS = ["Walking", "Mummy_Stagger"] as const;
+/** Stationary calm first — `Walking` only as fallback (combat + portrait idle must not default to a locomotion clip). */
+const GHOST_IDLE_CLIPS = ["Alert", "Mummy_Stagger", "Walking"] as const;
 
 const GHOST_HUNT_PORTRAIT_CLIPS = [
   "Mummy_Stagger",
@@ -1205,7 +1206,8 @@ function ghostDefeatedClipPriority(variant?: "spell" | "skill" | "light"): reado
  * Shot_and_Fall_Backward, Shot_and_Fall_Forward, Skill_01, Skill_02, Skill_03, Walking.
  * ──────────────────────────────────────────────────────────────────── */
 
-const LAVA_IDLE_CLIPS = ["Idle_5", "Idle_8", "Walking"] as const;
+/** True idles only — `Walking` belongs in hunt / recover, not calm stance. */
+const LAVA_IDLE_CLIPS = ["Idle_5", "Idle_8"] as const;
 
 const LAVA_HUNT_PORTRAIT_CLIPS = [
   "Running",
@@ -2076,13 +2078,21 @@ function zombieAbsoluteLastResort(state: Monster3DSpriteState, animationNames: r
 }
 
 function ghostIdleSafeLastResort(animationNames: readonly string[]): string | null {
-  const block =
-    /falling|fall_down|knock|death|\bdead\b|hurt|react|punch|spell|skill|scream|stand_up|charged|jumping|face_punch|waist|slap|shot|grip|throw|stagger|injured|dying|collapse|slash|hook|arise|axe|shield|block/i;
+  const blockHarsh =
+    /falling|fall_down|knock|death|\bdead\b|hurt|react|punch|spell|skill|scream|stand_up|charged|jumping|face_punch|waist|slap|shot|grip|throw|injured|dying|collapse|slash|hook|arise|axe|shield|block/i;
   for (const n of animationNames) {
-    if (block.test(n)) continue;
-    if (/idle|mummy|stagger|walk/i.test(n) || /breath|rest|neutral|wait|relax/i.test(n)) return n;
+    if (blockHarsh.test(n)) continue;
+    if (/idle/i.test(n) || /breath|rest|neutral|wait|relax/i.test(n)) return n;
   }
-  const walk = animationNames.find((n) => /walking|walk/i.test(n) && !block.test(n));
+  for (const n of animationNames) {
+    if (blockHarsh.test(n)) continue;
+    if (/alert/i.test(n)) return n;
+  }
+  for (const n of animationNames) {
+    if (blockHarsh.test(n)) continue;
+    if (/mummy|stagger/i.test(n)) return n;
+  }
+  const walk = animationNames.find((n) => /walking|walk/i.test(n) && !blockHarsh.test(n));
   if (walk) return walk;
   return null;
 }
@@ -2252,6 +2262,13 @@ export function resolveMonsterAnimationClipName(
 
   if (options?.glbSlug === "spider" && (state === "idle" || state === "neutral")) {
     for (const probe of expandSpiderClipTryList(SPIDER_IDLE_CLIPS)) {
+      const calm = matchAnimationNameInsensitive(animationNames, probe);
+      if (calm) return calm;
+    }
+  }
+
+  if (options?.glbSlug === "lava" && (state === "idle" || state === "neutral")) {
+    for (const probe of expandLavaClipTryList(LAVA_IDLE_CLIPS)) {
       const calm = matchAnimationNameInsensitive(animationNames, probe);
       if (calm) return calm;
     }
