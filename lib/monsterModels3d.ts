@@ -702,6 +702,10 @@ const PLAYER_CLIP_ALIASES_BY_CANONICAL: Record<string, readonly string[]> = {
   walking_man: ["Armature|walking_man|baselayer"],
   running: ["Armature|running|baselayer"],
   Cautious_Crouch_Walk_Forward_inplace: ["Armature|Cautious_Crouch_Walk_Forward_inplace|baselayer"],
+  Cautious_Crouch_Walk_Left_inplace: ["Armature|Cautious_Crouch_Walk_Left_inplace|baselayer"],
+  Cautious_Crouch_Walk_Right_inplace: ["Armature|Cautious_Crouch_Walk_Right_inplace|baselayer"],
+  Cautious_Crouch_Walk_Backward_inplace: ["Armature|Cautious_Crouch_Walk_Backward_inplace|baselayer"],
+  Run_and_Jump: ["Armature|Run_and_Jump|baselayer"],
   Attack: ["Armature|Attack|baselayer"],
   Jumping_Punch: ["Armature|Jumping_Punch|baselayer"],
   Double_Blade_Spin: ["Armature|Double_Blade_Spin|baselayer"],
@@ -935,6 +939,37 @@ export function resolvePlayerAnimationClipName(
   const idle = matchAnimationNameInsensitive(animationNames, "Combat_Stance");
   if (idle) return idle;
   return animationNames[0] ?? null;
+}
+
+export type PlayerIsoLocomotionAxis = "forward" | "back" | "left" | "right";
+
+const PLAYER_HUNT_DIRECTIONAL_CLIP_ORDER: Record<PlayerIsoLocomotionAxis, readonly string[]> = {
+  forward: ["Cautious_Crouch_Walk_Forward_inplace", "walking_man", "running"],
+  back: ["Cautious_Crouch_Walk_Backward_inplace", "Cautious_Crouch_Walk_Backward", "walking_man"],
+  left: ["Cautious_Crouch_Walk_Left_inplace", "walking_man", "running"],
+  right: ["Cautious_Crouch_Walk_Right_inplace", "walking_man", "running"],
+};
+
+/**
+ * Iso maze locomotion: Meshy cautious crouch walk per axis vs facing (clips from merged player GLB /
+ * `animation-overrides`). Falls back to generic `hunt` list when directional clips are missing.
+ */
+export function resolvePlayerHuntLocomotionClipName(
+  animationNames: readonly string[],
+  axis: PlayerIsoLocomotionAxis,
+): string | null {
+  if (animationNames.length === 0) return null;
+  const preferred = expandPlayerClipTryList([...PLAYER_HUNT_DIRECTIONAL_CLIP_ORDER[axis]]);
+  const hit = firstPreferredMatchingInsensitive(preferred, animationNames);
+  if (hit) return hit;
+  return resolvePlayerAnimationClipName("hunt", animationNames);
+}
+
+/** Maze jump move — prefers Meshy `Run_and_Jump`, then combat jumps. */
+export function resolvePlayerJumpLocomotionClipName(animationNames: readonly string[]): string | null {
+  if (animationNames.length === 0) return null;
+  const tries = expandPlayerClipTryList(["Run_and_Jump", "Jumping_Punch", "Backflip_and_Hooks"]);
+  return firstPreferredMatchingInsensitive(tries, animationNames);
 }
 
 /* ────────────────────────────────────────────────────────────────────

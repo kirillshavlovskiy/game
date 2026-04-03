@@ -3001,6 +3001,8 @@ export default function LabyrinthGame() {
     x: number;
     y: number;
   } | null>(null);
+  /** Iso 3D: monotonic bump so `PlayerAvatar3D` plays merged `Run_and_Jump` on maze jump moves. */
+  const [isoPlayerJumpPulse, setIsoPlayerJumpPulse] = useState(0);
   const [bombExplosion, setBombExplosion] = useState<{ x: number; y: number } | null>(null);
   const [combatState, setCombatState] = useState<{
     playerIndex: number;
@@ -6106,6 +6108,7 @@ export default function LabyrinthGame() {
         let teleportPickerSet = false;
         if (jumpOnly && p) {
           setJumpAnimation({ playerIndex: currentPlayer, x: p.x, y: p.y });
+          setIsoPlayerJumpPulse((n) => n + 1);
         }
         if (p) {
           let cell = next.getCellAt(p.x, p.y);
@@ -12142,6 +12145,7 @@ export default function LabyrinthGame() {
                 focusVersion={currentPlayer}
                 miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
             fogIntensityMap={fogIntensityMap}
+                spiderWebCells={lab.webPositions ?? []}
                 artifactPickups={mazeIsoArtifactPickups}
                 combatActive={mazeMapView === "iso" && !!combatState}
                 combatRolling={rolling}
@@ -12172,6 +12176,7 @@ export default function LabyrinthGame() {
                 combatShieldAvailable={!!combatState && (cp?.shield ?? 0) > 0}
                 combatRunDisabled={rolling}
                 isoCombatPlayerCue={isoCombatPlayerCue}
+                playerJumpPulseVersion={isoPlayerJumpPulse}
                 playerGlbPath={getPlayer3DGlb(playerAvatars[currentPlayer])}
                 playerWeaponGltfPath={(() => {
                   const a = playerArmour[currentPlayer];

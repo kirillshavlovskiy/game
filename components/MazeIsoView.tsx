@@ -31,8 +31,11 @@ import {
   PLAYER_3D_GLB,
   resolveMonsterAnimationClipName,
   resolvePlayerAnimationClipName,
+  resolvePlayerHuntLocomotionClipName,
+  resolvePlayerJumpLocomotionClipName,
   resolvePlayerShieldBlockClipName,
   type IsoCombatPlayerMoment,
+  type PlayerIsoLocomotionAxis,
 } from "@/lib/monsterModels3d";
 import {
   mapRotationDebugEnabled,
@@ -91,6 +94,8 @@ type Props = {
   focusVersion?: number;
   miniMonsters?: MiniMonster[];
   fogIntensityMap?: Map<string, number>;
+  /** Path cells with spider webs (slow tiles) — textured wall webs in iso. */
+  spiderWebCells?: ReadonlyArray<readonly [number, number]>;
   /** Mobile: WebGL fills the parent (e.g. fixed viewport); chrome stacks above in the shell. */
   fillViewport?: boolean;
   /**
@@ -139,6 +144,8 @@ type Props = {
     variant: "spell" | "skill" | "light";
     fatalJump: boolean;
   } | null;
+  /** Bumps when the current player performs a maze jump move — plays `Run_and_Jump` (merged GLB) in iso. */
+  playerJumpPulseVersion?: number;
   /** While choosing a teleport destination: countdown / manual-pick hint above the 3D view. */
   teleportPickTimerOverlay?: ReactNode;
 };
@@ -570,12 +577,18 @@ function WallBlocks({
 function PlayerAvatar3D({
   visualState,
   actionVersion = 0,
+  locomotionAxis = "forward",
+  jumpPulseVersion = 0,
   glbPath,
   weaponGltfPath,
   combatPlayback,
 }: {
   visualState: "idle" | "hunt" | "attack";
   actionVersion?: number;
+  /** Movement vs facing while walking the maze — drives directional crouch-walk clips. */
+  locomotionAxis?: PlayerIsoLocomotionAxis;
+  /** Monotonic bump from parent on jump move — one-shot jump animation. */
+  jumpPulseVersion?: number;
   glbPath?: string;
   /** When set, uses the same bone attach as combat 3D (`BoneAttachedWeapon`). */
   weaponGltfPath?: string | null;
@@ -589,6 +602,9 @@ function PlayerAvatar3D({
   const url = glbPath || PLAYER_3D_GLB;
   const rootRef = useRef<THREE.Group>(null);
   const [placeholderHand, setPlaceholderHand] = useState<THREE.Object3D | null>(null);
+  const lastJumpPulseRef = useRef(0);
+  const jumpWindowStartSecRef = useRef(-1e9);
+  const [locomotionRefresh, setLocomotionRefresh] = useState(0);
   const { scene, animations } = useGLTF(url);
   const clonedScene = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   const { actions, names } = useAnimations(animations, rootRef);
@@ -621,6 +637,16 @@ function PlayerAvatar3D({
   }, [clonedScene, weaponGltfPath]);
 
   useEffect(() => {
+    if (jumpPulseVersion > lastJumpPulseRef.current) {
+      lastJumpPulseRef.current = jumpPulseVersion;
+      jumpWindowStartSecRef.current = performance.now() / 1000;
+      setLocomotionRefresh((v) => v + 1);
+      const tid = window.setTimeout(() => setLocomotionRefresh((v) => v + 1), 920);
+      return () => window.clearTimeout(tid);
+    }
+  }, [jumpPulseVersion]);
+
+  useEffect(() => {
     let clip: string | null = null;
     let loopOnce = false;
     const pb = combatPlayback;
@@ -634,8 +660,20 @@ function PlayerAvatar3D({
         clip = resolvePlayerAnimationClipName("attack", names, pb.variant);
       }
     } else {
-      clip = resolvePlayerAnimationClipName(visualState, names);
-      loopOnce = visualState === "attack";
+      const nowSec = performance.now() / 1000;
+      const inJumpWindow =
+        jumpWindowStartSecRef.current > -1e8 && nowSec - jumpWindowStartSecRef.current < 0.9;
+      if (inJumpWindow) {
+        clip = resolvePlayerJumpLocomotionClipName(names);
+        if (!clip) clip = resolvePlayerHuntLocomotionClipName(names, locomotionAxis);
+        loopOnce = true;
+      } else if (visualState === "hunt") {
+        clip = resolvePlayerHuntLocomotionClipName(names, locomotionAxis);
+        loopOnce = false;
+      } else {
+        clip = resolvePlayerAnimationClipName(visualState, names);
+        loopOnce = visualState === "attack";
+      }
     }
     for (const action of Object.values(actions)) {
       action?.fadeOut(0.12);
@@ -653,7 +691,7 @@ function PlayerAvatar3D({
     }
     action.fadeIn(0.16).play();
     return () => { action.fadeOut(0.12); };
-  }, [actions, names, visualState, actionVersion, combatPlayback]);
+  }, [actions, names, visualState, actionVersion, combatPlayback, locomotionAxis, locomotionRefresh]);
 
   return (
     <group ref={rootRef} scale={0.9} rotation={[0, Math.PI / 2, 0]}>
@@ -691,15 +729,29 @@ function combatHoldSeconds(moment: IsoCombatPlayerMoment, fatalJump: boolean): n
 }
 
 function PlayerMarker({
-  playerX, playerY, facingDx, facingDy, combatPulse = 0, playerGlbPath, playerWeaponGltfPath, isoCombatPlayerCue,
+  playerX,
+  playerY,
+  facingDx,
+  facingDy,
+  combatPulse = 0,
+  playerGlbPath,
+  playerWeaponGltfPath,
+  isoCombatPlayerCue,
+  playerJumpPulseVersion = 0,
 }: {
-  playerX: number; playerY: number; facingDx: number; facingDy: number; combatPulse?: number; playerGlbPath?: string;
+  playerX: number;
+  playerY: number;
+  facingDx: number;
+  facingDy: number;
+  combatPulse?: number;
+  playerGlbPath?: string;
   playerWeaponGltfPath?: string | null;
   isoCombatPlayerCue?: {
     moment: IsoCombatPlayerMoment;
     variant: "spell" | "skill" | "light";
     fatalJump: boolean;
   } | null;
+  playerJumpPulseVersion?: number;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const modelAnchorRef = useRef<THREE.Group>(null);
@@ -714,6 +766,8 @@ function PlayerMarker({
   const groundBox = useMemo(() => new THREE.Box3(), []);
   const [visualState, setVisualState] = useState<"idle" | "hunt" | "attack">("idle");
   const visualStateRef = useRef<"idle" | "hunt" | "attack">("idle");
+  const [locomotionAxis, setLocomotionAxis] = useState<PlayerIsoLocomotionAxis>("forward");
+  const locomotionAxisRef = useRef<PlayerIsoLocomotionAxis>("forward");
   const [actionVersion, setActionVersion] = useState(0);
   const [combatPlayback, setCombatPlayback] = useState<{
     moment: IsoCombatPlayerMoment;
@@ -774,6 +828,39 @@ function PlayerMarker({
       visualStateRef.current = next;
       setVisualState(next);
     }
+    if (!attacking && transit > 0.06) {
+      const gx = targetPos.current.x - groupRef.current.position.x;
+      const gz = targetPos.current.z - groupRef.current.position.z;
+      const glen = Math.hypot(gx, gz);
+      let axis: PlayerIsoLocomotionAxis = "forward";
+      if (glen > 1e-5) {
+        const vx = gx / glen;
+        const vz = gz / glen;
+        const fdx = facingDxRef.current;
+        const fdy = facingDyRef.current;
+        const fl = Math.hypot(fdx, fdy);
+        if (fl > 1e-5) {
+          const fx = fdx / fl;
+          const fy = fdy / fl;
+          const forwardDot = vx * fx + vz * fy;
+          const rightDot = vx * (-fy) + vz * fx;
+          const adf = Math.abs(forwardDot);
+          const adr = Math.abs(rightDot);
+          if (adf >= adr) {
+            axis = forwardDot >= 0 ? "forward" : "back";
+          } else {
+            axis = rightDot >= 0 ? "right" : "left";
+          }
+        }
+      }
+      if (axis !== locomotionAxisRef.current) {
+        locomotionAxisRef.current = axis;
+        setLocomotionAxis(axis);
+      }
+    } else if (!attacking && transit <= 0.06 && locomotionAxisRef.current !== "forward") {
+      locomotionAxisRef.current = "forward";
+      setLocomotionAxis("forward");
+    }
     const modelAnchor = modelAnchorRef.current;
     if (modelAnchor) {
       groundBox.setFromObject(modelAnchor);
@@ -819,6 +906,8 @@ function PlayerMarker({
             key={`${playerGlbPath ?? PLAYER_3D_GLB}|${playerWeaponGltfPath ?? ""}`}
             visualState={visualState}
             actionVersion={actionVersion}
+            locomotionAxis={locomotionAxis}
+            jumpPulseVersion={playerJumpPulseVersion}
             glbPath={playerGlbPath}
             weaponGltfPath={playerWeaponGltfPath}
             combatPlayback={combatPlayback}
@@ -1179,19 +1268,237 @@ function GothicWallOrnaments({
   );
 }
 
-function CornerCobwebs({
-  grid, mapWidth, mapHeight, fogIntensityMap,
+const MAZE_SPIDER_WEB_DECAL_TEXTURE = "/textures/maze/Effects/spider_web_decal.png";
+const MAZE_CORRIDOR_FOG_TEXTURE = "/textures/maze/Effects/corridor_fog_tile.png";
+
+void useTexture.preload(MAZE_SPIDER_WEB_DECAL_TEXTURE);
+void useTexture.preload(MAZE_CORRIDOR_FOG_TEXTURE);
+
+/** Scene linear fog — materials use default `fog: true`. */
+function MazeAtmosphericFog() {
+  const { scene } = useThree();
+  useLayoutEffect(() => {
+    const prev = scene.fog;
+    scene.fog = new THREE.Fog(0x06080e, 14, 132);
+    return () => {
+      scene.fog = prev ?? null;
+    };
+  }, [scene]);
+  return null;
+}
+
+/** Volumetric-style mist sheets in fogged path cells (tile texture). */
+function CorridorFogVolumes({
+  grid,
+  mapWidth,
+  mapHeight,
+  fogIntensityMap,
 }: {
   grid: string[][];
   mapWidth: number;
   mapHeight: number;
   fogIntensityMap?: Map<string, number>;
 }) {
-  void grid;
-  void mapWidth;
-  void mapHeight;
-  void fogIntensityMap;
-  return null;
+  const fogTex = useTexture(MAZE_CORRIDOR_FOG_TEXTURE);
+  useEffect(() => {
+    fogTex.wrapS = fogTex.wrapT = THREE.RepeatWrapping;
+    fogTex.repeat.set(2.2, 2.2);
+  }, [fogTex]);
+
+  const cells = useMemo(() => {
+    const out: Array<{ cx: number; cy: number; f: number; rot: number }> = [];
+    for (let y = 0; y < mapHeight; y++) {
+      for (let x = 0; x < mapWidth; x++) {
+        if (grid[y]?.[x] === WALL) continue;
+        const f = fogIntensityMap?.get(`${x},${y}`) ?? 0;
+        if (f < 0.035) continue;
+        out.push({ cx: x, cy: y, f, rot: cellNoise(x, y, 701) * Math.PI * 2 });
+      }
+    }
+    return out;
+  }, [grid, mapHeight, mapWidth, fogIntensityMap]);
+
+  return (
+    <>
+      {cells.map((c) => {
+        const px = c.cx * CS + CS * 0.5;
+        const pz = c.cy * CS + CS * 0.5;
+        const op = Math.min(0.72, 0.1 + c.f * 0.78);
+        return (
+          <group key={`fog-${c.cx}-${c.cy}`}>
+            <mesh position={[px, 0.22 + c.f * 0.35, pz]} rotation={[-Math.PI / 2, 0, c.rot]} renderOrder={1}>
+              <planeGeometry args={[CS * 0.94, CS * 0.94]} />
+              <meshStandardMaterial
+                map={fogTex}
+                transparent
+                opacity={op * 0.55}
+                depthWrite={false}
+                roughness={1}
+                metalness={0}
+                color="#9aa8c4"
+                emissive="#2a3144"
+                emissiveIntensity={0.04}
+                polygonOffset
+                polygonOffsetFactor={-2}
+                polygonOffsetUnits={-1}
+              />
+            </mesh>
+            <mesh position={[px, 0.85 + c.f * 0.45, pz]} rotation={[-Math.PI / 2, 0, c.rot + 1.7]} renderOrder={1}>
+              <planeGeometry args={[CS * 0.78, CS * 0.78]} />
+              <meshStandardMaterial
+                map={fogTex}
+                transparent
+                opacity={op * 0.42}
+                depthWrite={false}
+                roughness={1}
+                metalness={0}
+                color="#8a96b0"
+                emissive="#252a3a"
+                emissiveIntensity={0.03}
+                polygonOffset
+                polygonOffsetFactor={-2}
+                polygonOffsetUnits={-1}
+              />
+            </mesh>
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
+/** Realistic web decals on maze-web cells + sparse corner cobwebs. */
+function SpiderWebDecor({
+  grid,
+  mapWidth,
+  mapHeight,
+  fogIntensityMap,
+  spiderWebCells = [],
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  fogIntensityMap?: Map<string, number>;
+  spiderWebCells?: ReadonlyArray<readonly [number, number]>;
+}) {
+  const webTex = useTexture(MAZE_SPIDER_WEB_DECAL_TEXTURE);
+
+  const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
+  const walkable = (cx: number, cy: number) =>
+    cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && !isW(cx, cy);
+
+  const cornerWebs = useMemo(() => {
+    const out: Array<{
+      x: number;
+      y: number;
+      z: number;
+      yaw: number;
+      scale: number;
+      cellX: number;
+      cellY: number;
+    }> = [];
+    for (let y = 1; y < mapHeight - 1; y++) {
+      for (let x = 1; x < mapWidth - 1; x++) {
+        if (!walkable(x, y)) continue;
+        if (cellNoise(x, y, 151) > 0.88) continue;
+        const nearCorner =
+          (isW(x + 1, y) && isW(x, y + 1)) ||
+          (isW(x - 1, y) && isW(x, y + 1)) ||
+          (isW(x + 1, y) && isW(x, y - 1)) ||
+          (isW(x - 1, y) && isW(x, y - 1));
+        if (!nearCorner) continue;
+        const yaw = cellNoise(x, y, 157) * Math.PI * 2;
+        const scale = CS * (0.55 + cellNoise(x, y, 163) * 0.35);
+        out.push({
+          x: x * CS + (cellNoise(x, y, 167) - 0.5) * CS * 0.38,
+          y: WALL_HEIGHT * (0.38 + cellNoise(x, y, 173) * 0.28),
+          z: y * CS + (cellNoise(x, y, 179) - 0.5) * CS * 0.38,
+          yaw,
+          scale,
+          cellX: x,
+          cellY: y,
+        });
+      }
+    }
+    return out;
+  }, [grid, mapHeight, mapWidth]);
+
+  const mazeWebWallDecals = useMemo(() => {
+    const out: Array<{
+      x: number;
+      y: number;
+      z: number;
+      yaw: number;
+      scale: number;
+      cellX: number;
+      cellY: number;
+    }> = [];
+    for (const pair of spiderWebCells) {
+      const wx = pair[0];
+      const wy = pair[1];
+      if (!walkable(wx, wy)) continue;
+      const fog = fogIntensityMap?.get(`${wx},${wy}`) ?? 0;
+      if (fog > 0.2) continue;
+      const pushIf = (wcx: number, wcy: number, pos: { x: number; z: number }, dirX: number, dirZ: number) => {
+        if (!isW(wcx, wcy)) return;
+        out.push({
+          x: pos.x,
+          y: WALL_HEIGHT * (0.44 + cellNoise(wx, wy, 509) * 0.2),
+          z: pos.z,
+          yaw: Math.atan2(dirX, dirZ),
+          scale: CS * (0.92 + cellNoise(wx, wy, 517) * 0.28),
+          cellX: wx,
+          cellY: wy,
+        });
+      };
+      pushIf(wx + 1, wy, { x: wx * CS + CS * 0.42, z: wy * CS }, -1, 0);
+      pushIf(wx - 1, wy, { x: wx * CS - CS * 0.42, z: wy * CS }, 1, 0);
+      pushIf(wx, wy + 1, { x: wx * CS, z: wy * CS + CS * 0.42 }, 0, -1);
+      pushIf(wx, wy - 1, { x: wx * CS, z: wy * CS - CS * 0.42 }, 0, 1);
+    }
+    return out;
+  }, [fogIntensityMap, grid, mapHeight, mapWidth, spiderWebCells]);
+
+  const webMat = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        map: webTex,
+        transparent: true,
+        alphaTest: 0.08,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        roughness: 0.94,
+        metalness: 0.02,
+        color: new THREE.Color("#eef2ff"),
+        emissive: new THREE.Color("#c5d0ec"),
+        emissiveIntensity: 0.07,
+        opacity: 0.94,
+      }),
+    [webTex],
+  );
+
+  return (
+    <>
+      {cornerWebs.map((w, i) => {
+        const fog = fogIntensityMap?.get(`${w.cellX},${w.cellY}`) ?? 0;
+        if (fog > 0.16) return null;
+        return (
+          <group key={`cweb-${i}`} position={[w.x, w.y, w.z]} rotation={[0, w.yaw, 0]}>
+            <mesh material={webMat} renderOrder={6}>
+              <planeGeometry args={[w.scale, w.scale * 1.05]} />
+            </mesh>
+          </group>
+        );
+      })}
+      {mazeWebWallDecals.map((w, i) => (
+        <group key={`wweb-${i}`} position={[w.x, w.y, w.z]} rotation={[0, w.yaw, 0]}>
+          <mesh material={webMat} renderOrder={7}>
+            <planeGeometry args={[w.scale, w.scale * 1.08]} />
+          </mesh>
+        </group>
+      ))}
+    </>
+  );
 }
 
 function HorrorCornerRelics({
@@ -1543,21 +1850,6 @@ const STAIN_PATHS = [
   "/textures/maze/Stains/Horror_Stain_13-256x256.png",
   "/textures/maze/Stains/Horror_Stain_14-256x256.png",
 ];
-function WallWebDecals({
-  grid, mapWidth, mapHeight, fogIntensityMap,
-}: {
-  grid: string[][];
-  mapWidth: number;
-  mapHeight: number;
-  fogIntensityMap?: Map<string, number>;
-}) {
-  void grid;
-  void mapWidth;
-  void mapHeight;
-  void fogIntensityMap;
-  return null;
-}
-
 /** Deterministic hash for per-cell stain placement. */
 function cellHash(x: number, y: number, salt: number) {
   return ((x * 374761393 + y * 668265263 + salt * 1440865359) >>> 0) % 1000;
@@ -2916,6 +3208,8 @@ function MazeScene({
   playerGlbPath,
   playerWeaponGltfPath,
   isoCombatPlayerCue,
+  playerJumpPulseVersion = 0,
+  spiderWebCells = [],
   artifactPickups,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
@@ -2938,6 +3232,7 @@ function MazeScene({
   const shadowRange = Math.max(mapWidth, mapHeight) * CS;
   return (
     <>
+      <MazeAtmosphericFog />
       {/* Very low global light: unlit corridors stay dark; torches do the local lighting. */}
       <ambientLight intensity={0.015} />
       <directionalLight
@@ -2957,6 +3252,7 @@ function MazeScene({
       <directionalLight position={[-12, 12, -12]} intensity={0.08} color="#b9c8ff" />
 
       <FloorTiles grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} onCellClick={onCellClick} />
+      <CorridorFogVolumes grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
       <FloorStains grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
       <WallTorches
         grid={grid}
@@ -2980,6 +3276,13 @@ function MazeScene({
         <MazeArtifactPickups pickups={artifactPickups ?? []} />
       </Suspense>
       <WallBlocks grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
+      <SpiderWebDecor
+        grid={grid}
+        mapWidth={mapWidth}
+        mapHeight={mapHeight}
+        fogIntensityMap={fogIntensityMap}
+        spiderWebCells={spiderWebCells}
+      />
       {miniMonsters && miniMonsters.length > 0 && (
         <Monsters3D
           monsters={miniMonsters}
@@ -2998,6 +3301,7 @@ function MazeScene({
         playerGlbPath={playerGlbPath}
         playerWeaponGltfPath={playerWeaponGltfPath}
         isoCombatPlayerCue={isoCombatPlayerCue}
+        playerJumpPulseVersion={playerJumpPulseVersion}
       />
       {magicPortalPreviewOptions &&
         magicPortalPreviewOptions.length > 0 &&
@@ -3389,6 +3693,8 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     playerWeaponGltfPath = null,
     artifactPickups,
     isoCombatPlayerCue = null,
+    playerJumpPulseVersion = 0,
+    spiderWebCells = [],
     teleportPickTimerOverlay = null,
     fillViewport = false,
   touchUi = false,
@@ -3594,6 +3900,8 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           playerWeaponGltfPath={playerWeaponGltfPath}
           artifactPickups={artifactPickups}
           isoCombatPlayerCue={isoCombatPlayerCue}
+          playerJumpPulseVersion={playerJumpPulseVersion}
+          spiderWebCells={spiderWebCells}
         />
       </Canvas>
       {teleportMode && teleportPickTimerOverlay ? (
