@@ -1,11 +1,10 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { MonsterType } from "@/lib/labyrinth";
 import { getMonsterName } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
-import { combatFaceOffPositions } from "@/components/MonsterModel3D";
+import { CombatScene3D, combatFaceOffPositions } from "@/components/MonsterModel3D";
 import { resolveCombat3dClipLeads } from "@/lib/combat3dContact";
 import {
   draculaAttackVariantFromStrikeTarget,
@@ -20,6 +19,7 @@ import { DEFAULT_LAB_PLAYER_WEAPON_GLB, PLAYER_ARMOUR_GLB_OPTIONS } from "@/lib/
 import {
   WEAPON_ATTACH_BLADE_TWIST_RAD,
   WEAPON_ATTACH_EXTRA_EULER_RAD,
+  WEAPON_ATTACH_GRIP_POSITION_LOCAL,
   WEAPON_ATTACH_HAND,
   type WeaponAttachHand,
 } from "@/lib/weaponAttachConfig";
@@ -37,30 +37,6 @@ async function glbReachable(url: string): Promise<boolean> {
     return false;
   }
 }
-
-const CombatScene3D = dynamic(
-  () => import("@/components/MonsterModel3D").then((m) => m.CombatScene3D),
-  {
-    ssr: false,
-    loading: () => (
-      <div
-        style={{
-          height: 300,
-          borderRadius: 12,
-          background: "rgba(0,0,0,0.4)",
-          border: "1px solid rgba(255,152,103,0.2)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#8a8098",
-          fontSize: "0.9rem",
-        }}
-      >
-        Loading face-off scene…
-      </div>
-    ),
-  }
-);
 
 const VARIANTS = ["spell", "skill", "light"] as const;
 
@@ -173,8 +149,8 @@ export function Monster3dContactPairLab() {
   const [monsterState, setMonsterState] = useState<Monster3DSpriteState>("hurt");
   const [playerVariant, setPlayerVariant] = useState<(typeof VARIANTS)[number]>("spell");
   const [monsterVariant, setMonsterVariant] = useState<(typeof VARIANTS)[number]>("spell");
-  /** Matches combat: aim overlay + locked orbit during tuning; face-off **spacing** is unchanged (always strike-range for hit beats). */
-  const [strikePick, setStrikePick] = useState(true);
+  /** When on, matches combat strike-pick UI (crosshair, orbit off). Default off so the lab canvas can orbit + zoom. */
+  const [strikePick, setStrikePick] = useState(false);
   /** Default 1 = same strike-pick half as in-game merged 3D between rolls (`combat3dRollingApproachBlend`). */
   const [approach, setApproach] = useState(1);
   const [hurtHp, setHurtHp] = useState(LAB_PLAYER_WIN_MONSTER_HURT_HP);
@@ -207,6 +183,8 @@ export function Monster3dContactPairLab() {
     (WEAPON_ATTACH_EXTRA_EULER_RAD[1] * 180) / Math.PI,
     (WEAPON_ATTACH_EXTRA_EULER_RAD[2] * 180) / Math.PI,
   ]);
+  /** Hand bone local (meters) — same as `WEAPON_ATTACH_GRIP_POSITION_LOCAL`; tune with both fighters idle. */
+  const [labGripPosM, setLabGripPosM] = useState<[number, number, number]>([...WEAPON_ATTACH_GRIP_POSITION_LOCAL]);
 
   useEffect(() => {
     if (!labPlayerWeaponGlb) {
@@ -363,6 +341,8 @@ export function Monster3dContactPairLab() {
     [labExtraEulerDeg],
   );
 
+  const labArmourGripPositionLocal = useMemo((): readonly [number, number, number] => [...labGripPosM], [labGripPosM]);
+
   const labDraculaHurtStrikeZone: StrikeTarget | undefined =
     monsterType === "V" && monsterState === "hurt" && draculaHurtAim !== "hp" ? draculaHurtAim : undefined;
 
@@ -386,6 +366,26 @@ export function Monster3dContactPairLab() {
     pendingScenarioRef.current = null;
     setSeqPhase("off");
   }, []);
+
+  const snapIdleWide = useCallback(() => {
+    cancelLabSequence();
+    setPlayerState("idle");
+    setMonsterState("idle");
+    setApproach(0);
+    setReplayNonce((n) => n + 1);
+  }, [cancelLabSequence]);
+
+  const copyWeaponAttachSnippet = useCallback(() => {
+    const [gx, gy, gz] = labGripPosM;
+    const [ex, ey, ez] = labArmourExtraEulerRad;
+    const twist = labBladeTwistRad;
+    const text = `// Paste into lib/weaponAttachConfig.ts
+export const WEAPON_ATTACH_GRIP_POSITION_LOCAL: readonly [number, number, number] = [${gx}, ${gy}, ${gz}];
+export const WEAPON_ATTACH_EXTRA_EULER_RAD: readonly [number, number, number] = [${ex}, ${ey}, ${ez}];
+export const WEAPON_ATTACH_BLADE_TWIST_RAD = ${twist};
+`;
+    void navigator.clipboard?.writeText(text);
+  }, [labGripPosM, labArmourExtraEulerRad, labBladeTwistRad]);
 
   const startScenario = useCallback(
     (pr: Preset) => {
@@ -458,6 +458,18 @@ export function Monster3dContactPairLab() {
     return () => window.cancelAnimationFrame(raf);
   }, [seqPhase]);
 
+  const monsterPillStyle = (active: boolean): CSSProperties => ({
+    padding: "5px 10px",
+    borderRadius: 8,
+    border: active ? "1px solid rgba(110,200,255,0.85)" : "1px solid rgba(255,255,255,0.14)",
+    background: active ? "rgba(50,100,150,0.55)" : "rgba(0,0,0,0.58)",
+    color: "#e4f2ff",
+    fontSize: "0.72rem",
+    fontWeight: active ? 700 : 500,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  });
+
   return (
     <section
       style={{
@@ -468,29 +480,6 @@ export function Monster3dContactPairLab() {
         border: "1px solid rgba(120,200,255,0.18)",
       }}
     >
-      <h2 style={{ fontSize: "1.2rem", marginTop: 0, marginBottom: 8, color: "#9ee8ff" }}>
-        Face-off lab — player + monster (spacing + Meshy clip timing)
-      </h2>
-      <p
-        style={{
-          margin: "0 0 14px",
-          fontSize: "0.84rem",
-          color: "#a89cb0",
-          lineHeight: 1.55,
-          maxWidth: viewportW,
-        }}
-      >
-        Same <strong style={{ color: "#dce6f0" }}>X spacing</strong> and{" "}
-        <strong style={{ color: "#dce6f0" }}>player/monster clip lead-ins</strong> as the combat modal for merged Meshy (V/K/Z/S/L) via{" "}
-        <code style={{ color: "#c4e8ff" }}>resolveCombat3dClipLeads</code>. With{" "}
-        <strong style={{ color: "#dce6f0" }}>Connected approach → strike</strong> on,
-        each scenario runs <strong style={{ color: "#dce6f0" }}>idle</strong> → both <strong style={{ color: "#dce6f0" }}>hunt</strong> while
-        the fighters <strong style={{ color: "#dce6f0" }}>close in</strong> (approach blend), then the strike result. Dracula’s{" "}
-        <strong style={{ color: "#dce6f0" }}>Jumping_Punch</strong> is reserved for the <strong style={{ color: "#dce6f0" }}>spell</strong>{" "}
-        attack tier (and head aim in real combat); skill/light use grounded clips. Open{" "}
-        <strong style={{ color: "#dce6f0" }}>Advanced</strong> for tiers, Dracula hurt/attack clip source, and readouts.
-      </p>
-
       <div
         style={{
           width: "100%",
@@ -505,7 +494,7 @@ export function Monster3dContactPairLab() {
         }}
       >
         <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-          <span style={{ color: "#9ee8ff", fontWeight: 600 }}>Player weapon</span>
+          <span style={{ color: "#9ee8ff", fontWeight: 600 }}>Weapon</span>
           <select
             value={labPlayerWeaponGlb ?? ""}
             onChange={(e) => setLabPlayerWeaponGlb(e.target.value === "" ? null : e.target.value)}
@@ -519,25 +508,6 @@ export function Monster3dContactPairLab() {
             ))}
           </select>
         </label>
-        <span style={{ fontSize: "0.72rem", color: "#8a9aac", lineHeight: 1.4 }}>
-          Same GLBs as in-game armour — wired to <code style={{ color: "#c4e8ff" }}>CombatScene3D</code>{" "}
-          <code style={{ color: "#c4e8ff" }}>armourGltfPath</code>. Defaults:{" "}
-          <code style={{ color: "#c4e8ff" }}>lib/weaponAttachConfig.ts</code>.
-        </span>
-      </div>
-      <div
-        style={{
-          width: "100%",
-          maxWidth: viewportW,
-          margin: "0 auto 12px",
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          gap: 12,
-          fontSize: "0.78rem",
-          color: "#c8d8e8",
-        }}
-      >
         <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ color: "#9ee8ff" }}>Hand</span>
           <select
@@ -550,7 +520,7 @@ export function Monster3dContactPairLab() {
           </select>
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ color: "#9ee8ff" }}>Blade twist</span>
+          <span style={{ color: "#9ee8ff" }}>Twist</span>
           <select
             value={labBladeTwistPreset}
             onChange={(e) => setLabBladeTwistPreset(e.target.value as LabBladeTwistPreset)}
@@ -558,11 +528,11 @@ export function Monster3dContactPairLab() {
           >
             <option value="0">0°</option>
             <option value="90">90°</option>
-            <option value="180">180° (π)</option>
+            <option value="180">180°</option>
             <option value="270">270°</option>
           </select>
         </label>
-        <span style={{ color: "#9ee8ff" }}>Extra Euler (deg)</span>
+        <span style={{ color: "#9ee8ff" }}>Euler°</span>
         {(["X", "Y", "Z"] as const).map((axis, i) => (
           <label key={axis} style={{ display: "flex", alignItems: "center", gap: 4 }}>
             {axis}
@@ -583,30 +553,91 @@ export function Monster3dContactPairLab() {
           </label>
         ))}
       </div>
+      <div
+        style={{
+          width: "100%",
+          maxWidth: viewportW,
+          margin: "0 auto 12px",
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 10,
+          fontSize: "0.78rem",
+          color: "#c8d8e8",
+        }}
+      >
+        <span style={{ color: "#9ee8ff", fontWeight: 600 }}>Grip (m, hand bone)</span>
+        {(["X", "Y", "Z"] as const).map((axis, i) => (
+          <label key={`g-${axis}`} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: "0.68rem" }}>
+            <span style={{ color: "#8ab0c8" }}>{axis}</span>
+            <input
+              type="number"
+              step={0.001}
+              value={labGripPosM[i]}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setLabGripPosM((prev) => {
+                  const next: [number, number, number] = [...prev];
+                  next[i] = Number.isFinite(v) ? v : 0;
+                  return next;
+                });
+              }}
+              style={{ ...selectStyle, width: 76 }}
+            />
+            <input
+              type="range"
+              min={-0.5}
+              max={0.5}
+              step={0.002}
+              value={Math.min(0.5, Math.max(-0.5, labGripPosM[i]))}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setLabGripPosM((prev) => {
+                  const next: [number, number, number] = [...prev];
+                  next[i] = v;
+                  return next;
+                });
+              }}
+              style={{ width: 88 }}
+            />
+          </label>
+        ))}
+        <button type="button" onClick={snapIdleWide} style={{ ...btnStyle, textAlign: "center" }}>
+          Idle + wide
+        </button>
+        <button type="button" onClick={copyWeaponAttachSnippet} style={{ ...btnStyle, textAlign: "center" }}>
+          Copy config
+        </button>
+      </div>
       {labPlayerWeaponGlb && weaponFileOk === false ? (
         <div
           style={{
             width: "100%",
             maxWidth: viewportW,
             margin: "0 auto 10px",
-            padding: "10px 12px",
-            borderRadius: 10,
+            padding: "8px 10px",
+            borderRadius: 8,
             background: "rgba(180, 50, 50, 0.2)",
             border: "1px solid rgba(255,120,100,0.45)",
-            fontSize: "0.78rem",
+            fontSize: "0.76rem",
             color: "#ffc8c0",
-            lineHeight: 1.45,
           }}
         >
-          <strong>Weapon GLB not found:</strong> <code style={{ color: "#fff" }}>{labPlayerWeaponGlb}</code>
-          <br />
-          Add files under <code style={{ color: "#c4e8ff" }}>public/models/armour/</code> (see{" "}
-          <code style={{ color: "#c4e8ff" }}>lib/playerArmourGlbs.ts</code>) or pick <strong>None</strong>. Without assets the
-          battle scene still runs but no weapon mesh appears.
+          Missing: <code style={{ color: "#fff" }}>{labPlayerWeaponGlb}</code>
         </div>
       ) : null}
 
-      <div style={{ width: "100%", maxWidth: viewportW, margin: "0 auto" }}>
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          maxWidth: viewportW,
+          margin: "0 auto",
+          borderRadius: 10,
+          overflow: "hidden",
+          lineHeight: 0,
+        }}
+      >
         <CombatScene3D
           monsterGltfPath={monsterPath}
           playerGltfPath={playerPath}
@@ -614,6 +645,7 @@ export function Monster3dContactPairLab() {
           armourAttachHand={labWeaponHand}
           armourBladeTwistRad={labBladeTwistRad}
           armourExtraEulerRad={labArmourExtraEulerRad}
+          armourGripPositionLocal={labArmourGripPositionLocal}
           monsterVisualState={monsterState}
           playerVisualState={playerState}
           monsterType={monsterType}
@@ -633,6 +665,8 @@ export function Monster3dContactPairLab() {
           height={viewportH}
           compactCombatViewport
           strikePickActive={strikePick}
+          orbitMinDistance={0.48}
+          orbitMaxDistance={11}
           rollingApproachBlend={approach}
           faceOffAnimationSyncKey={faceOffAnimationSyncKey}
           fallback={
@@ -645,14 +679,65 @@ export function Monster3dContactPairLab() {
                 justifyContent: "center",
                 background: "rgba(0,0,0,0.5)",
                 color: "#9888a8",
-                fontSize: "0.85rem",
+                fontSize: "0.8rem",
                 borderRadius: 8,
               }}
             >
-              WebGL / model load failed — check console and GLB paths
+              Load error
             </div>
           }
         />
+        <div
+          style={{
+            position: "absolute",
+            left: 8,
+            top: 6,
+            right: 8,
+            fontSize: "0.65rem",
+            color: "rgba(200,220,255,0.75)",
+            textAlign: "right",
+            pointerEvents: "none",
+            lineHeight: 1.35,
+            zIndex: 2,
+            textShadow: "0 1px 4px rgba(0,0,0,0.85)",
+          }}
+        >
+          {strikePick ? "Strike-pick: tap zones · orbit off" : "Drag rotate · wheel / pinch zoom"}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            padding: "8px 6px",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 6,
+            justifyContent: "center",
+            alignItems: "center",
+            background: "linear-gradient(0deg, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.35) 55%, transparent 100%)",
+            pointerEvents: "none",
+            lineHeight: 1.2,
+            zIndex: 2,
+          }}
+        >
+          {LAB_MONSTER_TYPES.map((t) => (
+            <button
+              key={t}
+              type="button"
+              style={{ ...monsterPillStyle(monsterType === t), pointerEvents: "auto" }}
+              onClick={() => {
+                cancelLabSequence();
+                setApproach(1);
+                setMonsterType(t);
+                setReplayNonce((n) => n + 1);
+              }}
+            >
+              {t} · {getMonsterName(t)}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div
@@ -664,11 +749,6 @@ export function Monster3dContactPairLab() {
           borderTop: "1px solid rgba(120,200,255,0.2)",
         }}
       >
-        <p style={{ margin: "0 0 10px", fontSize: "0.82rem", fontWeight: 600, color: "#9ee8ff" }}>Combat scenarios</p>
-        <p style={{ margin: "0 0 12px", fontSize: "0.76rem", color: "#8a9aac", lineHeight: 1.45 }}>
-          One button per net outcome. Connected mode runs idle → hunt → close in → strike; “Between rolls · both idle” skips
-          the approach. Turn it off to snap straight to the strike pose like before.
-        </p>
         <label
           style={{
             display: "flex",
@@ -685,11 +765,11 @@ export function Monster3dContactPairLab() {
             checked={playConnectedSequence}
             onChange={(e) => setPlayConnectedSequence(e.target.checked)}
           />
-          Connected approach → strike (idle → hunt → close in → hit)
+          Connected idle → hunt → approach → strike
         </label>
         {seqPhase !== "off" ? (
-          <p style={{ margin: "0 0 10px", fontSize: "0.76rem", color: "#7ec8ff" }}>
-            Sequence: <strong>{seqPhase === "idle" ? "Calm (idle)" : "Closing in (hunt + approach)"}</strong>
+          <p style={{ margin: "0 0 10px", fontSize: "0.74rem", color: "#7ec8ff" }}>
+            {seqPhase === "idle" ? "Idle" : "Hunt + approach"}
           </p>
         ) : null}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
@@ -706,7 +786,7 @@ export function Monster3dContactPairLab() {
               textAlign: "center",
             }}
           >
-            Replay both (sync from t=0)
+            Replay
           </button>
         </div>
         <div
@@ -736,78 +816,15 @@ export function Monster3dContactPairLab() {
         <summary
           style={{
             cursor: "pointer",
-            fontSize: "0.88rem",
+            fontSize: "0.85rem",
             fontWeight: 600,
             color: "#b8d8f0",
             listStyle: "none",
           }}
         >
-          Advanced face-off controls (monster type, visuals, spacing, hurt tiers, readouts)
+          More
         </summary>
         <div style={{ marginTop: 14 }}>
-          <div
-            style={{
-              margin: "0 0 16px",
-              fontSize: "0.82rem",
-              color: "#a89cb0",
-              lineHeight: 1.55,
-            }}
-          >
-            <p style={{ margin: "0 0 12px" }}>
-              The 3D box uses the same left–right spacing rules as the real combat modal. Each strike roll resolves to a{" "}
-              <strong style={{ color: "#dce6f0" }}>single net exchange</strong>: either the monster lost more HP (you see your strike while the monster
-              is <strong style={{ color: "#dce6f0" }}>hurt</strong> or <strong style={{ color: "#dce6f0" }}>knockdown</strong>) or you lost more (the monster is{" "}
-              <strong style={{ color: "#dce6f0" }}>attack</strong> while you are hurt or knockdown). The modal does not stage two full attack clips at
-              once for that result. Here there is still no dice or real HP—only those paired poses and spacing.
-            </p>
-            <p style={{ margin: "0 0 8px", color: "#9ee8ff", fontWeight: 600 }}>Step by step</p>
-            <ol style={{ margin: "0 0 12px", paddingLeft: 22, color: "#b8afc8" }}>
-              <li style={{ marginBottom: 8 }}>
-                Choose <strong style={{ color: "#dce6f0" }}>Monster type</strong>, then <strong style={{ color: "#dce6f0" }}>Player visual</strong> and{" "}
-                <strong style={{ color: "#dce6f0" }}>Monster visual</strong>, or use a scenario button above—each scenario is one of those net outcomes (plus{" "}
-                <strong style={{ color: "#dce6f0" }}>Between rolls · both idle</strong> for calm spacing).
-              </li>
-              <li style={{ marginBottom: 8 }}>
-                <strong style={{ color: "#dce6f0" }}>Player strike tier</strong> only drives clips when <strong style={{ color: "#dce6f0" }}>Player visual</strong> is{" "}
-                <strong style={{ color: "#dce6f0" }}>attack</strong>. <strong style={{ color: "#dce6f0" }}>Monster strike tier</strong> only drives clips when{" "}
-                <strong style={{ color: "#dce6f0" }}>Monster visual</strong> is <strong style={{ color: "#dce6f0" }}>attack</strong>. On hurt / knockdown rows,
-                use <strong style={{ color: "#dce6f0" }}>Hurt HP / max</strong>, <strong style={{ color: "#dce6f0" }}>Dracula hurt clip source</strong>, and{" "}
-                <strong style={{ color: "#dce6f0" }}>Player fatal jump kill</strong> where the labels apply.
-              </li>
-              <li style={{ marginBottom: 8 }}>
-                Turn <strong style={{ color: "#dce6f0" }}>Strike-pick spacing (ignores contact tiers)</strong> on to preview the tighter layout used
-                when you aim strikes at the monster in the real game. Leave it off to use the normal spacing rules from the other controls.
-              </li>
-              <li style={{ marginBottom: 8 }}>
-                Drag <strong style={{ color: "#dce6f0" }}>Approach blend (idle → close)</strong> only when the slider is not marked <strong style={{ color: "#c8b8d4" }}>N/A</strong>{" "}
-                (it is disabled while Strike-pick spacing is on or while the readout line <strong style={{ color: "#c8e8ff" }}>useStrikeContactSpacing</strong> is{" "}
-                <strong style={{ color: "#c8e8ff" }}>true</strong>).
-              </li>
-              <li style={{ marginBottom: 8 }}>
-                For <strong style={{ color: "#dce6f0" }}>Monster type</strong> <strong style={{ color: "#dce6f0" }}>V — Dracula</strong> and{" "}
-                <strong style={{ color: "#dce6f0" }}>Monster visual</strong> <strong style={{ color: "#dce6f0" }}>hurt</strong>, use{" "}
-                <strong style={{ color: "#dce6f0" }}>Dracula hurt clip source</strong>: either <strong style={{ color: "#dce6f0" }}>HP tier</strong> (with{" "}
-                <strong style={{ color: "#dce6f0" }}>Monster hurt HP tier</strong> + <strong style={{ color: "#dce6f0" }}>Hurt HP / max</strong>) or{" "}
-                <strong style={{ color: "#dce6f0" }}>head</strong> / <strong style={{ color: "#dce6f0" }}>body</strong> / <strong style={{ color: "#dce6f0" }}>legs</strong> to
-                match in-combat strike aim. Otherwise keep <strong style={{ color: "#dce6f0" }}>Monster hurt HP tier</strong> and{" "}
-                <strong style={{ color: "#dce6f0" }}>Hurt HP / max</strong> as above for other monsters.
-              </li>
-              <li style={{ marginBottom: 8 }}>
-                For <strong style={{ color: "#dce6f0" }}>Player visual</strong> set to <strong style={{ color: "#dce6f0" }}>hurt</strong>, optionally turn on{" "}
-                <strong style={{ color: "#dce6f0" }}>Player fatal jump kill (hurt clips)</strong> to preview the alternate hurt sequence.
-              </li>
-              <li style={{ marginBottom: 0 }}>
-                Press <strong style={{ color: "#dce6f0" }}>Replay both</strong> under the canvas to run the same combination again from the first frame
-                on both characters. Scenario buttons also bump replay so each tap restarts in sync.
-              </li>
-            </ol>
-            <p style={{ margin: 0, color: "#8ab8c8", fontSize: "0.8rem" }}>
-              The blue readout shows <strong style={{ color: "#c8e8ff" }}>isContactExchange</strong>,{" "}
-              <strong style={{ color: "#c8e8ff" }}>useStrikeContactSpacing</strong>, <strong style={{ color: "#c8e8ff" }}>playerPosX</strong>,{" "}
-              <strong style={{ color: "#c8e8ff" }}>monsterPosX</strong>, and <strong style={{ color: "#c8e8ff" }}>GLBs:</strong> — use those numbers to compare spacing between setups.
-            </p>
-          </div>
-
       <div
         style={{
           display: "grid",
@@ -817,25 +834,6 @@ export function Monster3dContactPairLab() {
           alignItems: "end",
         }}
       >
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "#b8afc8" }}>
-          Monster type
-          <select
-            value={monsterType}
-            onChange={(e) => {
-              cancelLabSequence();
-              setApproach(1);
-              setMonsterType(e.target.value as MonsterType);
-              setReplayNonce((n) => n + 1);
-            }}
-            style={selectStyle}
-          >
-            {LAB_MONSTER_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t} — {getMonsterName(t)}
-              </option>
-            ))}
-          </select>
-        </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "#b8afc8" }}>
           Player visual
           <select
@@ -871,7 +869,7 @@ export function Monster3dContactPairLab() {
           </select>
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "#b8afc8" }}>
-          Player strike tier (attack clips)
+          Player strike tier
           <select
             value={playerVariant}
             onChange={(e) => setPlayerVariant(e.target.value as (typeof VARIANTS)[number])}
@@ -886,21 +884,21 @@ export function Monster3dContactPairLab() {
         </label>
         {playerState === "hurt" ? (
           <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "#b8afc8" }}>
-            Player hurt clip source (monster hit)
+            Player hurt source
             <select
               value={playerHurtClipSource}
               onChange={(e) => setPlayerHurtClipSource(e.target.value as PlayerHurtClipSource)}
               style={selectStyle}
             >
-              <option value="preset">Scenario tier (spell / skill / light from preset)</option>
-              <option value="head">Strike aim head → spell tier (hard fall)</option>
-              <option value="body">Strike aim body → skill tier (stagger)</option>
-              <option value="legs">Strike aim legs → light tier (flinch)</option>
+              <option value="preset">Preset tier</option>
+              <option value="head">Aim head → spell</option>
+              <option value="body">Aim body → skill</option>
+              <option value="legs">Aim legs → light</option>
             </select>
           </label>
         ) : null}
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "#b8afc8" }}>
-          Monster strike tier (attack clips)
+          Monster strike tier
           <select
             value={monsterVariant}
             onChange={(e) => setMonsterVariant(e.target.value as (typeof VARIANTS)[number])}
@@ -915,7 +913,7 @@ export function Monster3dContactPairLab() {
         </label>
         {monsterType === "V" && monsterState === "attack" ? (
           <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "#b8afc8" }}>
-            Dracula attack clip source
+            Dracula attack source
             <select
               value={draculaMonsterAttackAim}
               onChange={(e) =>
@@ -923,22 +921,21 @@ export function Monster3dContactPairLab() {
               }
               style={selectStyle}
             >
-              <option value="preset">Scenario tier (spell / skill / light)</option>
-              <option value="head">Strike aim head → spell (Jumping_Punch tier)</option>
-              <option value="body">Strike aim body → skill (grounded)</option>
-              <option value="legs">Strike aim legs → light (quick / throw)</option>
+              <option value="preset">Preset tier</option>
+              <option value="head">Aim head → spell</option>
+              <option value="body">Aim body → skill</option>
+              <option value="legs">Aim legs → light</option>
             </select>
           </label>
         ) : null}
         <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.78rem", color: "#b8afc8" }}>
           <span>
-            <input type="checkbox" checked={strikePick} onChange={(e) => setStrikePick(e.target.checked)} /> Strike-pick
-            UI (aim / orbit off) — spacing is fixed in `combatFaceOffPositions`
+            <input type="checkbox" checked={strikePick} onChange={(e) => setStrikePick(e.target.checked)} /> Strike-pick (crosshair, orbit off)
           </span>
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "#b8afc8" }}>
-          Approach blend (idle → close){" "}
-          {useStrikeContactSpacing || seqPhase !== "off" ? "— N/A (contact exchange or sequence)" : ""}
+          Approach blend{" "}
+          {useStrikeContactSpacing || seqPhase !== "off" ? "(N/A)" : ""}
           <input
             type="range"
             min={0}
@@ -957,21 +954,21 @@ export function Monster3dContactPairLab() {
               checked={showMonsterHurtTier}
               onChange={(e) => setShowMonsterHurtTier(e.target.checked)}
             />{" "}
-            Monster hurt HP tier (clip choice)
+            Monster hurt uses HP tier
           </span>
         </label>
         {monsterType === "V" && monsterState === "hurt" ? (
           <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "#b8afc8" }}>
-            Dracula hurt clip source
+            Dracula hurt source
             <select
               value={draculaHurtAim}
               onChange={(e) => setDraculaHurtAim(e.target.value as "hp" | StrikeTarget)}
               style={selectStyle}
             >
-              <option value="hp">HP tier (light / medium / heavy)</option>
-              <option value="head">Head strike (face punch reaction 2)</option>
-              <option value="body">Body / waist strike</option>
-              <option value="legs">Leg strike (falling down)</option>
+              <option value="hp">HP tier</option>
+              <option value="head">Head</option>
+              <option value="body">Body</option>
+              <option value="legs">Legs</option>
             </select>
           </label>
         ) : null}
@@ -996,37 +993,9 @@ export function Monster3dContactPairLab() {
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.78rem", color: "#b8afc8" }}>
           <span>
-            <input type="checkbox" checked={fatalJump} onChange={(e) => setFatalJump(e.target.checked)} /> Player fatal
-            jump kill (hurt clips)
+            <input type="checkbox" checked={fatalJump} onChange={(e) => setFatalJump(e.target.checked)} /> Fatal jump (player hurt)
           </span>
         </label>
-      </div>
-
-      <div
-        style={{
-          marginBottom: 12,
-          padding: "10px 12px",
-          borderRadius: 10,
-          background: "rgba(40,80,120,0.2)",
-          fontSize: "0.78rem",
-          fontFamily: "ui-monospace, monospace",
-          color: "#c8e8ff",
-          lineHeight: 1.55,
-        }}
-      >
-        <div>
-          <strong>isContactExchange</strong> (hurt/attack overlap): {String(isContactExchange)}
-        </div>
-        <div>
-          <strong>useStrikeContactSpacing</strong> (attack on either side): {String(useStrikeContactSpacing)}
-        </div>
-        <div>
-          <strong>playerPosX</strong> {spacing.playerPosX.toFixed(3)} · <strong>monsterPosX</strong>{" "}
-          {spacing.monsterPosX.toFixed(3)} (half-gap {Math.abs(spacing.playerPosX).toFixed(3)})
-        </div>
-        <div style={{ marginTop: 6, opacity: 0.85 }}>
-          GLBs: <code>{playerPath}</code> + <code>{monsterPath}</code>
-        </div>
       </div>
         </div>
       </details>

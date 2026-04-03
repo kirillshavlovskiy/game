@@ -33,8 +33,9 @@ import {
   resolveWalkFightBackClipName,
 } from "@/lib/monsterModels3d";
 import {
-  WEAPON_ATTACH_BLADE_TWIST_RAD,
-  WEAPON_ATTACH_EXTRA_EULER_RAD,
+  resolveWeaponAttachPose,
+  resolveWeaponAttachTargetWorldLen,
+  WEAPON_ATTACH_GRIP_FRACTION_FROM_AXIS_END,
   WEAPON_ATTACH_HAND,
   type WeaponAttachHand,
 } from "@/lib/weaponAttachConfig";
@@ -311,8 +312,8 @@ class ModelErrorBoundary extends Component<
   }
 }
 
-/** Optional weapon GLB: load failures must not unmount the whole combat `Canvas`. */
-class WeaponLoadErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+/** Optional weapon GLB: load failures must not unmount the whole combat `Canvas` (or maze `Canvas`). */
+export class WeaponLoadErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
   state = { hasError: false };
 
   static getDerivedStateFromError(): { hasError: boolean } {
@@ -788,14 +789,16 @@ function PositionedGltfSubject(
     weaponAttachHand?: WeaponAttachHand;
     weaponBladeTwistRad?: number;
     weaponExtraEulerRad?: readonly [number, number, number];
+    weaponGripPositionLocal?: readonly [number, number, number];
   }
 ) {
   const {
     positionX = 0,
     weaponUrl,
     weaponAttachHand = WEAPON_ATTACH_HAND,
-    weaponBladeTwistRad = WEAPON_ATTACH_BLADE_TWIST_RAD,
-    weaponExtraEulerRad = WEAPON_ATTACH_EXTRA_EULER_RAD,
+    weaponBladeTwistRad,
+    weaponExtraEulerRad,
+    weaponGripPositionLocal,
     hitRootRef,
     animationSyncKey,
     pairGateToken,
@@ -1207,28 +1210,27 @@ function PositionedGltfSubject(
   const yRotation = rest.isPlayerModel ? Math.PI / 2 : -Math.PI / 2;
 
   return (
-    <>
-      <group ref={setGroupRef} position={[positionX, 0, 0]}>
-        <Center>
-          <group ref={innerRef} scale={scale} rotation={[0, yRotation, 0]}>
-            <primitive object={scene} />
-          </group>
-        </Center>
-      </group>
-      {rest.isPlayerModel && weaponUrl ? (
-        <WeaponLoadErrorBoundary key={weaponUrl}>
-          <Suspense fallback={null}>
-            <BoneAttachedWeapon
-              parentScene={scene}
-              url={weaponUrl}
-              attachHand={weaponAttachHand}
-              bladeTwistRad={weaponBladeTwistRad}
-              extraEulerRad={weaponExtraEulerRad}
-            />
-          </Suspense>
-        </WeaponLoadErrorBoundary>
-      ) : null}
-    </>
+    <group ref={setGroupRef} position={[positionX, 0, 0]}>
+      <Center>
+        <group ref={innerRef} scale={scale} rotation={[0, yRotation, 0]}>
+          <primitive object={scene} />
+          {rest.isPlayerModel && weaponUrl ? (
+            <WeaponLoadErrorBoundary key={weaponUrl}>
+              <Suspense fallback={null}>
+                <BoneAttachedWeapon
+                  parentScene={scene}
+                  url={weaponUrl}
+                  attachHand={weaponAttachHand}
+                  bladeTwistRad={weaponBladeTwistRad}
+                  extraEulerRad={weaponExtraEulerRad}
+                  gripPositionLocal={weaponGripPositionLocal}
+                />
+              </Suspense>
+            </WeaponLoadErrorBoundary>
+          ) : null}
+        </group>
+      </Center>
+    </group>
   );
 }
 
@@ -1486,11 +1488,15 @@ function StaticGltfProp({ url, position, scale: s = 0.5, rotationY = 0 }: { url:
 }
 
 /**
- * Exact names for the **right hand** bone only — never forearm (weapon was sinking “above the wrist” when
- * `RightForeArm` matched before a differently named hand bone).
+ * Exact names for the **right hand / fist** end of the arm — never forearm (weapon must follow palm + fist, not elbow).
+ * Fist aliases first for rigs that name the terminal bone that way.
  */
 const RIGHT_HAND_EXACT_NAMES: readonly string[] = [
   "mixamorigRightHand",
+  "RightFist",
+  "rightFist",
+  "R_Fist",
+  "Fist_R",
   "RightHand",
   "rightHand",
   "Right_Hand",
@@ -1504,6 +1510,10 @@ const RIGHT_HAND_EXACT_NAMES: readonly string[] = [
 
 const LEFT_HAND_EXACT_NAMES: readonly string[] = [
   "mixamorigLeftHand",
+  "LeftFist",
+  "leftFist",
+  "L_Fist",
+  "Fist_L",
   "LeftHand",
   "leftHand",
   "Left_Hand",
@@ -1520,16 +1530,29 @@ function boneNameLooksForearmOrUpper(name: string): boolean {
   return /forearm|lowerarm|upperarm|shoulder|clavicle|elbow|spine|chest|neck|head/i.test(n);
 }
 
+/** Skip distal phalanges — weapon should stay on hand / fist, not individual fingertips. */
+function boneNameLooksFingerTip(name: string): boolean {
+  const n = name.replace(/\s/g, "");
+  return /(thumb|index|middle|ring|pinky|finger)\d*[2-9]|distal|DIP|fingertip|tip$/i.test(n);
+}
+
 function classifyHandSide(name: string): { isRight: boolean; isLeft: boolean } {
   const compact = name.replace(/\s/g, "");
   const isRight =
-    /right|hand_r|^r_hand|_r_hand|mixamorigright|\.r\.|_r\./i.test(compact) || /Hand_R|HAND_R/i.test(name);
+    /right|hand_r|^r_hand|_r_hand|mixamorigright|\.r\.|_r\./i.test(compact) ||
+    /Hand_R|HAND_R/i.test(name) ||
+    /^r_/i.test(compact);
   const isLeft =
-    /left|hand_l|^l_hand|_l_hand|mixamorigleft|\.l\.|_l\.|Hand_L|HAND_L/i.test(compact);
+    /left|hand_l|^l_hand|_l_hand|mixamorigleft|\.l\.|_l\./i.test(compact) ||
+    /Hand_L|HAND_L/i.test(name) ||
+    /^l_/i.test(compact);
   return { isRight, isLeft };
 }
 
-/** Pick rig hand bone for the requested side; fall back to opposite hand / forearm last. */
+/**
+ * Pick the **hand / fist / wrist** bone for the requested side so the weapon is rigid to the palm, not the forearm.
+ * Forearm is only used if no hand-like bone exists (avoids invisible weapons on odd rigs).
+ */
 function findHandBoneForSide(root: THREE.Object3D, side: WeaponAttachHand): THREE.Bone | null {
   const primaryExact = side === "right" ? RIGHT_HAND_EXACT_NAMES : LEFT_HAND_EXACT_NAMES;
   const secondaryExact = side === "right" ? LEFT_HAND_EXACT_NAMES : RIGHT_HAND_EXACT_NAMES;
@@ -1545,8 +1568,9 @@ function findHandBoneForSide(root: THREE.Object3D, side: WeaponAttachHand): THRE
   root.traverse((child) => {
     if (!(child as THREE.Bone).isBone) return;
     const n = child.name;
-    if (!/(hand|wrist)/i.test(n)) return;
+    if (!/(hand|wrist|fist)/i.test(n)) return;
     if (boneNameLooksForearmOrUpper(n)) return;
+    if (boneNameLooksFingerTip(n)) return;
     const { isRight, isLeft } = classifyHandSide(n);
     const b = child as THREE.Bone;
     const wantRight = side === "right";
@@ -1571,7 +1595,15 @@ function findHandBoneForSide(root: THREE.Object3D, side: WeaponAttachHand): THRE
       : (["mixamorigLeftForeArm", "LeftForeArm", "leftForeArm"] as const);
   for (const name of forearm) {
     const found = root.getObjectByName(name);
-    if (found && (found as THREE.Bone).isBone) return found as THREE.Bone;
+    if (found && (found as THREE.Bone).isBone) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          "[BoneAttachedWeapon] no hand/fist bone — attaching to forearm as last resort:",
+          name,
+        );
+      }
+      return found as THREE.Bone;
+    }
   }
 
   return null;
@@ -1579,73 +1611,52 @@ function findHandBoneForSide(root: THREE.Object3D, side: WeaponAttachHand): THRE
 
 export type { WeaponAttachHand };
 
-const WEAPON_GRIP_FRACTION_FROM_END = 0.12;
-
-const _wHandPos = new THREE.Vector3();
-const _wParentPos = new THREE.Vector3();
-const _wChildPos = new THREE.Vector3();
-const _limbWorld = new THREE.Vector3();
-const _bladeHorizWorld = new THREE.Vector3();
 const _twistAroundBlade = new THREE.Quaternion();
-const _alignBladeQuat = new THREE.Quaternion();
+const _bladeTwistAxis = new THREE.Vector3();
 const _extraEuler = new THREE.Euler();
 const _extraQuat = new THREE.Quaternion();
-
-/**
- * Forearm→hand or hand→first finger bone in **world** space (unit).
- * Meshy / GLTF rigs rarely align local +Y with the limb; using bone quat for that inverted many weapons.
- */
-function limbDirFromElbowTowardFingersWorld(handBone: THREE.Bone, boneWorldQuat: THREE.Quaternion, out: THREE.Vector3): void {
-  handBone.getWorldPosition(_wHandPos);
-  const parent = handBone.parent;
-  if (parent && (parent as THREE.Bone).isBone) {
-    parent.getWorldPosition(_wParentPos);
-    out.copy(_wHandPos).sub(_wParentPos);
-    if (out.lengthSq() > 1e-10) {
-      out.normalize();
-      return;
-    }
-  }
-  for (const ch of handBone.children) {
-    if ((ch as THREE.Bone).isBone) {
-      ch.getWorldPosition(_wChildPos);
-      out.copy(_wChildPos).sub(_wHandPos);
-      if (out.lengthSq() > 1e-10) {
-        out.normalize();
-        return;
-      }
-      break;
-    }
-  }
-  out.set(0, 1, 0).applyQuaternion(boneWorldQuat);
-  if (out.lengthSq() < 1e-10) out.set(0, 0, 1);
-  else out.normalize();
-}
+const _gripDecompPos = new THREE.Vector3();
+const _gripDecompQuat = new THREE.Quaternion();
+const _gripDecompScale = new THREE.Vector3();
 
 export function BoneAttachedWeapon({
   parentScene,
   url,
   attachHand = WEAPON_ATTACH_HAND,
-  bladeTwistRad = WEAPON_ATTACH_BLADE_TWIST_RAD,
-  extraEulerRad = WEAPON_ATTACH_EXTRA_EULER_RAD,
+  bladeTwistRad,
+  extraEulerRad,
+  gripPositionLocal,
 }: {
   parentScene: THREE.Object3D;
   url: string;
   /** Override default from `lib/weaponAttachConfig.ts` */
   attachHand?: WeaponAttachHand;
-  /** Radians: twist around auto blade axis after horizontal align */
+  /** Radians: twist around weapon long axis (bone-local rigid attach). */
   bladeTwistRad?: number;
-  /** Radians XYZ, applied in hand local space after blade twist */
+  /** Radians XYZ, order XYZ — hand-bone local, applied after twist */
   extraEulerRad?: readonly [number, number, number];
+  /** Meters along hand-bone axes (after scale compensation) — grip vs palm */
+  gripPositionLocal?: readonly [number, number, number];
 }) {
+  const pose = useMemo(
+    () => resolveWeaponAttachPose(url, { gripPositionLocal, extraEulerRad, bladeTwistRad }),
+    [url, gripPositionLocal, extraEulerRad, bladeTwistRad],
+  );
   const { scene: weaponScene } = useGLTF(url);
   const weaponClone = React.useMemo(() => weaponScene.clone(true), [weaponScene]);
-  const attachedRef = useRef<{ bone: THREE.Bone; container: THREE.Group; alignFromLocal: THREE.Vector3 } | null>(null);
-  /** Latest aim params — `useFrame` must read these every tick (twist/Euler sliders + animated hand). */
-  const bladeTwistRef = useRef(bladeTwistRad);
-  const extraEulerRef = useRef(extraEulerRad);
-  bladeTwistRef.current = bladeTwistRad;
-  extraEulerRef.current = extraEulerRad;
+  const attachedRef = useRef<{
+    bone: THREE.Bone;
+    /** Child of hand bone: bone-local grip translation + rigid config rotation (twist + Euler). */
+    weaponRoot: THREE.Group;
+    alignFromLocal: THREE.Vector3;
+  } | null>(null);
+  /** Latest attach params — `useFrame` reads every tick (sliders + animated bone). */
+  const bladeTwistRef = useRef(pose.bladeTwistRad);
+  const extraEulerRef = useRef(pose.extraEulerRad);
+  const gripPosRef = useRef(pose.gripPositionLocal);
+  bladeTwistRef.current = pose.bladeTwistRad;
+  extraEulerRef.current = pose.extraEulerRad;
+  gripPosRef.current = pose.gripPositionLocal;
 
   useEffect(() => { useGLTF.preload(url); }, [url]);
 
@@ -1666,12 +1677,12 @@ export function BoneAttachedWeapon({
     const boneWs = new THREE.Vector3();
     bone.getWorldScale(boneWs);
     const avgWs = (boneWs.x + boneWs.y + boneWs.z) / 3;
-    const desiredWorldLen = 0.45;
+    const desiredWorldLen = resolveWeaponAttachTargetWorldLen(url);
     let localScale = desiredWorldLen / (longestDim * Math.max(avgWs, 0.001));
     localScale = Math.min(100, Math.max(0.02, localScale));
 
-    const container = new THREE.Group();
-    container.name = "__weapon__";
+    const weaponRoot = new THREE.Group();
+    weaponRoot.name = "__weapon_root__";
 
     const scaleGrp = new THREE.Group();
     scaleGrp.scale.setScalar(localScale);
@@ -1686,14 +1697,16 @@ export function BoneAttachedWeapon({
     const gripPoint = center.clone();
     gripPoint.setComponent(
       longestAxis,
-      gripFromMinEnd ? minC + span * WEAPON_GRIP_FRACTION_FROM_END : maxC - span * WEAPON_GRIP_FRACTION_FROM_END
+      gripFromMinEnd
+        ? minC + span * WEAPON_ATTACH_GRIP_FRACTION_FROM_AXIS_END
+        : maxC - span * WEAPON_ATTACH_GRIP_FRACTION_FROM_AXIS_END
     );
     offsetGrp.position.copy(gripPoint.multiplyScalar(-1));
 
     offsetGrp.add(weaponClone);
     scaleGrp.add(offsetGrp);
-    container.add(scaleGrp);
-    bone.add(container);
+    weaponRoot.add(scaleGrp);
+    bone.add(weaponRoot);
 
     const alignFromLocal = new THREE.Vector3(
       longestAxis === 0 ? 1 : 0,
@@ -1701,7 +1714,7 @@ export function BoneAttachedWeapon({
       longestAxis === 2 ? 1 : 0,
     );
 
-    attachedRef.current = { bone, container, alignFromLocal };
+    attachedRef.current = { bone, weaponRoot, alignFromLocal };
 
     if (process.env.NODE_ENV !== "production") {
       const bones: string[] = [];
@@ -1712,44 +1725,45 @@ export function BoneAttachedWeapon({
     }
 
     return () => {
-      bone.remove(container);
+      bone.remove(weaponRoot);
       attachedRef.current = null;
     };
   }, [parentScene, weaponClone, url, attachHand]);
 
+  /** Must stay at default render priority: R3F skips automatic `gl.render` if any `useFrame` uses a positive priority. */
   useFrame(() => {
     const att = attachedRef.current;
     if (!att) return;
-    const { bone, container, alignFromLocal } = att;
+    const { bone, weaponRoot, alignFromLocal } = att;
     const twist = bladeTwistRef.current;
     const euler = extraEulerRef.current;
+    const gp = gripPosRef.current;
 
     bone.updateWorldMatrix(true, false);
-    const boneQ = new THREE.Quaternion();
-    bone.getWorldQuaternion(boneQ);
+    /**
+     * Sliders are authored as ~meters along hand-bone axes. Parent `Center` + rig root scale shrink the hand’s
+     * world scale; raw bone-local units then move the mesh by `scale * delta`, which reads as “sliders do nothing”.
+     * Divide by `matrixWorld` scale so a 0.1 edit stays ~0.1m visually on merged Meshy GLBs.
+     */
+    bone.matrixWorld.decompose(_gripDecompPos, _gripDecompQuat, _gripDecompScale);
+    const sx = Math.max(Math.abs(_gripDecompScale.x), 1e-8);
+    const sy = Math.max(Math.abs(_gripDecompScale.y), 1e-8);
+    const sz = Math.max(Math.abs(_gripDecompScale.z), 1e-8);
+    weaponRoot.position.set(gp[0] / sx, gp[1] / sy, gp[2] / sz);
 
-    limbDirFromElbowTowardFingersWorld(bone, boneQ, _limbWorld);
-
-    const worldUp = new THREE.Vector3(0, 1, 0);
-    const dotUp = worldUp.dot(_limbWorld);
-    _bladeHorizWorld.copy(worldUp).addScaledVector(_limbWorld, -dotUp);
-    if (_bladeHorizWorld.lengthSq() < 1e-6) {
-      _bladeHorizWorld.crossVectors(_limbWorld, worldUp);
+    /**
+     * Hard attach: rotation is **only** config (twist around mesh long axis + extra Euler) in **hand-bone local**
+     * space. No per-frame world “blade horizontal” aim — the weapon follows the bone like a parented prop.
+     */
+    weaponRoot.quaternion.identity();
+    if (Math.abs(twist) > 1e-10) {
+      _bladeTwistAxis.copy(alignFromLocal).normalize();
+      _twistAroundBlade.setFromAxisAngle(_bladeTwistAxis, twist);
+      weaponRoot.quaternion.copy(_twistAroundBlade);
     }
-    if (_bladeHorizWorld.lengthSq() < 1e-6) _bladeHorizWorld.crossVectors(worldUp, _limbWorld);
-    if (_bladeHorizWorld.lengthSq() < 1e-6) _bladeHorizWorld.set(1, 0, 0);
-    _bladeHorizWorld.normalize();
-
-    const boneQInv = boneQ.clone().invert();
-    const bladeDirLocal = _bladeHorizWorld.clone().applyQuaternion(boneQInv);
-
-    _alignBladeQuat.setFromUnitVectors(alignFromLocal, bladeDirLocal);
-    _twistAroundBlade.setFromAxisAngle(bladeDirLocal, twist);
-    container.quaternion.multiplyQuaternions(_twistAroundBlade, _alignBladeQuat);
-
     _extraEuler.set(euler[0], euler[1], euler[2], "XYZ");
     _extraQuat.setFromEuler(_extraEuler);
-    container.quaternion.multiply(_extraQuat);
+    weaponRoot.quaternion.multiply(_extraQuat);
   });
 
   return null;
@@ -1764,6 +1778,11 @@ export interface CombatScene3DProps {
   armourAttachHand?: WeaponAttachHand;
   armourBladeTwistRad?: number;
   armourExtraEulerRad?: readonly [number, number, number];
+  /**
+   * Meters, hand bone local — shift weapon vs palm. **Omit** to use `resolveWeaponAttachPose` (per-weapon map +
+   * globals). Face-off lab passes explicit values.
+   */
+  armourGripPositionLocal?: readonly [number, number, number];
   monsterVisualState: Monster3DSpriteState;
   playerVisualState: Monster3DSpriteState;
   monsterType?: MonsterType | null;
@@ -1805,6 +1824,10 @@ export interface CombatScene3DProps {
    * Do not pass from `LabyrinthGame` (would restart every unrelated render if mis-keyed).
    */
   faceOffAnimationSyncKey?: string;
+  /** Override OrbitControls min dolly distance (world units); omit for defaults from `compactCombatViewport`. */
+  orbitMinDistance?: number;
+  /** Override OrbitControls max dolly distance. */
+  orbitMaxDistance?: number;
 }
 
 /** Same vertical splits as `CombatStrikeZonePicker` raycast (legs / body / head). */
@@ -2022,8 +2045,9 @@ export function CombatScene3D({
   playerGltfPath,
   armourGltfPath,
   armourAttachHand = WEAPON_ATTACH_HAND,
-  armourBladeTwistRad = WEAPON_ATTACH_BLADE_TWIST_RAD,
-  armourExtraEulerRad = WEAPON_ATTACH_EXTRA_EULER_RAD,
+  armourBladeTwistRad,
+  armourExtraEulerRad,
+  armourGripPositionLocal,
   monsterVisualState,
   playerVisualState,
   monsterType = null,
@@ -2049,6 +2073,8 @@ export function CombatScene3D({
   onStrikeTargetPick,
   rollingApproachBlend = 0,
   faceOffAnimationSyncKey,
+  orbitMinDistance,
+  orbitMaxDistance,
 }: CombatScene3DProps) {
   const monsterHitRootRef = useRef<THREE.Group | null>(null);
   const isMergedMeshy =
@@ -2057,8 +2083,8 @@ export function CombatScene3D({
   const cameraY = compactCombatViewport ? 0.92 : 1.0;
   const fov = compactCombatViewport ? 50 : 40;
   const meshyCameraBases = { baseZ: cameraZ, baseY: cameraY, baseFov: fov };
-  const orbitMinD = compactCombatViewport ? 1.12 : 2;
-  const orbitMaxD = compactCombatViewport ? 5.8 : 10;
+  const orbitMinD = orbitMinDistance ?? (compactCombatViewport ? 1.12 : 2);
+  const orbitMaxD = orbitMaxDistance ?? (compactCombatViewport ? 5.8 : 10);
   const orbitTargetY = compactCombatViewport ? 0.56 : 0.8;
 
   const isContactExchange =
@@ -2122,10 +2148,9 @@ export function CombatScene3D({
     };
   }, [playerGltfPath]);
 
-  /** Stable canvas identity: not monster type / URLs — swapping GLB only remounts `PositionedGltfSubject` via `key={url}`. */
-  const canvasKey = `meshy-combat-${width}`;
-  /** Include `monsterType` so face-off spacing / clip lists can change without a GLB path change; orbit + framing still reset. */
+  /** Include roster so the Canvas remounts when the monster or either GLB changes — fresh OrbitControls + camera (avoids stale dolly/rotate hiding one fighter after swaps; face-off lab had no outer `key` like the combat modal). */
   const sceneAnchorKey = `${monsterType ?? "?"}|${monsterGltfPath}|${playerGltfPath}`;
+  const canvasKey = `meshy-combat-${width}--${sceneAnchorKey}`;
   const initialCombatCamera = useMemo(
     (): readonly [number, number, number] => [0, cameraY, cameraZ],
     [cameraY, cameraZ],
@@ -2133,7 +2158,14 @@ export function CombatScene3D({
 
   return (
     <ModelErrorBoundary key={canvasKey} fallback={fallback}>
-      <div style={{ width: "100%", maxWidth: width, cursor: strikePickActive ? "crosshair" : undefined }}>
+      <div
+        style={{
+          width: "100%",
+          maxWidth: width,
+          cursor: strikePickActive ? "crosshair" : "grab",
+          touchAction: strikePickActive ? "auto" : "none",
+        }}
+      >
       <Canvas
         key={canvasKey}
         style={{ width: "100%", maxWidth: width, height, display: "block", verticalAlign: "top" }}
@@ -2189,6 +2221,7 @@ export function CombatScene3D({
                   weaponAttachHand={armourAttachHand}
                   weaponBladeTwistRad={armourBladeTwistRad}
                   weaponExtraEulerRad={armourExtraEulerRad}
+                  weaponGripPositionLocal={armourGripPositionLocal}
                 />
               }
               monsterEl={
@@ -2230,6 +2263,7 @@ export function CombatScene3D({
                 weaponAttachHand={armourAttachHand}
                 weaponBladeTwistRad={armourBladeTwistRad}
                 weaponExtraEulerRad={armourExtraEulerRad}
+                weaponGripPositionLocal={armourGripPositionLocal}
               />
               <PositionedGltfSubject
                 key={monsterGltfPath}

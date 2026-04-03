@@ -16,9 +16,12 @@ const TEMP_INFINITE_MOVES = true;
 const INFINITE_MOVES_POOL = 999_999;
 
 const ISO_MINIMAP_ZOOM_BASELINE = 1;
+/** Default zoom so the dock minimap starts readable on desktop (still adjustable with − / +, pinch, or wheel). */
+const ISO_MINIMAP_ZOOM_INITIAL = 1.42;
 const ISO_MINIMAP_ZOOM_MIN = 0.65;
-const ISO_MINIMAP_ZOOM_MAX = 2.4;
-const ISO_MINIMAP_ZOOM_STEP = 0.12;
+const ISO_MINIMAP_ZOOM_MAX = 2.75;
+/** Slightly larger steps so scroll-wheel zoom feels responsive (non-passive listener below). */
+const ISO_MINIMAP_ZOOM_STEP = 0.18;
 
 type MovementDiceTransition = {
   movesLeftRef: { current: number };
@@ -94,8 +97,6 @@ import {
   PLAYER_ARMOUR_GLB_OPTIONS as ARMOUR_OPTIONS,
 } from "@/lib/playerArmourGlbs";
 import {
-  WEAPON_ATTACH_BLADE_TWIST_RAD,
-  WEAPON_ATTACH_EXTRA_EULER_RAD,
   WEAPON_ATTACH_HAND,
 } from "@/lib/weaponAttachConfig";
 import { resolveCombat3dClipLeads } from "@/lib/combat3dContact";
@@ -789,12 +790,30 @@ function IsoDockGridMiniMap({
   bearingAngleDeg?: number | null;
   hideZoomChrome?: boolean;
 }) {
+  const miniMapWheelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (hideZoomChrome) return;
+    const el = miniMapWheelRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const direction = -Math.sign(e.deltaY);
+      if (direction === 0) return;
+      setIsoMiniMapZoom((z) =>
+        Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z + direction * ISO_MINIMAP_ZOOM_STEP)),
+      );
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [hideZoomChrome, setIsoMiniMapZoom]);
+
   const boxInner = clipDiameter != null ? clipDiameter - 14 : null;
   const miniCellBase =
     boxInner != null
-      ? Math.max(2, Math.min(10, Math.floor(Math.min(boxInner / lab.width, boxInner / lab.height))))
-      : Math.max(3, Math.min(10, Math.floor(Math.min(180 / lab.width, 120 / lab.height))));
-  const miniCell = Math.max(clipDiameter != null ? 2 : 3, Math.min(22, Math.round(miniCellBase * isoMiniMapZoom)));
+      ? Math.max(2, Math.min(12, Math.floor(Math.min(boxInner / lab.width, boxInner / lab.height))))
+      : Math.max(3, Math.min(12, Math.floor(Math.min(200 / lab.width, 140 / lab.height))));
+  const miniCell = Math.max(clipDiameter != null ? 2 : 3, Math.min(26, Math.round(miniCellBase * isoMiniMapZoom)));
   const activeFacing = playerFacing[currentPlayer] ?? { dx: 0, dy: 1 };
   const activeFacingLen = Math.hypot(activeFacing.dx, activeFacing.dy) || 1;
   const activeFacingAngleDeg =
@@ -864,11 +883,12 @@ function IsoDockGridMiniMap({
                     left: "50%",
                     top: "50%",
                     transform: "translate(-50%, -50%)",
-                    width: Math.max(2, miniCell * 0.36),
-                    height: Math.max(2, miniCell * 0.36),
+                    width: Math.max(3, miniCell * 0.46),
+                    height: Math.max(3, miniCell * 0.46),
                     borderRadius: "50%",
                     background: "#ff4f4f",
-                    boxShadow: "0 0 4px rgba(255,80,80,0.7)",
+                    border: "1px solid rgba(40,0,0,0.45)",
+                    boxShadow: "0 0 6px rgba(255,80,80,0.85)",
                     zIndex: 3,
                   }}
                 />
@@ -880,14 +900,16 @@ function IsoDockGridMiniMap({
                     left: "50%",
                     top: "50%",
                     transform: "translate(-50%, -50%)",
-                    width: Math.max(2, miniCell * 0.44),
-                    height: Math.max(2, miniCell * 0.44),
+                    width: Math.max(4, miniCell * 0.68),
+                    height: Math.max(4, miniCell * 0.68),
                     borderRadius: "50%",
                     background: pi === currentPlayer ? "#00ff88" : "#6fb8ff",
+                    border:
+                      pi === currentPlayer ? "2px solid rgba(6,40,24,0.85)" : "1px solid rgba(12,28,48,0.75)",
                     boxShadow:
                       pi === currentPlayer
-                        ? "0 0 5px rgba(0,255,136,0.75)"
-                        : "0 0 4px rgba(100,180,255,0.55)",
+                        ? "0 0 8px rgba(0,255,136,0.95), 0 0 2px rgba(0,0,0,0.6)"
+                        : "0 0 6px rgba(100,180,255,0.7)",
                     zIndex: 4,
                   }}
                 />
@@ -902,10 +924,10 @@ function IsoDockGridMiniMap({
                       ? "translate(-50%, -50%)"
                       : `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
                     color: "#062214",
-                    fontSize: `${Math.max(7, miniCell * 0.85)}px`,
+                    fontSize: `${Math.max(9, miniCell * 1.12)}px`,
                     fontWeight: 900,
                     lineHeight: 1,
-                    textShadow: "0 0 2px rgba(0,255,136,0.95)",
+                    textShadow: "0 0 3px rgba(0,255,136,1), 0 1px 0 rgba(0,0,0,0.5)",
                     pointerEvents: "none",
                     zIndex: 5,
                   }}
@@ -950,6 +972,7 @@ function IsoDockGridMiniMap({
 
   return (
     <div
+      ref={miniMapWheelRef}
       role="button"
       tabIndex={0}
       onClick={onOpenGrid}
@@ -959,20 +982,7 @@ function IsoDockGridMiniMap({
           onOpenGrid();
         }
       }}
-      title="Switch to full 2D grid map"
-      onWheel={
-        hideZoomChrome
-          ? undefined
-          : (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const direction = -Math.sign(e.deltaY);
-              if (direction === 0) return;
-              setIsoMiniMapZoom((z) =>
-                Math.max(ISO_MINIMAP_ZOOM_MIN, Math.min(ISO_MINIMAP_ZOOM_MAX, z + direction * ISO_MINIMAP_ZOOM_STEP))
-              );
-            }
-      }
+      title="Switch to full 2D grid map — scroll wheel to zoom"
       onTouchStart={(e) => {
         if (hideZoomChrome || e.touches.length !== 2) return;
         const [a, b] = [e.touches[0], e.touches[1]];
@@ -3039,7 +3049,7 @@ export default function LabyrinthGame() {
   const MAZE_ZOOM_MAX = 4;
   const MAZE_ZOOM_STEP = 0.25;
   const [mazeZoom, setMazeZoom] = useState(MAZE_ZOOM_BASELINE);
-  const [isoMiniMapZoom, setIsoMiniMapZoom] = useState(ISO_MINIMAP_ZOOM_BASELINE);
+  const [isoMiniMapZoom, setIsoMiniMapZoom] = useState(ISO_MINIMAP_ZOOM_INITIAL);
   /** `grid` = playable CSS map; `iso` = 3D isometric view. Magic teleport can switch to iso; slingshot stays in current view. */
   const [mazeMapView, setMazeMapView] = useState<"grid" | "iso">("iso");
   const mazeMapViewRef = useRef(mazeMapView);
@@ -9562,9 +9572,9 @@ export default function LabyrinthGame() {
                       draculaAttackVariant: combatDraculaStrikeSegment,
                     })
                   : null;
+              /** Same player index as `combatPlayerGlb` / portraits — must stay defined after `setCombatState(null)` while `combatResult` (e.g. bonus loot) keeps the modal open. */
               const combatArmourPath = (() => {
-                if (!combatState) return null;
-                const a = playerArmour[combatState.playerIndex];
+                const a = playerArmour[headerPi];
                 return a && a !== NO_ARMOUR_SENTINEL ? a : null;
               })();
               const combatPlayerGlb = getPlayer3DGlb(playerAvatars[headerPi]);
@@ -10235,8 +10245,6 @@ export default function LabyrinthGame() {
                           playerGltfPath={combatPlayerGlb}
                           armourGltfPath={combatArmourPath}
                           armourAttachHand={WEAPON_ATTACH_HAND}
-                          armourBladeTwistRad={WEAPON_ATTACH_BLADE_TWIST_RAD}
-                          armourExtraEulerRad={WEAPON_ATTACH_EXTRA_EULER_RAD}
                           monsterVisualState={gltfVisualState}
                           playerVisualState={playerGltfVisualState}
                           monsterType={headerMt}
@@ -11068,8 +11076,6 @@ export default function LabyrinthGame() {
                             playerGltfPath={combatPlayerGlb}
                             armourGltfPath={combatArmourPath}
                             armourAttachHand={WEAPON_ATTACH_HAND}
-                            armourBladeTwistRad={WEAPON_ATTACH_BLADE_TWIST_RAD}
-                            armourExtraEulerRad={WEAPON_ATTACH_EXTRA_EULER_RAD}
                             monsterVisualState={gltfVisualState}
                             playerVisualState={playerGltfVisualState}
                             monsterType={headerMt}
@@ -11881,7 +11887,7 @@ export default function LabyrinthGame() {
             zoom={mazeZoom}
             visible
             onCellClick={handleCellTap}
-                touchUi={false}
+                touchUi={isMobile}
                 onRotateModeChange={setIsoCamRotateActive}
             teleportOptions={teleportPicker?.options ?? []}
             teleportMode={!!teleportPicker}

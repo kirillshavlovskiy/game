@@ -127,12 +127,13 @@ export const PLAYER_HITS_MONSTER: Record<Combat3dStrikeTier, Record<Combat3dDefe
   skill: {
     hurt: {
       /**
-       * **Mirrored from `MONSTER_HITS_PLAYER.spell.hurt`:** same tight half, player attack skip ↔ monster attacker skip,
-       * monster hurt skip ↔ player defender skip when the monster spell hits the player.
+       * Player skill leads with `Jumping_Punch` (wasteland drifter). Mirroring `MONSTER_HITS_PLAYER.spell` (0.4 / 0.66)
+       * skipped so deep into the clip that root motion read as starting **past** the defender on merged rigs.
+       * Wider half + shallower skip match the intent of `playerSpell` / lab: visible approach, then contact.
        */
-      separationHalf: MONSTER_HITS_PLAYER.spell.hurt.separationHalf,
-      attackerLeadInSec: MONSTER_HITS_PLAYER.spell.hurt.attackerLeadInSec,
-      defenderReactionLeadInSec: MONSTER_HITS_PLAYER.spell.hurt.defenderReactionLeadInSec,
+      separationHalf: 0.58,
+      attackerLeadInSec: 0.28,
+      defenderReactionLeadInSec: 0.16,
     },
     knockdown: {
       separationHalf: MONSTER_HITS_PLAYER.spell.knockdown.separationHalf,

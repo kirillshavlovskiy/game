@@ -5,6 +5,7 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useId,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -32,7 +33,8 @@ import {
   mapRotationLog,
   mapRotationLogSnapshot,
 } from "@/lib/mapRotationDebug";
-import { BoneAttachedWeapon } from "@/components/MonsterModel3D";
+import { WEAPON_ATTACH_HAND } from "@/lib/weaponAttachConfig";
+import { BoneAttachedWeapon, WeaponLoadErrorBoundary } from "@/components/MonsterModel3D";
 
 type MiniMonster = { x: number; y: number; type?: string; draculaState?: DraculaState };
 
@@ -648,7 +650,13 @@ function PlayerAvatar3D({
   return (
     <group ref={rootRef} scale={0.9} rotation={[0, Math.PI / 2, 0]}>
       <primitive object={clonedScene} />
-      {weaponGltfPath ? <BoneAttachedWeapon parentScene={clonedScene} url={weaponGltfPath} /> : null}
+      {weaponGltfPath ? (
+        <WeaponLoadErrorBoundary key={weaponGltfPath}>
+          <Suspense fallback={null}>
+            <BoneAttachedWeapon parentScene={clonedScene} url={weaponGltfPath} attachHand={WEAPON_ATTACH_HAND} />
+          </Suspense>
+        </WeaponLoadErrorBoundary>
+      ) : null}
       {!weaponGltfPath && placeholderHand ? (
         <primitive object={placeholderHand}>
           {/* Placeholder gauntlet when no equipped weapon GLB. */}
@@ -685,11 +693,14 @@ function PlayerMarker({
     fatalJump: boolean;
   } | null;
 }) {
-  const { camera } = useThree();
   const groupRef = useRef<THREE.Group>(null);
   const modelAnchorRef = useRef<THREE.Group>(null);
   const targetPos = useRef(new THREE.Vector3(playerX * CS, FLOOR_Y + 0.02, playerY * CS));
   const targetYawRef = useRef(0);
+  const facingDxRef = useRef(facingDx);
+  const facingDyRef = useRef(facingDy);
+  facingDxRef.current = facingDx;
+  facingDyRef.current = facingDy;
   const didInitPosRef = useRef(false);
   const groundLiftRef = useRef(0);
   const groundBox = useMemo(() => new THREE.Box3(), []);
@@ -711,11 +722,6 @@ function PlayerMarker({
 
   useEffect(() => { targetPos.current.set(playerX * CS, FLOOR_Y + 0.02, playerY * CS); }, [playerX, playerY]);
   useEffect(() => {
-    const hasFacing = Math.abs(facingDx) + Math.abs(facingDy) > 0;
-    if (!hasFacing) return;
-    targetYawRef.current = -Math.atan2(facingDy, facingDx);
-  }, [facingDx, facingDy]);
-  useEffect(() => {
     if (combatPulse <= 0) return;
     if (combatPulse === prevCombatPulseRef.current) return;
     prevCombatPulseRef.current = combatPulse;
@@ -724,19 +730,19 @@ function PlayerMarker({
 
   useFrame(() => {
     if (!groupRef.current) return;
+    const fdx = facingDxRef.current;
+    const fdy = facingDyRef.current;
+    const facingLen = Math.hypot(fdx, fdy);
+    if (facingLen > 0.01) {
+      /* Grid-facing yaw — same basis as movement / minimap arrow. Do not blend toward camera (that made forward walk read as strafe). */
+      targetYawRef.current = -Math.atan2(fdy, fdx);
+    }
     if (!didInitPosRef.current) {
       groupRef.current.position.copy(targetPos.current);
       groupRef.current.rotation.y = targetYawRef.current;
       didInitPosRef.current = true;
     }
     groupRef.current.position.lerp(targetPos.current, 0.08);
-
-    const cdx = groupRef.current.position.x - camera.position.x;
-    const cdz = groupRef.current.position.z - camera.position.z;
-    const cLen = Math.sqrt(cdx * cdx + cdz * cdz);
-    if (cLen > 0.01) {
-      targetYawRef.current = Math.atan2(cdx, cdz);
-    }
 
     const delta = THREE.MathUtils.euclideanModulo(targetYawRef.current - groupRef.current.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
     groupRef.current.rotation.y += delta * 0.14;
@@ -773,13 +779,18 @@ function PlayerMarker({
 
   return (
     <group ref={groupRef}>
+      {/* Floor locator — reads on dark stone; independent of GLB load. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.018, 0]} renderOrder={1}>
+        <ringGeometry args={[0.46, 0.72, 40]} />
+        <meshBasicMaterial color="#6dffd8" transparent opacity={0.62} depthWrite={false} />
+      </mesh>
       {/* Follow light bound to player marker so nearby floor/walls stay readable while moving. */}
       <pointLight
         position={[0, 1.15, 0]}
         color="#a8ffd6"
-        intensity={2.35}
-        distance={CS * 4.2}
-        decay={1.85}
+        intensity={3.1}
+        distance={CS * 5.2}
+        decay={1.75}
       />
       <group ref={modelAnchorRef}>
         <Suspense
@@ -797,6 +808,7 @@ function PlayerMarker({
           )}
         >
           <PlayerAvatar3D
+            key={`${playerGlbPath ?? PLAYER_3D_GLB}|${playerWeaponGltfPath ?? ""}`}
             visualState={visualState}
             actionVersion={actionVersion}
             glbPath={playerGlbPath}
@@ -1595,7 +1607,7 @@ function CameraController({
   const controlsRef = useRef<any>(null);
   const prevResetTick = useRef(resetTick);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
-  /** Desktop: left-drag orbits without snapping walk facing; right-drag (or touch) syncs N/E/S/W forward. */
+  /** Which mouse button started the current canvas drag (0 = left, 2 = right). Touch drags leave this null. */
   const mouseOrbitButtonRef = useRef<number | null>(null);
   const dragAccumRef = useRef(0);
   /** True for exactly the frame when orbitLookByPixelDelta (minimap ring) applied a delta — synchronous guard like dragRef. */
@@ -1984,15 +1996,15 @@ function CameraController({
     }
 
     /* Walk “forward” = into the view: camera→pawn on XZ, snapped to cardinals.
-     * Touch: any orbit / manual aim. Desktop: explicit rotate (Ctrl/button), right-drag, or minimap ring only —
-     * left-drag orbit must not snap facing every 90° or twitch at axis boundaries. */
+     * Any canvas orbit (left/right mouse or one-finger touch) should update grid facing so the 3D pawn matches
+     * the view; also rotate mode, minimap ring, and post-wheel manual offset on touch. */
     const cameraDrivesFacingGrid =
       !!onTouchCameraForwardGridRef.current &&
       !lockCameraToAutoFraming &&
       (orbitRingGesture ||
         rotateMode ||
         (touchUi && (dragRef.current != null || hasManualCameraRef.current)) ||
-        (!touchUi && dragRef.current != null && mouseOrbitButtonRef.current === 2));
+        (!touchUi && dragRef.current != null));
     if (cameraDrivesFacingGrid) {
       const toPawn = new THREE.Vector3().subVectors(ctrl.target, camera.position);
       toPawn.y = 0;
@@ -2964,13 +2976,32 @@ export function MiniMapStrip({
   showHeader = true,
   showExpandButton = true,
 }: MiniMapStripProps) {
+  const minimapGlowFilterId = useId().replace(/:/g, "");
   const inDock = mode === "dock";
-  const miniCell = Math.max(3, Math.min(10, Math.floor(280 / Math.max(mapWidth, mapHeight))));
+  /** Extra scale on top of base cell size (scroll wheel adjusts; passive:false listener). */
+  const [stripScrollZoom, setStripScrollZoom] = useState(1.22);
+  const miniMapStripWheelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = miniMapStripWheelRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const dir = -Math.sign(e.deltaY);
+      if (dir === 0) return;
+      setStripScrollZoom((z) => Math.max(0.88, Math.min(1.72, z + dir * 0.1)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const miniCellRaw = Math.max(4, Math.min(15, Math.floor(320 / Math.max(mapWidth, mapHeight))));
+  const miniCell = Math.max(4, Math.min(22, Math.round(miniCellRaw * stripScrollZoom)));
   const miniWidth = mapWidth * miniCell;
   const miniHeight = mapHeight * miniCell;
 
   const dirLen = Math.hypot(facingDx, facingDy) || 1;
-  const arrowLen = Math.max(6, miniCell * 2.2);
+  const arrowLen = Math.max(8, miniCell * 2.55);
   const playerCenterX = (playerX + 0.5) * miniCell;
   const playerCenterY = (playerY + 0.5) * miniCell;
   const arrowEndX = playerCenterX + (facingDx / dirLen) * arrowLen;
@@ -2991,7 +3022,11 @@ export function MiniMapStrip({
             }
           : undefined
       }
-      title={inDock && onExpandToGrid ? "Switch to full 2D grid map" : undefined}
+      title={
+        inDock && onExpandToGrid
+          ? "Switch to full 2D grid map — scroll wheel on the map to zoom"
+          : "Scroll wheel on the mini map to zoom"
+      }
       style={{
         position: inDock ? "relative" : "absolute",
         right: inDock ? undefined : 12,
@@ -3012,6 +3047,7 @@ export function MiniMapStrip({
       }}
     >
       <div
+        ref={miniMapStripWheelRef}
         style={{
           width: "100%",
           height: "100%",
@@ -3148,21 +3184,23 @@ export function MiniMapStrip({
 
           {(miniPlayers ?? []).map((p, i) => {
             if (p.isEliminated) return null;
+            const dot = Math.max(5, miniCell * 0.82);
+            const inset = Math.max(0, (miniCell - dot) / 2);
             return (
               <div
                 key={`player-${i}-${p.x}-${p.y}`}
                 style={{
                   position: "absolute",
-                  left: p.x * miniCell + miniCell * 0.16,
-                  top: p.y * miniCell + miniCell * 0.16,
-                  width: miniCell * 0.68,
-                  height: miniCell * 0.68,
+                  left: p.x * miniCell + inset,
+                  top: p.y * miniCell + inset,
+                  width: dot,
+                  height: dot,
                   borderRadius: "50%",
                   background: p.isCurrent ? "#00ff88" : "#55b8ff",
-                  border: p.isCurrent ? "1px solid #05331f" : "1px solid #0c2234",
+                  border: p.isCurrent ? "2px solid #05331f" : "1px solid #0c2234",
                   boxShadow: p.isCurrent
-                    ? "0 0 6px rgba(0,255,136,0.75)"
-                    : "0 0 4px rgba(85,184,255,0.55)",
+                    ? "0 0 10px rgba(0,255,136,0.9), 0 0 2px rgba(0,0,0,0.5)"
+                    : "0 0 6px rgba(85,184,255,0.65)",
                   pointerEvents: "none",
                 }}
                 title={p.isCurrent ? "Current player" : "Player"}
@@ -3177,22 +3215,34 @@ export function MiniMapStrip({
             style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
             aria-hidden
           >
+            <defs>
+              <filter id={minimapGlowFilterId} x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation={Math.max(1.2, miniCell * 0.12)} result="b" />
+                <feMerge>
+                  <feMergeNode in="b" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
             <line
               x1={playerCenterX}
               y1={playerCenterY}
               x2={arrowEndX}
               y2={arrowEndY}
-              stroke="#00ff88"
-              strokeWidth={Math.max(1.5, miniCell * 0.35)}
+              stroke="#d4fff0"
+              strokeWidth={Math.max(2.8, miniCell * 0.52)}
               strokeLinecap="round"
+              filter={`url(#${minimapGlowFilterId})`}
+              opacity={0.98}
             />
             <circle
               cx={playerCenterX}
               cy={playerCenterY}
-              r={Math.max(2.5, miniCell * 0.6)}
+              r={Math.max(4.2, miniCell * 0.98)}
               fill="#00ff88"
-              stroke="#062214"
-              strokeWidth={1}
+              stroke="#0a3d28"
+              strokeWidth={Math.max(2, miniCell * 0.16)}
+              filter={`url(#${minimapGlowFilterId})`}
             />
           </svg>
         </div>
