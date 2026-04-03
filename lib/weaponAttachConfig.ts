@@ -84,6 +84,24 @@ const WEAPON_ATTACH_POSE_BY_URL: Readonly<Record<string, WeaponAttachPosePartial
     extraEulerRad: [-0.4363323129985824, 0.3665191429188092, -1.3962634015954636],
     bladeTwistRad: 0,
   },
+  /** Elfic Blade (Luminous) — grip/Euler fix */
+  "/models/armour/Meshy_AI_Luminous_Elfic_Blade_0329003430_texture.glb": {
+    gripPositionLocal: [-0.044, 0.06, 0.038],
+    extraEulerRad: [0.4363323129985824, 0.3490658503988659, 1.5707963267948966],
+    bladeTwistRad: 0,
+  },
+  /** Stormbreaker Axe — 180° blade twist (π rad) */
+  "/models/armour/Meshy_AI_Stormbreaker_Axe_0329003533_texture.glb": {
+    gripPositionLocal: [0.302, 0.192, -0.25],
+    extraEulerRad: [-0.4363323129985824, 0.7853981633974483, 1.5707963267948966],
+    bladeTwistRad: Math.PI,
+  },
+  /** Reaper's Edge — 180° blade twist (π rad) */
+  "/models/armour/Meshy_AI_Reaper_s_Edge_0329003602_texture.glb": {
+    gripPositionLocal: [0.274, 0.08, -0.266],
+    extraEulerRad: [-0.4363323129985824, 0.7853981633974483, 1.5707963267948966],
+    bladeTwistRad: Math.PI,
+  },
 };
 
 export type WeaponAttachPoseResolved = {
