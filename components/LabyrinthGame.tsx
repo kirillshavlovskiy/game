@@ -93,6 +93,11 @@ import {
   NO_PLAYER_ARMOUR_GLB as NO_ARMOUR_SENTINEL,
   PLAYER_ARMOUR_GLB_OPTIONS as ARMOUR_OPTIONS,
 } from "@/lib/playerArmourGlbs";
+import {
+  WEAPON_ATTACH_BLADE_TWIST_RAD,
+  WEAPON_ATTACH_EXTRA_EULER_RAD,
+  WEAPON_ATTACH_HAND,
+} from "@/lib/weaponAttachConfig";
 import { resolveCombat3dClipLeads } from "@/lib/combat3dContact";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import MazeIsoView, {
@@ -547,7 +552,12 @@ function draculaPlayerHitHurt3dFooterExtra(
   maxHp: number
 ): { draculaHurt3dHp?: { hp: number; maxHp: number } } {
   if (
-    (monsterType !== "V" && monsterType !== "K" && monsterType !== "Z" && monsterType !== "S") ||
+    (monsterType !== "V" &&
+      monsterType !== "K" &&
+      monsterType !== "Z" &&
+      monsterType !== "G" &&
+      monsterType !== "S" &&
+      monsterType !== "L") ||
     (strikePortrait !== "playerHit" && strikePortrait !== "playerHitHeavy")
   ) {
     return {};
@@ -2976,6 +2986,10 @@ export default function LabyrinthGame() {
     draculaHurt3dHp?: { hp: number; maxHp: number };
     /** True when this monster hit is lethal and used the **spell** clip (e.g. Jumping_Punch) — player 3D uses `Shot_and_Fall_Backward`. */
     playerFatalJumpKill?: boolean;
+    /** Aim committed during the strike roll — merged monster `hurt` + player `hurt` clip selection in `CombatScene3D`. */
+    strikeTargetPick?: StrikeTarget;
+    /** HP the player lost on this strike (monster hit) — player merged hurt tier. */
+    playerHpLost?: number;
   } | null>(null);
   /** Landscape skills panel: raw d6 (1–6) from the last resolved strike roll this fight */
   const [lastCombatStrikeDiceFace, setLastCombatStrikeDiceFace] = useState<number | null>(null);
@@ -4383,6 +4397,7 @@ export default function LabyrinthGame() {
             combat.monsterType === "V" ||
             combat.monsterType === "K" ||
             combat.monsterType === "Z" ||
+            combat.monsterType === "G" ||
             combat.monsterType === "S" ||
             combat.monsterType === "L"
           ) {
@@ -4405,6 +4420,7 @@ export default function LabyrinthGame() {
         combat.monsterType === "V" ||
         combat.monsterType === "K" ||
         combat.monsterType === "Z" ||
+        combat.monsterType === "G" ||
         combat.monsterType === "S" ||
         combat.monsterType === "L";
       /**
@@ -4454,6 +4470,7 @@ export default function LabyrinthGame() {
         (combat.monsterType === "V" ||
           combat.monsterType === "K" ||
           combat.monsterType === "Z" ||
+          combat.monsterType === "G" ||
           combat.monsterType === "S" ||
           combat.monsterType === "L")
           ? COMBAT_STRIKE_LAB_COMMIT_DELAY_MS_MERGED_MESHY_3D
@@ -4517,6 +4534,10 @@ export default function LabyrinthGame() {
             !result.won && monsterHpAfterStrike < monsterHp
               ? { monsterHp: monsterHpAfterStrike, monsterMaxHp: maxHpM }
               : {};
+          const meshyStrikeFooterExtras = {
+            ...(strikeTarget ? { strikeTargetPick: strikeTarget } : {}),
+            ...(strikePortrait === "monsterHit" && missDmgPre > 0 ? { playerHpLost: missDmgPre } : {}),
+          };
           if (fromStagger) {
             setCombatFooterSnapshot({
               playerRoll: result.playerRoll,
@@ -4528,6 +4549,7 @@ export default function LabyrinthGame() {
               ...(playerFatalJumpKill ? { playerFatalJumpKill: true } : {}),
               ...draculaPlayerHitHurt3dFooterExtra(combat.monsterType, strikePortrait, monsterHpAfterStrike, maxHpM),
               ...glancingHp,
+              ...meshyStrikeFooterExtras,
             });
           } else {
             setCombatFooterSnapshot({
@@ -4540,6 +4562,7 @@ export default function LabyrinthGame() {
               ...(playerFatalJumpKill ? { playerFatalJumpKill: true } : {}),
               ...draculaPlayerHitHurt3dFooterExtra(combat.monsterType, strikePortrait, monsterHpAfterStrike, maxHpM),
               ...glancingHp,
+              ...meshyStrikeFooterExtras,
             });
             setCombatRecoveryPhase("hurt");
             lastCombatRecoveryClipFinishMs.current = 0;
@@ -4813,6 +4836,8 @@ export default function LabyrinthGame() {
           ...(draculaAttackSegment ? { draculaAttackSegment } : {}),
           ...(playerFatalJumpKill ? { playerFatalJumpKill: true } : {}),
           ...draculaPlayerHitHurt3dFooterExtra(combat.monsterType, strikePortrait, monsterHpAfterStrike, maxHpM),
+          ...(strikeTarget ? { strikeTargetPick: strikeTarget } : {}),
+          ...(strikePortrait === "monsterHit" && missDmgPre > 0 ? { playerHpLost: missDmgPre } : {}),
         });
         setCombatRecoveryPhase("hurt");
         lastCombatRecoveryClipFinishMs.current = 0;
@@ -9439,10 +9464,16 @@ export default function LabyrinthGame() {
                 if (inActiveFight && headerMt) {
                   if (rolling) {
                     if (
-                      (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "G" || headerMt === "S" || headerMt === "L") &&
+                      (headerMt === "V" ||
+                        headerMt === "K" ||
+                        headerMt === "Z" ||
+                        headerMt === "G" ||
+                        headerMt === "S" ||
+                        headerMt === "L") &&
                       isMonster3DEnabled()
-                    )
+                    ) {
                       return "rolling";
+                    }
                     return getMonsterSpriteWhileRolling(headerMt, combatMonsterStance);
                   }
                   const sp = combatFooterSnapshot?.strikePortrait;
@@ -9453,7 +9484,12 @@ export default function LabyrinthGame() {
                       /** Merged Meshy: spell/skill player wins use full crumple (`knockdown`), not only standing `hurt` — matches heavy tier + M-row spell feel (Jumping Punch is `skill` in dice but should fall like spell). */
                       if (
                         sp === "playerHit" &&
-                        (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "G" || headerMt === "S" || headerMt === "L") &&
+                        (headerMt === "V" ||
+                          headerMt === "K" ||
+                          headerMt === "Z" ||
+                          headerMt === "G" ||
+                          headerMt === "S" ||
+                          headerMt === "L") &&
                         isMonster3DEnabled() &&
                         (combatDraculaStrikeSegment === "spell" || combatDraculaStrikeSegment === "skill")
                       ) {
@@ -9505,7 +9541,12 @@ export default function LabyrinthGame() {
                   : COMBAT_3D_FALLBACK_TRANSPARENT_PX;
 
               const dracula3dAwaitingRollIdle =
-                (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "G" || headerMt === "S" || headerMt === "L") &&
+                (headerMt === "V" ||
+                  headerMt === "K" ||
+                  headerMt === "Z" ||
+                  headerMt === "G" ||
+                  headerMt === "S" ||
+                  headerMt === "L") &&
                 isMonster3DEnabled() &&
                 inActiveFight &&
                 !rolling &&
@@ -9542,7 +9583,12 @@ export default function LabyrinthGame() {
                    */
                   case "knockdown": {
                     const merge3dKnockdownPlayerAttack =
-                      (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "G" || headerMt === "S" || headerMt === "L") &&
+                      (headerMt === "V" ||
+                        headerMt === "K" ||
+                        headerMt === "Z" ||
+                        headerMt === "G" ||
+                        headerMt === "S" ||
+                        headerMt === "L") &&
                       isMonster3DEnabled() &&
                       inActiveFight &&
                       combatRecoveryPhase === "hurt" &&
@@ -9633,6 +9679,29 @@ export default function LabyrinthGame() {
                 isDracula3dCombatPortrait ? combat3dClipLeads.meshyMonsterHuntToAttackCrossfadeSec : undefined;
               const monsterHurtClipStartTimeSecFor3d = combat3dClipLeads.meshyMonsterHurtLeadInSec;
               const playerHurtClipStartTimeSecFor3d = combat3dClipLeads.meshyPlayerHurtLeadInSec;
+              const draculaHurtStrikeZoneFor3d: StrikeTarget | undefined =
+                isDracula3dCombatPortrait &&
+                (gltfVisualState === "hurt" || gltfVisualState === "recover") &&
+                (combatFooterSnapshot?.strikePortrait === "playerHit" ||
+                  combatFooterSnapshot?.strikePortrait === "playerHitHeavy") &&
+                combatFooterSnapshot?.strikeTargetPick != null
+                  ? combatFooterSnapshot.strikeTargetPick
+                  : undefined;
+              const playerHurtAnimContextFor3d: { hpLost: number; strikeZone?: StrikeTarget } | undefined =
+                isDracula3dCombatPortrait &&
+                playerGltfVisualState === "hurt" &&
+                combatFooterSnapshot?.playerHpLost != null &&
+                combatFooterSnapshot.playerHpLost > 0
+                  ? {
+                      hpLost: combatFooterSnapshot.playerHpLost,
+                      ...(combatFooterSnapshot.strikeTargetPick != null
+                        ? { strikeZone: combatFooterSnapshot.strikeTargetPick }
+                        : {}),
+                    }
+                  : undefined;
+              /** Same dice face as `resolveCombat3dClipLeads` / lab — varies merged player `attack` clip try-order. */
+              const playerAttackClipCycleIndexFor3d =
+                combatFooterSnapshot?.playerRoll ?? lastCombatStrikeDiceFace ?? 0;
               const draculaAttackLikePortrait =
                 !isDracula3dCombatPortrait &&
                 headerMt === "V" &&
@@ -9843,7 +9912,12 @@ export default function LabyrinthGame() {
               const draculaHurt3dLocked = combatFooterSnapshot?.draculaHurt3dHp;
               const draculaHurtHpFor3d = (() => {
                 const merged3dHurt =
-                  headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "G" || headerMt === "S" || headerMt === "L";
+                  headerMt === "V" ||
+                  headerMt === "K" ||
+                  headerMt === "Z" ||
+                  headerMt === "G" ||
+                  headerMt === "S" ||
+                  headerMt === "L";
                 if (!merged3dHurt || gltfVisualState !== "hurt") return undefined;
                 if (draculaHurt3dLocked != null && draculaHurt3dLocked.maxHp >= 1) {
                   return {
@@ -10160,18 +10234,24 @@ export default function LabyrinthGame() {
                           monsterGltfPath={monsterGltfPath}
                           playerGltfPath={combatPlayerGlb}
                           armourGltfPath={combatArmourPath}
+                          armourAttachHand={WEAPON_ATTACH_HAND}
+                          armourBladeTwistRad={WEAPON_ATTACH_BLADE_TWIST_RAD}
+                          armourExtraEulerRad={WEAPON_ATTACH_EXTRA_EULER_RAD}
                           monsterVisualState={gltfVisualState}
                           playerVisualState={playerGltfVisualState}
                           monsterType={headerMt}
                           draculaAttackVariant={monsterDraculaVariantForCombat3d}
-                          playerAttackVariant={playerAttackVariant}
+                          playerAttackVariant={playerAttackVariantForClipLeads}
                           playerFatalJumpKill={playerFatalJumpKill3d}
+                          playerHurtAnimContext={playerHurtAnimContextFor3d}
                           playerHurtClipStartTimeSec={playerHurtClipStartTimeSecFor3d}
                           playerAttackClipLeadInSec={playerAttackClipLeadInSecFor3d}
+                          playerAttackClipCycleIndex={playerAttackClipCycleIndexFor3d}
                           playerLocomotionToAttackCrossfadeSec={playerLocomotionToAttackCrossfadeSecFor3d}
                           monsterLocomotionToAttackCrossfadeSec={monsterLocomotionToAttackCrossfadeSecFor3d}
                           monsterHurtClipStartTimeSec={monsterHurtClipStartTimeSecFor3d}
                           draculaHurtHp={draculaHurtHpFor3d}
+                          draculaHurtStrikeZone={draculaHurtStrikeZoneFor3d}
                           draculaLoopAngrySkill01={draculaLossMenaceLoop3d}
                           compactCombatViewport
                           strikePickActive={combatStrikePick3dDuringRoll}
@@ -10987,18 +11067,24 @@ export default function LabyrinthGame() {
                             monsterGltfPath={monsterGltfPath}
                             playerGltfPath={combatPlayerGlb}
                             armourGltfPath={combatArmourPath}
+                            armourAttachHand={WEAPON_ATTACH_HAND}
+                            armourBladeTwistRad={WEAPON_ATTACH_BLADE_TWIST_RAD}
+                            armourExtraEulerRad={WEAPON_ATTACH_EXTRA_EULER_RAD}
                             monsterVisualState={gltfVisualState}
                             playerVisualState={playerGltfVisualState}
                             monsterType={headerMt}
                             draculaAttackVariant={monsterDraculaVariantForCombat3d}
-                            playerAttackVariant={playerAttackVariant}
+                            playerAttackVariant={playerAttackVariantForClipLeads}
                             playerFatalJumpKill={playerFatalJumpKill3d}
+                            playerHurtAnimContext={playerHurtAnimContextFor3d}
                             playerHurtClipStartTimeSec={playerHurtClipStartTimeSecFor3d}
                             playerAttackClipLeadInSec={playerAttackClipLeadInSecFor3d}
+                            playerAttackClipCycleIndex={playerAttackClipCycleIndexFor3d}
                             playerLocomotionToAttackCrossfadeSec={playerLocomotionToAttackCrossfadeSecFor3d}
                             monsterLocomotionToAttackCrossfadeSec={monsterLocomotionToAttackCrossfadeSecFor3d}
                             monsterHurtClipStartTimeSec={monsterHurtClipStartTimeSecFor3d}
                             draculaHurtHp={draculaHurtHpFor3d}
+                            draculaHurtStrikeZone={draculaHurtStrikeZoneFor3d}
                             draculaLoopAngrySkill01={draculaLossMenaceLoop3d}
                             compactCombatViewport
                             strikePickActive={combatStrikePick3dDuringRoll}

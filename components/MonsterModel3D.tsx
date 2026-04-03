@@ -19,7 +19,11 @@ import { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { MonsterType } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
 import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
-import { rowMonsterHitsPlayer, rowPlayerHitsMonster } from "@/lib/combat3dContact";
+import {
+  rowMonsterHitsPlayer,
+  rowPlayerHitsMonster,
+  skeletonFaceOffExtraSeparationHalf,
+} from "@/lib/combat3dContact";
 import {
   glbSlugFromPathOrUrl,
   isMergedMeshyStrikePortraitType,
@@ -28,6 +32,12 @@ import {
   resolvePlayerAnimationClipName,
   resolveWalkFightBackClipName,
 } from "@/lib/monsterModels3d";
+import {
+  WEAPON_ATTACH_BLADE_TWIST_RAD,
+  WEAPON_ATTACH_EXTRA_EULER_RAD,
+  WEAPON_ATTACH_HAND,
+  type WeaponAttachHand,
+} from "@/lib/weaponAttachConfig";
 
 /**
  * World X half-separation (|playerX| = |monsterX|). Looping stances lock armature root; one-shot attacks
@@ -69,6 +79,8 @@ export function combatFaceOffPositions(args: {
   monsterVisualState: Monster3DSpriteState;
   playerAttackVariant?: "spell" | "skill" | "light";
   draculaAttackVariant?: "spell" | "skill" | "light";
+  /** `K` (skeleton): wider default rail — merged strikes read early at table halves. */
+  monsterType?: MonsterType | null;
 }): { playerPosX: number; monsterPosX: number } {
   const {
     strikePickActive: _strikePickActive,
@@ -78,8 +90,10 @@ export function combatFaceOffPositions(args: {
     monsterVisualState,
     playerAttackVariant,
     draculaAttackVariant,
+    monsterType,
   } = args;
   void _strikePickActive;
+  const sk = skeletonFaceOffExtraSeparationHalf(monsterType);
   /**
    * Old logic only used tight spacing when `isContactExchange` (both sides in hit/attack/knockdown/angry).
    * While the attacker plays `attack`, the defender is often still calm `idle`/`hunt` — we stayed on idle
@@ -106,7 +120,7 @@ export function combatFaceOffPositions(args: {
     const idle = COMBAT_IDLE_SEPARATION_HALF;
     const t = Math.max(0, Math.min(1, rollingApproachBlend));
     const close = COMBAT_STRIKE_PICK_SEPARATION_HALF;
-    const h = idle * (1 - t) + close * t;
+    const h = idle * (1 - t) + close * t + sk;
     return { playerPosX: -h, monsterPosX: h };
   }
 
@@ -126,27 +140,28 @@ export function combatFaceOffPositions(args: {
 
   if (attackVsKnockdown || mirroredHeavyKnockdown) {
     if (mAtk && !pAtk) {
-      const h = rowMonsterHitsPlayer(draculaAttackVariant, playerVisualState).separationHalf;
+      const h = rowMonsterHitsPlayer(draculaAttackVariant, playerVisualState).separationHalf + sk;
       return { playerPosX: -h, monsterPosX: h };
     }
     if (pAtk && !mAtk) {
-      const h = rowPlayerHitsMonster(playerAttackVariant, monsterVisualState).separationHalf;
+      const h = rowPlayerHitsMonster(playerAttackVariant, monsterVisualState).separationHalf + sk;
       return { playerPosX: -h, monsterPosX: h };
     }
     if (mirroredHeavyKnockdown) {
-      const h = rowPlayerHitsMonster(playerAttackVariant, "knockdown").separationHalf;
+      const h = rowPlayerHitsMonster(playerAttackVariant, "knockdown").separationHalf + sk;
       return { playerPosX: -h, monsterPosX: h };
     }
-    const h = COMBAT_ATTACK_VS_KNOCKDOWN_HALF;
+    const h = COMBAT_ATTACK_VS_KNOCKDOWN_HALF + sk;
     return { playerPosX: -h, monsterPosX: h };
   }
 
   if (pAtk && mAtk) {
-    const half = Math.max(
-      combatContactHalfXForVariant(playerAttackVariant),
-      combatContactHalfXForVariant(draculaAttackVariant),
-      COMBAT_CONTACT_HALF_X_MIN,
-    );
+    const half =
+      Math.max(
+        combatContactHalfXForVariant(playerAttackVariant),
+        combatContactHalfXForVariant(draculaAttackVariant),
+        COMBAT_CONTACT_HALF_X_MIN,
+      ) + sk;
     return { playerPosX: -half, monsterPosX: half };
   }
 
@@ -156,7 +171,7 @@ export function combatFaceOffPositions(args: {
    * strikes read long-range and out of sync with the table-tuned clip leads).
    */
   if (mAtk && !pAtk) {
-    const h = rowMonsterHitsPlayer(draculaAttackVariant, playerVisualState).separationHalf;
+    const h = rowMonsterHitsPlayer(draculaAttackVariant, playerVisualState).separationHalf + sk;
     return { playerPosX: -h, monsterPosX: h };
   }
 
@@ -170,10 +185,11 @@ export function combatFaceOffPositions(args: {
     if (playerAttackVariant === "skill" && monsterVisualState === "recover") {
       h = rowPlayerHitsMonster("spell", "hurt").separationHalf;
     }
+    h += sk;
     return { playerPosX: -h, monsterPosX: h };
   }
 
-  const h = COMBAT_STRIKE_PICK_SEPARATION_HALF;
+  const h = COMBAT_STRIKE_PICK_SEPARATION_HALF + sk;
   return { playerPosX: -h, monsterPosX: h };
 }
 
@@ -769,11 +785,17 @@ function PositionedGltfSubject(
     playerLocomotionToAttackCrossfadeSec?: number;
     /** Merged monster: hunt/roll → `attack` blend (`MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER` from `resolveCombat3dClipLeads`). */
     monsterLocomotionToAttackCrossfadeSec?: number;
+    weaponAttachHand?: WeaponAttachHand;
+    weaponBladeTwistRad?: number;
+    weaponExtraEulerRad?: readonly [number, number, number];
   }
 ) {
   const {
     positionX = 0,
     weaponUrl,
+    weaponAttachHand = WEAPON_ATTACH_HAND,
+    weaponBladeTwistRad = WEAPON_ATTACH_BLADE_TWIST_RAD,
+    weaponExtraEulerRad = WEAPON_ATTACH_EXTRA_EULER_RAD,
     hitRootRef,
     animationSyncKey,
     pairGateToken,
@@ -1196,7 +1218,13 @@ function PositionedGltfSubject(
       {rest.isPlayerModel && weaponUrl ? (
         <WeaponLoadErrorBoundary key={weaponUrl}>
           <Suspense fallback={null}>
-            <BoneAttachedWeapon parentScene={scene} url={weaponUrl} />
+            <BoneAttachedWeapon
+              parentScene={scene}
+              url={weaponUrl}
+              attachHand={weaponAttachHand}
+              bladeTwistRad={weaponBladeTwistRad}
+              extraEulerRad={weaponExtraEulerRad}
+            />
           </Suspense>
         </WeaponLoadErrorBoundary>
       ) : null}
@@ -1474,46 +1502,74 @@ const RIGHT_HAND_EXACT_NAMES: readonly string[] = [
   "Bip001_R_Hand",
 ];
 
+const LEFT_HAND_EXACT_NAMES: readonly string[] = [
+  "mixamorigLeftHand",
+  "LeftHand",
+  "leftHand",
+  "Left_Hand",
+  "hand_L",
+  "Hand_L",
+  "CC_Base_L_Hand",
+  "L_Hand",
+  "Bip001 L Hand",
+  "Bip001_L_Hand",
+];
+
 function boneNameLooksForearmOrUpper(name: string): boolean {
   const n = name.replace(/\s/g, "");
   return /forearm|lowerarm|upperarm|shoulder|clavicle|elbow|spine|chest|neck|head/i.test(n);
 }
 
-function findHandBone(root: THREE.Object3D): THREE.Bone | null {
-  for (const name of RIGHT_HAND_EXACT_NAMES) {
+function classifyHandSide(name: string): { isRight: boolean; isLeft: boolean } {
+  const compact = name.replace(/\s/g, "");
+  const isRight =
+    /right|hand_r|^r_hand|_r_hand|mixamorigright|\.r\.|_r\./i.test(compact) || /Hand_R|HAND_R/i.test(name);
+  const isLeft =
+    /left|hand_l|^l_hand|_l_hand|mixamorigleft|\.l\.|_l\.|Hand_L|HAND_L/i.test(compact);
+  return { isRight, isLeft };
+}
+
+/** Pick rig hand bone for the requested side; fall back to opposite hand / forearm last. */
+function findHandBoneForSide(root: THREE.Object3D, side: WeaponAttachHand): THREE.Bone | null {
+  const primaryExact = side === "right" ? RIGHT_HAND_EXACT_NAMES : LEFT_HAND_EXACT_NAMES;
+  const secondaryExact = side === "right" ? LEFT_HAND_EXACT_NAMES : RIGHT_HAND_EXACT_NAMES;
+
+  for (const name of primaryExact) {
     const found = root.getObjectByName(name);
     if (found && (found as THREE.Bone).isBone) return found as THREE.Bone;
   }
 
-  let rightHand: THREE.Bone | null = null;
-  let anyHand: THREE.Bone | null = null;
-  let leftHand: THREE.Bone | null = null;
+  let primary: THREE.Bone | null = null;
+  let opposite: THREE.Bone | null = null;
+  let any: THREE.Bone | null = null;
   root.traverse((child) => {
     if (!(child as THREE.Bone).isBone) return;
     const n = child.name;
     if (!/(hand|wrist)/i.test(n)) return;
     if (boneNameLooksForearmOrUpper(n)) return;
-    const compact = n.replace(/\s/g, "");
-    const isRight =
-      /right|hand_r|^r_hand|_r_hand|mixamorigright|\.r\.|_r\./i.test(compact) || /Hand_R|HAND_R/i.test(n);
-    const isLeft =
-      /left|hand_l|^l_hand|_l_hand|mixamorigleft|\.l\.|_l\.|Hand_L|HAND_L/i.test(compact);
+    const { isRight, isLeft } = classifyHandSide(n);
     const b = child as THREE.Bone;
-    if (isRight && !isLeft) rightHand = b;
-    else if (isLeft && !isRight) {
-      if (!leftHand) leftHand = b;
-    } else if (!isLeft && !isRight && !anyHand) anyHand = b;
+    const wantRight = side === "right";
+    if (wantRight && isRight && !isLeft && !primary) primary = b;
+    else if (!wantRight && isLeft && !isRight && !primary) primary = b;
+    else if (wantRight && isLeft && !isRight && !opposite) opposite = b;
+    else if (!wantRight && isRight && !isLeft && !opposite) opposite = b;
+    else if (!isLeft && !isRight && !any) any = b;
   });
-  if (rightHand) return rightHand;
-  if (anyHand) return anyHand;
-  if (leftHand) return leftHand;
+  if (primary) return primary;
+  if (any) return any;
+  if (opposite) return opposite;
 
-  for (const name of ["mixamorigLeftHand", "LeftHand", "leftHand", "Left_Hand", "hand_L", "Hand_L"] as const) {
+  for (const name of secondaryExact) {
     const found = root.getObjectByName(name);
     if (found && (found as THREE.Bone).isBone) return found as THREE.Bone;
   }
 
-  for (const name of ["mixamorigRightForeArm", "RightForeArm", "rightForeArm"] as const) {
+  const forearm =
+    side === "right"
+      ? (["mixamorigRightForeArm", "RightForeArm", "rightForeArm"] as const)
+      : (["mixamorigLeftForeArm", "LeftForeArm", "leftForeArm"] as const);
+  for (const name of forearm) {
     const found = root.getObjectByName(name);
     if (found && (found as THREE.Bone).isBone) return found as THREE.Bone;
   }
@@ -1521,18 +1577,80 @@ function findHandBone(root: THREE.Object3D): THREE.Bone | null {
   return null;
 }
 
+export type { WeaponAttachHand };
+
 const WEAPON_GRIP_FRACTION_FROM_END = 0.12;
 
-export function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Object3D; url: string }) {
+const _wHandPos = new THREE.Vector3();
+const _wParentPos = new THREE.Vector3();
+const _wChildPos = new THREE.Vector3();
+const _limbWorld = new THREE.Vector3();
+const _bladeHorizWorld = new THREE.Vector3();
+const _twistAroundBlade = new THREE.Quaternion();
+const _alignBladeQuat = new THREE.Quaternion();
+const _extraEuler = new THREE.Euler();
+const _extraQuat = new THREE.Quaternion();
+
+/**
+ * Forearm→hand or hand→first finger bone in **world** space (unit).
+ * Meshy / GLTF rigs rarely align local +Y with the limb; using bone quat for that inverted many weapons.
+ */
+function limbDirFromElbowTowardFingersWorld(handBone: THREE.Bone, boneWorldQuat: THREE.Quaternion, out: THREE.Vector3): void {
+  handBone.getWorldPosition(_wHandPos);
+  const parent = handBone.parent;
+  if (parent && (parent as THREE.Bone).isBone) {
+    parent.getWorldPosition(_wParentPos);
+    out.copy(_wHandPos).sub(_wParentPos);
+    if (out.lengthSq() > 1e-10) {
+      out.normalize();
+      return;
+    }
+  }
+  for (const ch of handBone.children) {
+    if ((ch as THREE.Bone).isBone) {
+      ch.getWorldPosition(_wChildPos);
+      out.copy(_wChildPos).sub(_wHandPos);
+      if (out.lengthSq() > 1e-10) {
+        out.normalize();
+        return;
+      }
+      break;
+    }
+  }
+  out.set(0, 1, 0).applyQuaternion(boneWorldQuat);
+  if (out.lengthSq() < 1e-10) out.set(0, 0, 1);
+  else out.normalize();
+}
+
+export function BoneAttachedWeapon({
+  parentScene,
+  url,
+  attachHand = WEAPON_ATTACH_HAND,
+  bladeTwistRad = WEAPON_ATTACH_BLADE_TWIST_RAD,
+  extraEulerRad = WEAPON_ATTACH_EXTRA_EULER_RAD,
+}: {
+  parentScene: THREE.Object3D;
+  url: string;
+  /** Override default from `lib/weaponAttachConfig.ts` */
+  attachHand?: WeaponAttachHand;
+  /** Radians: twist around auto blade axis after horizontal align */
+  bladeTwistRad?: number;
+  /** Radians XYZ, applied in hand local space after blade twist */
+  extraEulerRad?: readonly [number, number, number];
+}) {
   const { scene: weaponScene } = useGLTF(url);
   const weaponClone = React.useMemo(() => weaponScene.clone(true), [weaponScene]);
   const attachedRef = useRef<{ bone: THREE.Bone; container: THREE.Group; alignFromLocal: THREE.Vector3 } | null>(null);
-  const orientedRef = useRef(false);
+  /** Latest aim params — `useFrame` must read these every tick (twist/Euler sliders + animated hand). */
+  const bladeTwistRef = useRef(bladeTwistRad);
+  const extraEulerRef = useRef(extraEulerRad);
+  bladeTwistRef.current = bladeTwistRad;
+  extraEulerRef.current = extraEulerRad;
 
   useEffect(() => { useGLTF.preload(url); }, [url]);
 
   useEffect(() => {
-    const bone = findHandBone(parentScene);
+    const bone = findHandBoneForSide(parentScene, attachHand);
     if (!bone) {
       if (process.env.NODE_ENV !== "production") console.warn("[BoneAttachedWeapon] no hand bone found");
       return;
@@ -1549,7 +1667,8 @@ export function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Ob
     bone.getWorldScale(boneWs);
     const avgWs = (boneWs.x + boneWs.y + boneWs.z) / 3;
     const desiredWorldLen = 0.45;
-    const localScale = desiredWorldLen / (longestDim * Math.max(avgWs, 0.001));
+    let localScale = desiredWorldLen / (longestDim * Math.max(avgWs, 0.001));
+    localScale = Math.min(100, Math.max(0.02, localScale));
 
     const container = new THREE.Group();
     container.name = "__weapon__";
@@ -1558,11 +1677,16 @@ export function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Ob
     scaleGrp.scale.setScalar(localScale);
 
     const offsetGrp = new THREE.Group();
-    const gripPoint = center.clone();
     const mins = [box.min.x, box.min.y, box.min.z];
+    const span = axisSizes[longestAxis]!;
+    const minC = mins[longestAxis]!;
+    const maxC = box.max.getComponent(longestAxis as 0 | 1 | 2);
+    /** Grip near the long-axis end closest to mesh origin (handles are often authored there). */
+    const gripFromMinEnd = Math.abs(minC) <= Math.abs(maxC);
+    const gripPoint = center.clone();
     gripPoint.setComponent(
       longestAxis,
-      mins[longestAxis]! + axisSizes[longestAxis]! * WEAPON_GRIP_FRACTION_FROM_END
+      gripFromMinEnd ? minC + span * WEAPON_GRIP_FRACTION_FROM_END : maxC - span * WEAPON_GRIP_FRACTION_FROM_END
     );
     offsetGrp.position.copy(gripPoint.multiplyScalar(-1));
 
@@ -1578,7 +1702,6 @@ export function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Ob
     );
 
     attachedRef.current = { bone, container, alignFromLocal };
-    orientedRef.current = false;
 
     if (process.env.NODE_ENV !== "production") {
       const bones: string[] = [];
@@ -1591,43 +1714,42 @@ export function BoneAttachedWeapon({ parentScene, url }: { parentScene: THREE.Ob
     return () => {
       bone.remove(container);
       attachedRef.current = null;
-      orientedRef.current = false;
     };
-  }, [parentScene, weaponClone, url]);
+  }, [parentScene, weaponClone, url, attachHand]);
 
   useFrame(() => {
     const att = attachedRef.current;
-    if (!att || orientedRef.current) return;
+    if (!att) return;
     const { bone, container, alignFromLocal } = att;
+    const twist = bladeTwistRef.current;
+    const euler = extraEulerRef.current;
 
     bone.updateWorldMatrix(true, false);
     const boneQ = new THREE.Quaternion();
     bone.getWorldQuaternion(boneQ);
 
-    const armDirWorld = new THREE.Vector3(0, 1, 0).applyQuaternion(boneQ);
+    limbDirFromElbowTowardFingersWorld(bone, boneQ, _limbWorld);
 
     const worldUp = new THREE.Vector3(0, 1, 0);
-    const dot = worldUp.dot(armDirWorld);
-    const bladeDirWorld = new THREE.Vector3()
-      .copy(worldUp)
-      .addScaledVector(armDirWorld, -dot);
-    if (bladeDirWorld.lengthSq() < 0.001) bladeDirWorld.set(0, 0, 1);
-    bladeDirWorld.normalize();
+    const dotUp = worldUp.dot(_limbWorld);
+    _bladeHorizWorld.copy(worldUp).addScaledVector(_limbWorld, -dotUp);
+    if (_bladeHorizWorld.lengthSq() < 1e-6) {
+      _bladeHorizWorld.crossVectors(_limbWorld, worldUp);
+    }
+    if (_bladeHorizWorld.lengthSq() < 1e-6) _bladeHorizWorld.crossVectors(worldUp, _limbWorld);
+    if (_bladeHorizWorld.lengthSq() < 1e-6) _bladeHorizWorld.set(1, 0, 0);
+    _bladeHorizWorld.normalize();
 
     const boneQInv = boneQ.clone().invert();
-    const bladeDirLocal = bladeDirWorld.applyQuaternion(boneQInv);
+    const bladeDirLocal = _bladeHorizWorld.clone().applyQuaternion(boneQInv);
 
-    container.quaternion.setFromUnitVectors(
-      alignFromLocal,
-      bladeDirLocal,
-    );
+    _alignBladeQuat.setFromUnitVectors(alignFromLocal, bladeDirLocal);
+    _twistAroundBlade.setFromAxisAngle(bladeDirLocal, twist);
+    container.quaternion.multiplyQuaternions(_twistAroundBlade, _alignBladeQuat);
 
-    orientedRef.current = true;
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[BoneAttachedWeapon] oriented — armDirWorld:", armDirWorld.toArray().map(v => +v.toFixed(3)),
-        "bladeDirWorld:", bladeDirWorld.toArray().map(v => +v.toFixed(3)),
-        "bladeDirLocal:", bladeDirLocal.toArray().map(v => +v.toFixed(3)));
-    }
+    _extraEuler.set(euler[0], euler[1], euler[2], "XYZ");
+    _extraQuat.setFromEuler(_extraEuler);
+    container.quaternion.multiply(_extraQuat);
   });
 
   return null;
@@ -1638,6 +1760,10 @@ export interface CombatScene3DProps {
   playerGltfPath: string;
   /** Optional weapon/armour GLB parented to the player rig hand (see `BoneAttachedWeapon`). Empty string = none. */
   armourGltfPath?: string | null;
+  /** Defaults in `lib/weaponAttachConfig.ts` when omitted */
+  armourAttachHand?: WeaponAttachHand;
+  armourBladeTwistRad?: number;
+  armourExtraEulerRad?: readonly [number, number, number];
   monsterVisualState: Monster3DSpriteState;
   playerVisualState: Monster3DSpriteState;
   monsterType?: MonsterType | null;
@@ -1872,6 +1998,7 @@ function CombatOrbitControls({
 
   return (
     <OrbitControls
+      key={sceneAnchorKey}
       ref={orbitRef}
       enabled={enabled}
       enableDamping={false}
@@ -1894,6 +2021,9 @@ export function CombatScene3D({
   monsterGltfPath,
   playerGltfPath,
   armourGltfPath,
+  armourAttachHand = WEAPON_ATTACH_HAND,
+  armourBladeTwistRad = WEAPON_ATTACH_BLADE_TWIST_RAD,
+  armourExtraEulerRad = WEAPON_ATTACH_EXTRA_EULER_RAD,
   monsterVisualState,
   playerVisualState,
   monsterType = null,
@@ -1944,6 +2074,7 @@ export function CombatScene3D({
         monsterVisualState,
         playerAttackVariant,
         draculaAttackVariant,
+        monsterType,
       }),
     [
       strikePickActive,
@@ -1953,6 +2084,7 @@ export function CombatScene3D({
       monsterVisualState,
       playerAttackVariant,
       draculaAttackVariant,
+      monsterType,
     ]
   );
 
@@ -1965,7 +2097,7 @@ export function CombatScene3D({
         await r.arrayBuffer();
         await Promise.resolve(useGLTF.preload(monsterGltfPath) as PromiseLike<unknown> | undefined);
       } catch {
-        /* preload best-effort — `mUrl` already matches prop */
+        /* preload best-effort */
       }
     })();
     return () => {
@@ -1990,15 +2122,10 @@ export function CombatScene3D({
     };
   }, [playerGltfPath]);
 
-  /**
-   * Remount Canvas when monster/player **asset** changes so WebGL + drei `useGLTF` state cannot keep stale bounds/poses
-   * while face-off X and camera reset already target the new file (was one source of wrong spacing after lab monster swap).
-   */
-  const monsterAssetKey = glbSlugFromPathOrUrl(monsterGltfPath) ?? "monster";
-  const playerAssetKey = glbSlugFromPathOrUrl(playerGltfPath) ?? "player";
-  const canvasKey = `meshy-combat-${width}-${monsterAssetKey}-${playerAssetKey}`;
-  /** Include `monsterType` so orbit + meshy framing reset if type changes even when URL is reused. */
-  const sceneAnchorKey = `${monsterGltfPath}|${playerGltfPath}|${monsterType ?? ""}`;
+  /** Stable canvas identity: not monster type / URLs — swapping GLB only remounts `PositionedGltfSubject` via `key={url}`. */
+  const canvasKey = `meshy-combat-${width}`;
+  /** Include `monsterType` so face-off spacing / clip lists can change without a GLB path change; orbit + framing still reset. */
+  const sceneAnchorKey = `${monsterType ?? "?"}|${monsterGltfPath}|${playerGltfPath}`;
   const initialCombatCamera = useMemo(
     (): readonly [number, number, number] => [0, cameraY, cameraZ],
     [cameraY, cameraZ],
@@ -2059,6 +2186,9 @@ export function CombatScene3D({
                   playerAttackClipCycleIndex={playerAttackClipCycleIndex}
                   positionX={playerPosX}
                   weaponUrl={armourGltfPath}
+                  weaponAttachHand={armourAttachHand}
+                  weaponBladeTwistRad={armourBladeTwistRad}
+                  weaponExtraEulerRad={armourExtraEulerRad}
                 />
               }
               monsterEl={
@@ -2097,6 +2227,9 @@ export function CombatScene3D({
                 playerAttackClipCycleIndex={playerAttackClipCycleIndex}
                 positionX={playerPosX}
                 weaponUrl={armourGltfPath}
+                weaponAttachHand={armourAttachHand}
+                weaponBladeTwistRad={armourBladeTwistRad}
+                weaponExtraEulerRad={armourExtraEulerRad}
               />
               <PositionedGltfSubject
                 key={monsterGltfPath}

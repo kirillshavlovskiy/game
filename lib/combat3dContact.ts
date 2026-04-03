@@ -9,6 +9,15 @@ import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
 export type Combat3dStrikeTier = "spell" | "skill" | "light";
 export type Combat3dDefenderPose = "hurt" | "knockdown";
 
+/** Type `K` (skeleton): default face-off reads strikes landing early — add to every combat half-distance. */
+export const SKELETON_FACE_OFF_EXTRA_SEPARATION_HALF = 0.14;
+
+export function skeletonFaceOffExtraSeparationHalf(
+  monsterType: MonsterType | null | undefined,
+): number {
+  return monsterType === "K" ? SKELETON_FACE_OFF_EXTRA_SEPARATION_HALF : 0;
+}
+
 export interface Combat3dContactRow {
   /** World X half-distance (|playerX| = |monsterX|) for this beat. */
   separationHalf: number;
@@ -24,6 +33,8 @@ export interface Combat3dContactRow {
  */
 /** Near-cut: hunt locomotion was still visible through Jumping_Punch contact. */
 export const MONSTER_SPELL_PLAYER_HUNT_TO_HURT_CROSSFADE_SEC = 0.08;
+/** Symmetric: player skill jump → monster standing hurt (same crossfade intent as monster spell → player hurt). */
+export const PLAYER_SKILL_MONSTER_HUNT_TO_HURT_CROSSFADE_SEC = MONSTER_SPELL_PLAYER_HUNT_TO_HURT_CROSSFADE_SEC;
 
 /**
  * Lethal spell (Jumping_Punch): skip into `Shot_and_Fall_*` so the **visible** collapse lines up with monster contact.
@@ -82,7 +93,7 @@ export const MONSTER_HITS_PLAYER: Record<Combat3dStrikeTier, Record<Combat3dDefe
  */
 export const PLAYER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER: Record<Combat3dStrikeTier, number> = {
   spell: 0.22,
-  /** Mirrored from `MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER.spell` — player skill jump reads like monster spell jump-in. */
+  /** Mirrored from `MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER.spell` — player skill jump reads like monster spell strike. */
   skill: 0.34,
   light: 0.34,
 };
@@ -116,19 +127,17 @@ export const PLAYER_HITS_MONSTER: Record<Combat3dStrikeTier, Record<Combat3dDefe
   skill: {
     hurt: {
       /**
-       * Mirrored from `MONSTER_HITS_PLAYER.spell.hurt` (same jump read, opposite direction): tight X, deep skip into
-       * attacker clip, modest monster hurt skip — plus `monsterSpellJumpContactLeadMultiplier` + synced monster hurt in
-       * `resolveCombat3dClipLeads` like monster spell vs standing player.
+       * **Mirrored from `MONSTER_HITS_PLAYER.spell.hurt`:** same tight half, player attack skip ↔ monster attacker skip,
+       * monster hurt skip ↔ player defender skip when the monster spell hits the player.
        */
       separationHalf: MONSTER_HITS_PLAYER.spell.hurt.separationHalf,
       attackerLeadInSec: MONSTER_HITS_PLAYER.spell.hurt.attackerLeadInSec,
       defenderReactionLeadInSec: MONSTER_HITS_PLAYER.spell.hurt.defenderReactionLeadInSec,
     },
     knockdown: {
-      separationHalf: 0.42,
-      /** Finisher vs downed: small player skip keeps a bit of approach; mostly t=0–early. */
-      attackerLeadInSec: 0.12,
-      defenderReactionLeadInSec: 0.1,
+      separationHalf: MONSTER_HITS_PLAYER.spell.knockdown.separationHalf,
+      attackerLeadInSec: MONSTER_HITS_PLAYER.spell.knockdown.attackerLeadInSec,
+      defenderReactionLeadInSec: MONSTER_HITS_PLAYER.spell.knockdown.defenderReactionLeadInSec,
     },
   },
   light: {
@@ -178,17 +187,34 @@ export function approachPhaseSeparationHalf(rollingApproachBlend: number): numbe
 }
 
 /**
- * Jumping_Punch-style strikes: wide approach (large half-distance) → lower attacker skip into the clip (toward t≈0).
- * Tight strike spacing (near the mirrored `*.hurt.separationHalf`, 0.4) → full table `attackerLeadInSec`.
- * Used for **monster spell → player** and **player skill → monster** (same half + same curve).
+ * Wide approach (large half-distance) → start the attacker clip nearer t=0 (lower skip into jump strike).
+ * Tight face-off half → full table `attackerLeadInSec` / defender reaction skip.
  */
-export function monsterSpellJumpContactLeadMultiplier(rollingApproachBlend: number): number {
+export function contactJumpStrikeLeadMultiplier(
+  rollingApproachBlend: number,
+  tightFaceOffSeparationHalf: number,
+): number {
   const sep = approachPhaseSeparationHalf(rollingApproachBlend);
-  const tight = MONSTER_HITS_PLAYER.spell.hurt.separationHalf;
   const wide = COMBAT_IDLE_SEPARATION_HALF;
-  if (sep <= tight + 1e-4) return 1;
+  if (sep <= tightFaceOffSeparationHalf + 1e-4) return 1;
   if (sep >= wide - 1e-4) return 0;
-  return 1 - (sep - tight) / (wide - tight);
+  return 1 - (sep - tightFaceOffSeparationHalf) / (wide - tightFaceOffSeparationHalf);
+}
+
+/** Monster spell (Jumping_Punch) vs standing player — scales monster attack skip + player hurt sync from approach blend. */
+export function monsterSpellJumpContactLeadMultiplier(rollingApproachBlend: number): number {
+  return contactJumpStrikeLeadMultiplier(
+    rollingApproachBlend,
+    MONSTER_HITS_PLAYER.spell.hurt.separationHalf,
+  );
+}
+
+/** Player skill jump vs standing monster — same geometry as `monsterSpellJumpContactLeadMultiplier` (shared tight half). */
+export function playerSkillJumpContactLeadMultiplier(rollingApproachBlend: number): number {
+  return contactJumpStrikeLeadMultiplier(
+    rollingApproachBlend,
+    PLAYER_HITS_MONSTER.skill.hurt.separationHalf,
+  );
 }
 
 export function coerceStrikeTier(v: Combat3dStrikeTier | undefined): Combat3dStrikeTier {
@@ -241,6 +267,34 @@ export function adjustPlayerHurtLeadForMonsterAttackSync(
   return Math.max(0, base - drift);
 }
 
+/** Base skip into monster `hurt` / `knockdown` after a merged player hit (table `defenderReactionLeadInSec`). */
+export function monsterHurtClipLeadAfterPlayerHit(
+  playerTier: Combat3dStrikeTier | undefined,
+  monsterVisualState: Monster3DSpriteState = "hurt",
+): number {
+  if (!isKnownCombatStrikeTier(playerTier)) return 0;
+  const pose = defenderPoseFromVisual(monsterVisualState);
+  return PLAYER_HITS_MONSTER[playerTier][pose].defenderReactionLeadInSec;
+}
+
+/**
+ * When the player uses a **shorter** attack skip than the table (e.g. skill jump mult on wide approach), contact is later —
+ * pull monster hurt skip back so the flinch lines up (mirror of `adjustPlayerHurtLeadForMonsterAttackSync`).
+ */
+export function adjustMonsterHurtLeadForPlayerAttackSync(
+  playerTier: Combat3dStrikeTier | undefined,
+  monsterVisualState: Monster3DSpriteState,
+  effectivePlayerAttackLeadSec: number,
+): number {
+  const base = monsterHurtClipLeadAfterPlayerHit(playerTier, monsterVisualState);
+  if (!isKnownCombatStrikeTier(playerTier)) return base;
+  const pose = defenderPoseFromVisual(monsterVisualState);
+  const row = PLAYER_HITS_MONSTER[playerTier][pose];
+  const drift = row.attackerLeadInSec - effectivePlayerAttackLeadSec;
+  if (!(drift > 0)) return base;
+  return Math.max(0, base - drift);
+}
+
 /** When the player uses a **longer** per-clip attack skip than the table, impact is later — skip deeper into monster hurt. */
 export function extraMonsterHurtLeadAfterPlayerAttackSync(
   playerTier: Combat3dStrikeTier | undefined,
@@ -278,6 +332,8 @@ export interface Combat3dFaceOffArgs {
   monsterVisualState: Monster3DSpriteState;
   playerAttackVariant?: Combat3dStrikeTier;
   draculaAttackVariant?: Combat3dStrikeTier;
+  /** When `K` (skeleton), matches `combatFaceOffPositions` extra standoff. */
+  monsterType?: MonsterType | null;
 }
 
 /** Same X positions as legacy `combatFaceOffPositions` — driven only by unified matrices + mutual inner half. */
@@ -289,7 +345,9 @@ export function resolveCombat3dFaceOffSeparationHalf(args: Combat3dFaceOffArgs):
     monsterVisualState,
     playerAttackVariant,
     draculaAttackVariant,
+    monsterType,
   } = args;
+  const sk = skeletonFaceOffExtraSeparationHalf(monsterType);
 
   const inPostHitPose =
     playerVisualState === "hurt" ||
@@ -308,7 +366,7 @@ export function resolveCombat3dFaceOffSeparationHalf(args: Combat3dFaceOffArgs):
   if (!useStrikeContactSpacing) {
     const idle = COMBAT_IDLE_SEPARATION_HALF;
     const t = Math.max(0, Math.min(1, rollingApproachBlend));
-    return idle * (1 - t) + COMBAT_STRIKE_PICK_SEPARATION_HALF * t;
+    return idle * (1 - t) + COMBAT_STRIKE_PICK_SEPARATION_HALF * t + sk;
   }
 
   const pAtk = playerVisualState === "attack";
@@ -321,15 +379,15 @@ export function resolveCombat3dFaceOffSeparationHalf(args: Combat3dFaceOffArgs):
 
   if (attackVsKnockdown || mirroredHeavyKnockdown) {
     if (mAtk && !pAtk) {
-      return rowMonsterHitsPlayer(draculaAttackVariant, playerVisualState).separationHalf;
+      return rowMonsterHitsPlayer(draculaAttackVariant, playerVisualState).separationHalf + sk;
     }
     if (pAtk && !mAtk) {
-      return rowPlayerHitsMonster(playerAttackVariant, monsterVisualState).separationHalf;
+      return rowPlayerHitsMonster(playerAttackVariant, monsterVisualState).separationHalf + sk;
     }
     if (mirroredHeavyKnockdown) {
-      return rowPlayerHitsMonster(playerAttackVariant, "knockdown").separationHalf;
+      return rowPlayerHitsMonster(playerAttackVariant, "knockdown").separationHalf + sk;
     }
-    return COMBAT_STRIKE_PICK_SEPARATION_HALF;
+    return COMBAT_STRIKE_PICK_SEPARATION_HALF + sk;
   }
 
   if (pAtk && mAtk) {
@@ -340,11 +398,11 @@ export function resolveCombat3dFaceOffSeparationHalf(args: Combat3dFaceOffArgs):
       MUTUAL_ATTACK_INNER_HALF[mt],
       MUTUAL_ATTACK_HALF_FLOOR,
     );
-    return inner;
+    return inner + sk;
   }
 
   if (mAtk && !pAtk) {
-    return rowMonsterHitsPlayer(draculaAttackVariant, playerVisualState).separationHalf;
+    return rowMonsterHitsPlayer(draculaAttackVariant, playerVisualState).separationHalf + sk;
   }
   if (pAtk && !mAtk) {
     let h = rowPlayerHitsMonster(playerAttackVariant, monsterVisualState).separationHalf;
@@ -352,10 +410,10 @@ export function resolveCombat3dFaceOffSeparationHalf(args: Combat3dFaceOffArgs):
     if (playerAttackVariant === "skill" && monsterVisualState === "recover") {
       h = PLAYER_HITS_MONSTER.spell.hurt.separationHalf;
     }
-    return h;
+    return h + sk;
   }
 
-  return COMBAT_STRIKE_PICK_SEPARATION_HALF;
+  return COMBAT_STRIKE_PICK_SEPARATION_HALF + sk;
 }
 
 export interface Combat3dResolvedLeads {
@@ -423,7 +481,7 @@ export function resolveCombat3dClipLeads(args: {
     pAtk &&
     !mAtk &&
     monsterDefenderPose === "hurt"
-      ? monsterSpellJumpContactLeadMultiplier(rollingApproachBlend)
+      ? playerSkillJumpContactLeadMultiplier(rollingApproachBlend)
       : 1;
 
   let meshyMonsterAttackLeadInSec = 0;
@@ -444,20 +502,17 @@ export function resolveCombat3dClipLeads(args: {
 
   let meshyPlayerAttackLeadInSec = 0;
   if (pAtk && !mAtk && isKnownCombatStrikeTier(playerAttackVariant)) {
-    const rowAtk = PLAYER_HITS_MONSTER[playerAttackVariant][monsterDefenderPose];
-    meshyPlayerAttackLeadInSec = rowAtk.attackerLeadInSec * playerSkillJumpLeadMult;
+    meshyPlayerAttackLeadInSec =
+      PLAYER_HITS_MONSTER[playerAttackVariant][monsterDefenderPose].attackerLeadInSec *
+      playerSkillJumpLeadMult;
   }
 
-  /**
-   * Monster `hurt` when player connects: same wall-clock sync as `adjustPlayerHurtLeadForMonsterAttackSync` but mirrored —
-   * `max(0, defenderSkip + effectiveAttackerSkip - tableAttackerSkip)` so approach-scaled player jump matches monster flinch.
-   */
   let meshyMonsterHurtLeadInSec = 0;
   if (pAtk && mHurt && isKnownCombatStrikeTier(playerAttackVariant)) {
-    const row = PLAYER_HITS_MONSTER[playerAttackVariant][monsterDefenderPose];
-    meshyMonsterHurtLeadInSec = Math.max(
-      0,
-      row.defenderReactionLeadInSec + meshyPlayerAttackLeadInSec - row.attackerLeadInSec,
+    meshyMonsterHurtLeadInSec = adjustMonsterHurtLeadForPlayerAttackSync(
+      playerAttackVariant,
+      monsterVisualState,
+      meshyPlayerAttackLeadInSec,
     );
   } else if (pAtk && !mAtk && mKd && isKnownCombatStrikeTier(playerAttackVariant)) {
     meshyMonsterHurtLeadInSec = PLAYER_HITS_MONSTER[playerAttackVariant].knockdown.defenderReactionLeadInSec;

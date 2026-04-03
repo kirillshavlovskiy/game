@@ -17,6 +17,12 @@ import {
   type Monster3DSpriteState,
 } from "@/lib/monsterModels3d";
 import { DEFAULT_LAB_PLAYER_WEAPON_GLB, PLAYER_ARMOUR_GLB_OPTIONS } from "@/lib/playerArmourGlbs";
+import {
+  WEAPON_ATTACH_BLADE_TWIST_RAD,
+  WEAPON_ATTACH_EXTRA_EULER_RAD,
+  WEAPON_ATTACH_HAND,
+  type WeaponAttachHand,
+} from "@/lib/weaponAttachConfig";
 
 async function glbReachable(url: string): Promise<boolean> {
   try {
@@ -101,6 +107,35 @@ type LabSeqPhase = "off" | "idle" | "hunt";
 type DraculaMonsterAttackAimSource = "preset" | StrikeTarget;
 type PlayerHurtClipSource = "preset" | StrikeTarget;
 
+type LabBladeTwistPreset = "0" | "90" | "180" | "270";
+
+function labBladeTwistRadFromPreset(p: LabBladeTwistPreset): number {
+  switch (p) {
+    case "0":
+      return 0;
+    case "90":
+      return Math.PI / 2;
+    case "180":
+      return Math.PI;
+    case "270":
+      return (3 * Math.PI) / 2;
+  }
+}
+
+function labBladeTwistPresetFromConfigRad(rad: number): LabBladeTwistPreset {
+  const presets: LabBladeTwistPreset[] = ["0", "90", "180", "270"];
+  let best: LabBladeTwistPreset = "180";
+  let bestD = Infinity;
+  for (const p of presets) {
+    const d = Math.abs(rad - labBladeTwistRadFromPreset(p));
+    if (d < bestD) {
+      bestD = d;
+      best = p;
+    }
+  }
+  return best;
+}
+
 const selectStyle: CSSProperties = {
   padding: "6px 8px",
   borderRadius: 8,
@@ -162,6 +197,16 @@ export function Monster3dContactPairLab() {
   /** Same `armourGltfPath` as combat / maze — `BoneAttachedWeapon` on player rig. */
   const [labPlayerWeaponGlb, setLabPlayerWeaponGlb] = useState<string | null>(DEFAULT_LAB_PLAYER_WEAPON_GLB);
   const [weaponFileOk, setWeaponFileOk] = useState<boolean | null>(null);
+  const [labWeaponHand, setLabWeaponHand] = useState<WeaponAttachHand>(WEAPON_ATTACH_HAND);
+  const [labBladeTwistPreset, setLabBladeTwistPreset] = useState<LabBladeTwistPreset>(() =>
+    labBladeTwistPresetFromConfigRad(WEAPON_ATTACH_BLADE_TWIST_RAD),
+  );
+  const labBladeTwistRad = labBladeTwistRadFromPreset(labBladeTwistPreset);
+  const [labExtraEulerDeg, setLabExtraEulerDeg] = useState<[number, number, number]>([
+    (WEAPON_ATTACH_EXTRA_EULER_RAD[0] * 180) / Math.PI,
+    (WEAPON_ATTACH_EXTRA_EULER_RAD[1] * 180) / Math.PI,
+    (WEAPON_ATTACH_EXTRA_EULER_RAD[2] * 180) / Math.PI,
+  ]);
 
   useEffect(() => {
     if (!labPlayerWeaponGlb) {
@@ -208,6 +253,7 @@ export function Monster3dContactPairLab() {
         monsterVisualState: monsterState,
         playerAttackVariant: effectivePlayerVariant,
         draculaAttackVariant: effectiveMonsterVariant,
+        monsterType,
       }),
     [
       strikePick,
@@ -217,6 +263,7 @@ export function Monster3dContactPairLab() {
       monsterState,
       effectivePlayerVariant,
       effectiveMonsterVariant,
+      monsterType,
     ]
   );
 
@@ -266,7 +313,6 @@ export function Monster3dContactPairLab() {
   const faceOffAnimationSyncKey = useMemo(
     () =>
       [
-        monsterPath,
         monsterType,
         playerState,
         monsterState,
@@ -281,9 +327,11 @@ export function Monster3dContactPairLab() {
         draculaMonsterAttackAim,
         playerHurtClipSource,
         labPlayerWeaponGlb ?? "",
+        labWeaponHand,
+        labBladeTwistPreset,
+        labExtraEulerDeg.join(","),
       ].join("|"),
     [
-      monsterPath,
       monsterType,
       playerState,
       monsterState,
@@ -300,7 +348,19 @@ export function Monster3dContactPairLab() {
       draculaMonsterAttackAim,
       playerHurtClipSource,
       labPlayerWeaponGlb,
+      labWeaponHand,
+      labBladeTwistPreset,
+      labExtraEulerDeg,
     ]
+  );
+
+  const labArmourExtraEulerRad = useMemo(
+    (): readonly [number, number, number] => [
+      (labExtraEulerDeg[0] * Math.PI) / 180,
+      (labExtraEulerDeg[1] * Math.PI) / 180,
+      (labExtraEulerDeg[2] * Math.PI) / 180,
+    ],
+    [labExtraEulerDeg],
   );
 
   const labDraculaHurtStrikeZone: StrikeTarget | undefined =
@@ -461,8 +521,67 @@ export function Monster3dContactPairLab() {
         </label>
         <span style={{ fontSize: "0.72rem", color: "#8a9aac", lineHeight: 1.4 }}>
           Same GLBs as in-game armour — wired to <code style={{ color: "#c4e8ff" }}>CombatScene3D</code>{" "}
-          <code style={{ color: "#c4e8ff" }}>armourGltfPath</code> (hand attach). Default = first weapon in the list.
+          <code style={{ color: "#c4e8ff" }}>armourGltfPath</code>. Defaults:{" "}
+          <code style={{ color: "#c4e8ff" }}>lib/weaponAttachConfig.ts</code>.
         </span>
+      </div>
+      <div
+        style={{
+          width: "100%",
+          maxWidth: viewportW,
+          margin: "0 auto 12px",
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 12,
+          fontSize: "0.78rem",
+          color: "#c8d8e8",
+        }}
+      >
+        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ color: "#9ee8ff" }}>Hand</span>
+          <select
+            value={labWeaponHand}
+            onChange={(e) => setLabWeaponHand(e.target.value as WeaponAttachHand)}
+            style={selectStyle}
+          >
+            <option value="right">Right</option>
+            <option value="left">Left</option>
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ color: "#9ee8ff" }}>Blade twist</span>
+          <select
+            value={labBladeTwistPreset}
+            onChange={(e) => setLabBladeTwistPreset(e.target.value as LabBladeTwistPreset)}
+            style={selectStyle}
+          >
+            <option value="0">0°</option>
+            <option value="90">90°</option>
+            <option value="180">180° (π)</option>
+            <option value="270">270°</option>
+          </select>
+        </label>
+        <span style={{ color: "#9ee8ff" }}>Extra Euler (deg)</span>
+        {(["X", "Y", "Z"] as const).map((axis, i) => (
+          <label key={axis} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            {axis}
+            <input
+              type="number"
+              step={5}
+              value={labExtraEulerDeg[i]}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setLabExtraEulerDeg((prev) => {
+                  const next: [number, number, number] = [...prev];
+                  next[i] = Number.isFinite(v) ? v : 0;
+                  return next;
+                });
+              }}
+              style={{ ...selectStyle, width: 64 }}
+            />
+          </label>
+        ))}
       </div>
       {labPlayerWeaponGlb && weaponFileOk === false ? (
         <div
@@ -492,6 +611,9 @@ export function Monster3dContactPairLab() {
           monsterGltfPath={monsterPath}
           playerGltfPath={playerPath}
           armourGltfPath={labPlayerWeaponGlb}
+          armourAttachHand={labWeaponHand}
+          armourBladeTwistRad={labBladeTwistRad}
+          armourExtraEulerRad={labArmourExtraEulerRad}
           monsterVisualState={monsterState}
           playerVisualState={playerState}
           monsterType={monsterType}
