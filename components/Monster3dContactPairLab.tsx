@@ -962,6 +962,7 @@ bladeTwistRad: ${twist},
           orbitMaxDistance={11}
           rollingApproachBlend={approach}
           faceOffAnimationSyncKey={faceOffAnimationSyncKey}
+          combatSceneSessionKey={`lab-${replayNonce}`}
           fallback={
             <div
               style={{

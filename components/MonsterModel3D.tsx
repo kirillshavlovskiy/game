@@ -15,6 +15,7 @@ import React, {
 import { Canvas, invalidate, useThree, useFrame } from "@react-three/fiber";
 import { Center, OrbitControls, useAnimations, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { MonsterType } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
@@ -842,6 +843,22 @@ function PositionedGltfSubject(
     if (hitRootRef) hitRootRef.current = node;
   };
   const { scene, animations } = useGLTF(rest.url);
+  /**
+   * `useGLTF` returns a shared cached scene; a previous combat canvas can leave bones in strike/hurt poses.
+   * `Center` then frames that stale pose — often reads as the player sunk under the viewport while the monster looks fine.
+   * Clone (skinned-safe) and bind-pose skeletons before layout, same idea as `MazeIsoView` markers.
+   */
+  const sceneView = useMemo(() => {
+    const root = SkeletonUtils.clone(scene);
+    root.traverse((obj) => {
+      const sm = obj as THREE.SkinnedMesh;
+      if (sm.isSkinnedMesh && sm.skeleton) {
+        sm.skeleton.pose();
+      }
+    });
+    root.updateMatrixWorld(true);
+    return root;
+  }, [scene]);
   const innerRef = useRef<THREE.Group>(null);
   const { actions, names, mixer } = useAnimations(animations, innerRef);
   const onFinishedRef = useRef(rest.onOneShotAnimationFinished);
@@ -893,7 +910,7 @@ function PositionedGltfSubject(
     rest.visualState === "attack" &&
     prevPlayerAttackTimingKeyRef.current !== playerAttackTimingKey;
 
-  useCombatRootMotionLock(scene, rest.visualState, !!rest.draculaLoopAngrySkill01);
+  useCombatRootMotionLock(sceneView, rest.visualState, !!rest.draculaLoopAngrySkill01);
 
   useEffect(() => {
     if (!rest.isPlayerModel || rest.visualState !== "attack") {
@@ -1264,12 +1281,12 @@ function PositionedGltfSubject(
     <group ref={setGroupRef} position={[positionX, 0, 0]}>
       <Center>
         <group ref={innerRef} scale={scale} rotation={[0, yRotation, 0]}>
-          <primitive object={scene} />
+          <primitive object={sceneView} />
           {rest.isPlayerModel && weaponUrl ? (
             <WeaponLoadErrorBoundary key={weaponUrl}>
               <Suspense fallback={null}>
                 <BoneAttachedWeapon
-                  parentScene={scene}
+                  parentScene={sceneView}
                   url={weaponUrl}
                   attachHand={effectiveWeaponAttachHand}
                   bladeTwistRad={weaponBladeTwistRad}
@@ -1283,7 +1300,7 @@ function PositionedGltfSubject(
             <WeaponLoadErrorBoundary key={offhandWeaponUrl}>
               <Suspense fallback={null}>
                 <BoneAttachedWeapon
-                  parentScene={scene}
+                  parentScene={sceneView}
                   url={offhandWeaponUrl}
                   attachHand={effectiveOffhandAttachHand}
                   bladeTwistRad={offhandBladeTwistRad}
@@ -1914,10 +1931,15 @@ export interface CombatScene3DProps {
   /** While dice roll: 0–1 lerp from idle spacing toward close range (fighters advance). */
   rollingApproachBlend?: number;
   /**
-   * When set (face-off lab only), both rigs restart their clips from the same key change — paired sync.
-   * Do not pass from `LabyrinthGame` (would restart every unrelated render if mis-keyed).
+   * When set, both rigs restart their clips from the same key change — paired sync (combat modal + contact lab).
+   * Key must not include every-frame lerps (e.g. approach blend).
    */
   faceOffAnimationSyncKey?: string;
+  /**
+   * Unique per combat open (e.g. `combat3dInstanceKey`): bumps Canvas / orbit / Meshy framing keys when GLB paths match
+   * a previous fight so camera state cannot appear inherited from an old session.
+   */
+  combatSceneSessionKey?: string;
   /** Override OrbitControls min dolly distance (world units); omit for defaults from `compactCombatViewport`. */
   orbitMinDistance?: number;
   /** Override OrbitControls max dolly distance. */
@@ -2173,6 +2195,7 @@ export function CombatScene3D({
   onStrikeTargetPick,
   rollingApproachBlend = 0,
   faceOffAnimationSyncKey,
+  combatSceneSessionKey,
   orbitMinDistance,
   orbitMaxDistance,
 }: CombatScene3DProps) {
@@ -2294,8 +2317,8 @@ export function CombatScene3D({
     };
   }, [armourOffhandGltfPath]);
 
-  /** Include roster so the Canvas remounts when the monster or either GLB changes — fresh OrbitControls + camera (avoids stale dolly/rotate hiding one fighter after swaps; face-off lab had no outer `key` like the combat modal). */
-  const sceneAnchorKey = `${monsterType ?? "?"}|${monsterGltfPath}|${playerGltfPath}|${armourGltfPath ?? ""}|${armourOffhandGltfPath ?? ""}`;
+  /** Roster + optional session so Canvas / orbit reset when a new fight reuses the same GLB paths (cached rig pose + dolly). */
+  const sceneAnchorKey = `${monsterType ?? "?"}|${monsterGltfPath}|${playerGltfPath}|${armourGltfPath ?? ""}|${armourOffhandGltfPath ?? ""}|${combatSceneSessionKey ?? ""}`;
   const canvasKey = `meshy-combat-${width}--${sceneAnchorKey}--wg${webglRestoreGeneration}`;
   const initialCombatCamera = useMemo(
     (): readonly [number, number, number] => [0, cameraY, cameraZ],

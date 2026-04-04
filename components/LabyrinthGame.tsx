@@ -11183,6 +11183,7 @@ export default function LabyrinthGame() {
                           onOneShotAnimationFinished={combat3dOneShotFinished}
                           rollingApproachBlend={combat3dApproachBlend}
                           faceOffAnimationSyncKey={combat3dFaceOffSyncKey}
+                          combatSceneSessionKey={combat3dInstanceKey}
                           orbitMinDistance={0.48}
                           orbitMaxDistance={11}
                           width={COMBAT_MODAL_WIDTH_LANDSCAPE_PX}
@@ -12018,6 +12019,7 @@ export default function LabyrinthGame() {
                             onOneShotAnimationFinished={combat3dOneShotFinished}
                             rollingApproachBlend={combat3dApproachBlend}
                             faceOffAnimationSyncKey={combat3dFaceOffSyncKey}
+                            combatSceneSessionKey={combat3dInstanceKey}
                             orbitMinDistance={0.48}
                             orbitMaxDistance={11}
                             width={COMBAT_MODAL_WIDTH}
