@@ -338,7 +338,7 @@ button {
   }
 }
 
-/* Spider web - orb web with radial threads and concentric capture spiral */
+/* Spider web — 2D grid / UI (iso maze uses GLB, not this) */
 .spider-web {
   pointer-events: none;
   overflow: visible;

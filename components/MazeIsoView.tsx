@@ -24,6 +24,7 @@ import {
   type MonsterType,
   type StoredArtifactKind,
 } from "@/lib/labyrinth";
+import { PLAYER_ARMOUR_GLB_PATHS } from "@/lib/playerArmourGlbs";
 import { ARTIFACT_KIND_VISUAL_GLB, COLLECTIBLE_ARTIFACT_GLB_URLS } from "@/lib/storedArtifactGlbs";
 import { MAZE_SPIDER_WEB_MESH_GLB, MAZE_WORLD_FEATURE_GLB_URLS } from "@/lib/mazeIsoWorldPickups";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
@@ -43,8 +44,9 @@ import {
   mapRotationLog,
   mapRotationLogSnapshot,
 } from "@/lib/mapRotationDebug";
-import { WEAPON_ATTACH_HAND } from "@/lib/weaponAttachConfig";
+import { resolveWeaponAttachHand } from "@/lib/weaponAttachConfig";
 import { BoneAttachedWeapon, WeaponLoadErrorBoundary } from "@/components/MonsterModel3D";
+import { WebGlContextLossGuard } from "@/components/WebGlContextLossGuard";
 
 type MiniMonster = { x: number; y: number; type?: string; draculaState?: DraculaState };
 
@@ -95,7 +97,7 @@ type Props = {
   focusVersion?: number;
   miniMonsters?: MiniMonster[];
   fogIntensityMap?: Map<string, number>;
-  /** Path cells with spider webs (slow tiles) — textured wall webs in iso. */
+  /** Path cells with gameplay spider webs — each gets `spider-web-mesh.glb` in iso (`lab.webPositions`). */
   spiderWebCells?: ReadonlyArray<readonly [number, number]>;
   /** Mobile: WebGL fills the parent (e.g. fixed viewport); chrome stacks above in the shell. */
   fillViewport?: boolean;
@@ -135,8 +137,10 @@ type Props = {
   combatRunDisabled?: boolean;
   /** Dynamic player GLB path based on selected avatar. Falls back to wasteland-drifter. */
   playerGlbPath?: string;
-  /** Optional weapon/armour GLB — same hand attach as combat `CombatScene3D` (`BoneAttachedWeapon`). */
+  /** Main-hand weapon GLB — same attach as combat `CombatScene3D`. */
   playerWeaponGltfPath?: string | null;
+  /** Off-hand shield GLB — combines with weapon (left hand). */
+  playerOffhandArmourGltfPath?: string | null;
   /** Rotating 3D pickups for artifact cells (grid indices; hidden/fog excluded by parent). */
   artifactPickups?: Array<{ x: number; y: number; kind: StoredArtifactKind }>;
   /** Rotating 3D props for catapult / bomb / trap cells (URLs from `mazeIsoWorldPickups`). */
@@ -298,27 +302,6 @@ function CanvasContextBridge({
   return null;
 }
 
-/** Default browser behavior on context loss can leave the maze canvas blank; after restore, force a R3F frame. */
-function WebGlContextLossGuard() {
-  const { gl, invalidate } = useThree();
-  useEffect(() => {
-    const canvas = gl.domElement;
-    const onLost = (e: Event) => {
-      e.preventDefault();
-    };
-    const onRestored = () => {
-      invalidate();
-    };
-    canvas.addEventListener("webglcontextlost", onLost);
-    canvas.addEventListener("webglcontextrestored", onRestored);
-    return () => {
-      canvas.removeEventListener("webglcontextlost", onLost);
-      canvas.removeEventListener("webglcontextrestored", onRestored);
-    };
-  }, [gl, invalidate]);
-  return null;
-}
-
 const SLING_ARC_VERTS = SLING_ARC_SEG_STEPS + 1;
 
 const SLING_ARC_VERTEX_SHADER = /* glsl */ `
@@ -469,8 +452,10 @@ function FloorTiles({
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const floorTex = useTexture(MAZE_FLOOR_TEXTURE);
-  floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
-  floorTex.repeat.set(0.8, 0.8);
+  useEffect(() => {
+    floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
+    floorTex.repeat.set(0.8, 0.8);
+  }, [floorTex]);
 
   const count = mapWidth * mapHeight;
   const cellMap = useRef<Array<[number, number]>>([]);
@@ -492,6 +477,8 @@ function FloorTiles({
       }
     }
     mesh.instanceMatrix.needsUpdate = true;
+    // Instances start as identity matrices; frustum culling would otherwise keep a tiny sphere at origin.
+    mesh.computeBoundingSphere();
     cellMap.current = map;
   }, [grid, mapWidth, mapHeight]);
 
@@ -529,8 +516,10 @@ function WallBlocks({
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const wallSideTex = useTexture(MAZE_ISO_WALL_SIDE_TEXTURE);
-  wallSideTex.wrapS = wallSideTex.wrapT = THREE.RepeatWrapping;
-  wallSideTex.repeat.set(0.5, 0.5);
+  useEffect(() => {
+    wallSideTex.wrapS = wallSideTex.wrapT = THREE.RepeatWrapping;
+    wallSideTex.repeat.set(0.5, 0.5);
+  }, [wallSideTex]);
 
   const wallCells = useMemo(() => {
     const cells: Array<[number, number]> = [];
@@ -559,6 +548,7 @@ function WallBlocks({
       mesh.setMatrixAt(i, dummy.matrix);
     }
     mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
   }, [wallCells]);
 
   return (
@@ -584,6 +574,7 @@ function PlayerAvatar3D({
   jumpPulseVersion = 0,
   glbPath,
   weaponGltfPath,
+  offhandArmourGltfPath,
   combatPlayback,
 }: {
   visualState: "idle" | "hunt" | "attack";
@@ -595,6 +586,8 @@ function PlayerAvatar3D({
   glbPath?: string;
   /** When set, uses the same bone attach as combat 3D (`BoneAttachedWeapon`). */
   weaponGltfPath?: string | null;
+  /** Shield / off-hand — second `BoneAttachedWeapon` (left hand). */
+  offhandArmourGltfPath?: string | null;
   /** One-shot combat clip (strike / counter / shield) — overrides locomotion visualState. */
   combatPlayback?: {
     moment: IsoCombatPlayerMoment;
@@ -702,7 +695,22 @@ function PlayerAvatar3D({
       {weaponGltfPath ? (
         <WeaponLoadErrorBoundary key={weaponGltfPath}>
           <Suspense fallback={null}>
-            <BoneAttachedWeapon parentScene={clonedScene} url={weaponGltfPath} attachHand={WEAPON_ATTACH_HAND} />
+            <BoneAttachedWeapon
+              parentScene={clonedScene}
+              url={weaponGltfPath}
+              attachHand={resolveWeaponAttachHand(weaponGltfPath)}
+            />
+          </Suspense>
+        </WeaponLoadErrorBoundary>
+      ) : null}
+      {offhandArmourGltfPath ? (
+        <WeaponLoadErrorBoundary key={offhandArmourGltfPath}>
+          <Suspense fallback={null}>
+            <BoneAttachedWeapon
+              parentScene={clonedScene}
+              url={offhandArmourGltfPath}
+              attachHand={resolveWeaponAttachHand(offhandArmourGltfPath)}
+            />
           </Suspense>
         </WeaponLoadErrorBoundary>
       ) : null}
@@ -739,6 +747,7 @@ function PlayerMarker({
   combatPulse = 0,
   playerGlbPath,
   playerWeaponGltfPath,
+  playerOffhandArmourGltfPath,
   isoCombatPlayerCue,
   playerJumpPulseVersion = 0,
 }: {
@@ -749,6 +758,7 @@ function PlayerMarker({
   combatPulse?: number;
   playerGlbPath?: string;
   playerWeaponGltfPath?: string | null;
+  playerOffhandArmourGltfPath?: string | null;
   isoCombatPlayerCue?: {
     moment: IsoCombatPlayerMoment;
     variant: "spell" | "skill" | "light";
@@ -885,10 +895,10 @@ function PlayerMarker({
       {/* Follow light bound to player marker so nearby floor/walls stay readable while moving. */}
       <pointLight
         position={[0, 1.15, 0]}
-        color="#a8ffd6"
-        intensity={3.1}
-        distance={CS * 5.2}
-        decay={1.75}
+        color="#7ad4b8"
+        intensity={1.45}
+        distance={CS * 4.1}
+        decay={2}
       />
       <group ref={modelAnchorRef}>
         <Suspense
@@ -906,13 +916,14 @@ function PlayerMarker({
           )}
         >
           <PlayerAvatar3D
-            key={`${playerGlbPath ?? PLAYER_3D_GLB}|${playerWeaponGltfPath ?? ""}`}
+            key={`${playerGlbPath ?? PLAYER_3D_GLB}|${playerWeaponGltfPath ?? ""}|${playerOffhandArmourGltfPath ?? ""}`}
             visualState={visualState}
             actionVersion={actionVersion}
             locomotionAxis={locomotionAxis}
             jumpPulseVersion={playerJumpPulseVersion}
             glbPath={playerGlbPath}
             weaponGltfPath={playerWeaponGltfPath}
+            offhandArmourGltfPath={playerOffhandArmourGltfPath}
             combatPlayback={combatPlayback}
           />
         </Suspense>
@@ -935,7 +946,53 @@ type TorchPlacement = {
   seed: number;
 };
 
-function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }) {
+/** Cup-local flame anchor (shared by dormant + lit torch). */
+const TORCH_CUP_Y = 0.23;
+const TORCH_CUP_Z = 0.37;
+const TORCH_CUP_HEIGHT = 0.16;
+const TORCH_CUP_TOP_Y = TORCH_CUP_Y + TORCH_CUP_HEIGHT * 0.5;
+const TORCH_FLAME_BASE_Y = TORCH_CUP_TOP_Y + 0.012;
+const TORCH_FLAME_Z = TORCH_CUP_Z + 0.005;
+
+function WallTorchBracket() {
+  return (
+    <>
+      <mesh position={[0, 0.04, -0.04]} castShadow receiveShadow>
+        <boxGeometry args={[0.2, 0.44, 0.06]} />
+        <meshStandardMaterial color="#2b2520" roughness={0.9} metalness={0.08} />
+      </mesh>
+      <mesh position={[0, 0.08, 0.14]} castShadow receiveShadow>
+        <boxGeometry args={[0.06, 0.06, 0.32]} />
+        <meshStandardMaterial color="#3b322a" roughness={0.85} metalness={0.16} />
+      </mesh>
+      <mesh position={[0, TORCH_CUP_Y, TORCH_CUP_Z]} castShadow receiveShadow>
+        <cylinderGeometry args={[0.08, 0.1, TORCH_CUP_HEIGHT, 10]} />
+        <meshStandardMaterial color="#2a231d" roughness={0.82} metalness={0.2} />
+      </mesh>
+    </>
+  );
+}
+
+/** Cheap static flame when the player is far — avoids a `useFrame` per torch. */
+function WallTorchDormantFlame() {
+  const y0 = TORCH_FLAME_BASE_Y;
+  const z = TORCH_FLAME_Z;
+  return (
+    <>
+      <mesh position={[0, y0 + 0.11, z]}>
+        <coneGeometry args={[0.085, 0.22, 8]} />
+        <meshBasicMaterial color="#5c3820" transparent opacity={0.42} />
+      </mesh>
+      <mesh position={[0, y0 + 0.085, z]}>
+        <coneGeometry args={[0.05, 0.16, 8]} />
+        <meshBasicMaterial color="#6a4a28" transparent opacity={0.38} />
+      </mesh>
+    </>
+  );
+}
+
+/** Flicker + point lights only for torches near the player. */
+function WallTorchIgnited({ torch }: { torch: TorchPlacement }) {
   const flameOuterRef = useRef<THREE.Mesh>(null);
   const flameInnerRef = useRef<THREE.Mesh>(null);
   const flameWispRef = useRef<THREE.Mesh>(null);
@@ -943,17 +1000,10 @@ function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }
   const emberRef = useRef<THREE.Mesh>(null);
   const flameLightRef = useRef<THREE.PointLight>(null);
   const flameFillLightRef = useRef<THREE.PointLight>(null);
-  const yaw = Math.atan2(torch.dirX, torch.dirZ);
-  // Keep all flame parts in cup-local coordinates so fire stays attached.
-  const CUP_Y = 0.23;
-  const CUP_Z = 0.37;
-  const CUP_HEIGHT = 0.16;
-  const CUP_TOP_Y = CUP_Y + CUP_HEIGHT * 0.5;
-  const FLAME_BASE_Y = CUP_TOP_Y + 0.012;
-  const FLAME_Z = CUP_Z + 0.005;
+  const FLAME_BASE_Y = TORCH_FLAME_BASE_Y;
+  const FLAME_Z = TORCH_FLAME_Z;
 
   useFrame(({ clock }) => {
-    if (!active) return;
     const t = clock.getElapsedTime() * 7.5 + torch.seed * 3.1;
     const pulse = 0.92 + Math.sin(t) * 0.12 + Math.sin(t * 1.93) * 0.05;
     const flicker = 0.84 + Math.sin(t * 1.37) * 0.13 + Math.sin(t * 3.9) * 0.08;
@@ -987,14 +1037,14 @@ function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }
       emberRef.current.position.y = FLAME_BASE_Y + 0.015;
     }
     if (flameLightRef.current) {
-      flameLightRef.current.intensity = 5.4 + flicker * 2.7;
-      flameLightRef.current.distance = CS * (5.6 + flicker * 0.65);
+      flameLightRef.current.intensity = 3.35 + flicker * 1.65;
+      flameLightRef.current.distance = CS * (4.25 + flicker * 0.5);
       flameLightRef.current.position.x = swayX * 0.8;
       flameLightRef.current.position.y = FLAME_BASE_Y + 0.12;
       flameLightRef.current.position.z = FLAME_Z + swayZ * 0.8;
     }
     if (flameFillLightRef.current) {
-      flameFillLightRef.current.intensity = 1.6 + flicker * 0.95;
+      flameFillLightRef.current.intensity = 0.95 + flicker * 0.55;
       flameFillLightRef.current.position.x = swayX * 0.55;
       flameFillLightRef.current.position.y = FLAME_BASE_Y + 0.05;
       flameFillLightRef.current.position.z = FLAME_Z - 0.01 + swayZ * 0.55;
@@ -1002,43 +1052,23 @@ function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }
   });
 
   return (
-    <group position={[torch.x, torch.y, torch.z]} rotation={[0, yaw, 0]}>
-      {active && (
-        <>
-          <pointLight
-            ref={flameLightRef}
-            position={[0, FLAME_BASE_Y + 0.12, FLAME_Z]}
-            color="#ffb45a"
-            intensity={6.6}
-            distance={CS * 6}
-            decay={1.7}
-          />
-          <pointLight
-            ref={flameFillLightRef}
-            position={[0, FLAME_BASE_Y + 0.05, FLAME_Z - 0.01]}
-            color="#ff6a2f"
-            intensity={1.9}
-            distance={CS * 3.1}
-            decay={2.1}
-          />
-        </>
-      )}
-      {/* Wall plate */}
-      <mesh position={[0, 0.04, -0.04]} castShadow receiveShadow>
-        <boxGeometry args={[0.2, 0.44, 0.06]} />
-        <meshStandardMaterial color="#2b2520" roughness={0.9} metalness={0.08} />
-      </mesh>
-      {/* Arm */}
-      <mesh position={[0, 0.08, 0.14]} castShadow receiveShadow>
-        <boxGeometry args={[0.06, 0.06, 0.32]} />
-        <meshStandardMaterial color="#3b322a" roughness={0.85} metalness={0.16} />
-      </mesh>
-      {/* Torch cup */}
-      <mesh position={[0, CUP_Y, CUP_Z]} castShadow receiveShadow>
-        <cylinderGeometry args={[0.08, 0.1, CUP_HEIGHT, 10]} />
-        <meshStandardMaterial color="#2a231d" roughness={0.82} metalness={0.2} />
-      </mesh>
-      {/* Flame body */}
+    <>
+      <pointLight
+        ref={flameLightRef}
+        position={[0, FLAME_BASE_Y + 0.12, FLAME_Z]}
+        color="#e89440"
+        intensity={4.1}
+        distance={CS * 4.9}
+        decay={1.85}
+      />
+      <pointLight
+        ref={flameFillLightRef}
+        position={[0, FLAME_BASE_Y + 0.05, FLAME_Z - 0.01]}
+        color="#c84a1a"
+        intensity={1.15}
+        distance={CS * 2.45}
+        decay={2.25}
+      />
       <mesh ref={flameOuterRef} position={[0, FLAME_BASE_Y + 0.11, FLAME_Z]}>
         <coneGeometry args={[0.085, 0.22, 12]} />
         <meshStandardMaterial
@@ -1052,7 +1082,6 @@ function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }
           opacity={0.9}
         />
       </mesh>
-      {/* Flame core */}
       <mesh ref={flameInnerRef} position={[0, FLAME_BASE_Y + 0.085, FLAME_Z]}>
         <coneGeometry args={[0.05, 0.16, 12]} />
         <meshStandardMaterial
@@ -1066,7 +1095,6 @@ function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }
           opacity={0.95}
         />
       </mesh>
-      {/* Secondary wisp for a less static, more natural flame silhouette */}
       <mesh ref={flameWispRef} position={[0, FLAME_BASE_Y + 0.125, FLAME_Z + 0.01]}>
         <coneGeometry args={[0.04, 0.14, 10]} />
         <meshStandardMaterial
@@ -1080,7 +1108,6 @@ function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }
           opacity={0.85}
         />
       </mesh>
-      {/* Soft emissive halo near the flame base */}
       <mesh ref={flameHaloRef} position={[0, FLAME_BASE_Y + 0.012, FLAME_Z - 0.005]}>
         <sphereGeometry args={[0.055, 10, 10]} />
         <meshStandardMaterial
@@ -1093,11 +1120,20 @@ function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }
           opacity={0.56}
         />
       </mesh>
-      {/* Ember */}
       <mesh ref={emberRef} position={[0, FLAME_BASE_Y + 0.015, FLAME_Z - 0.006]}>
         <sphereGeometry args={[0.022, 8, 8]} />
         <meshStandardMaterial color="#ffce74" emissive="#ffbe56" emissiveIntensity={1.75} />
       </mesh>
+    </>
+  );
+}
+
+function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }) {
+  const yaw = Math.atan2(torch.dirX, torch.dirZ);
+  return (
+    <group position={[torch.x, torch.y, torch.z]} rotation={[0, yaw, 0]}>
+      <WallTorchBracket />
+      {active ? <WallTorchIgnited torch={torch} /> : <WallTorchDormantFlame />}
     </group>
   );
 }
@@ -1237,28 +1273,28 @@ function GothicWallOrnaments({
         if (fog > 0.15) return null;
         return (
           <group key={`orn-${i}`} position={[o.x, o.y, o.z]} rotation={[0, o.yaw, 0]}>
-            <mesh castShadow receiveShadow>
+            <mesh receiveShadow>
               <boxGeometry args={[0.42, 0.62, 0.08]} />
               <meshStandardMaterial color="#3a302b" roughness={0.9} metalness={0.06} />
             </mesh>
             {o.variant === 0 ? (
               <>
-                <mesh position={[0, 0.02, 0.04]} castShadow>
+                <mesh position={[0, 0.02, 0.04]} receiveShadow>
                   <boxGeometry args={[0.07, 0.46, 0.05]} />
                   <meshStandardMaterial color="#181417" roughness={0.7} metalness={0.22} />
                 </mesh>
-                <mesh position={[0, 0.02, 0.04]} castShadow>
+                <mesh position={[0, 0.02, 0.04]} receiveShadow>
                   <boxGeometry args={[0.3, 0.07, 0.05]} />
                   <meshStandardMaterial color="#181417" roughness={0.7} metalness={0.22} />
                 </mesh>
               </>
             ) : (
               <>
-                <mesh position={[0, 0.06, 0.04]} castShadow>
+                <mesh position={[0, 0.06, 0.04]} receiveShadow>
                   <coneGeometry args={[0.12, 0.22, 6]} />
                   <meshStandardMaterial color="#20181b" roughness={0.8} metalness={0.14} />
                 </mesh>
-                <mesh position={[0, -0.18, 0.04]} castShadow>
+                <mesh position={[0, -0.18, 0.04]} receiveShadow>
                   <boxGeometry args={[0.2, 0.12, 0.05]} />
                   <meshStandardMaterial color="#20181b" roughness={0.8} metalness={0.14} />
                 </mesh>
@@ -1271,18 +1307,25 @@ function GothicWallOrnaments({
   );
 }
 
-const MAZE_SPIDER_WEB_DECAL_TEXTURE = "/textures/maze/Effects/spider_web_decal.png";
 const MAZE_CORRIDOR_FOG_TEXTURE = "/textures/maze/Effects/corridor_fog_tile.png";
 
-void useTexture.preload(MAZE_SPIDER_WEB_DECAL_TEXTURE);
 void useTexture.preload(MAZE_CORRIDOR_FOG_TEXTURE);
+void useTexture.preload(MAZE_FLOOR_TEXTURE);
+void useTexture.preload(MAZE_ISO_WALL_SIDE_TEXTURE);
 
-/** Scene linear fog — materials use default `fog: true`. */
+/** Exponential depth fog — distance haze (stronger = thicker air). */
+const ATMOSPHERIC_FOG_COLOR = 0x030408;
+const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0096;
+/** Every path cell gets at least this mist strength; game fog zones blend toward full opacity. */
+const CORRIDOR_BASE_MIST = 0.44;
+/** Per-cell fog wobble so neighbouring tiles read at visibly different densities. */
+const CORRIDOR_FOG_LOCAL_JITTER = 0.26;
+
 function MazeAtmosphericFog() {
   const { scene } = useThree();
   useLayoutEffect(() => {
     const prev = scene.fog;
-    scene.fog = new THREE.Fog(0x06080e, 14, 132);
+    scene.fog = new THREE.FogExp2(ATMOSPHERIC_FOG_COLOR, ATMOSPHERIC_FOG_EXP2_DENSITY);
     return () => {
       scene.fog = prev ?? null;
     };
@@ -1290,7 +1333,82 @@ function MazeAtmosphericFog() {
   return null;
 }
 
-/** Volumetric-style mist sheets in fogged path cells (tile texture). */
+type CorridorFogCell = { cx: number; cy: number; f: number; rot: number };
+
+const CORRIDOR_FOG_BUCKETS = 12;
+
+function CorridorFogBucketLayer({
+  fogTex,
+  layer,
+  bucket,
+  cells,
+}: {
+  fogTex: THREE.Texture;
+  layer: 0 | 1;
+  bucket: number;
+  cells: CorridorFogCell[];
+}) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+
+  const material = useMemo(() => {
+    const fMid = (bucket + 0.5) / CORRIDOR_FOG_BUCKETS;
+    const opBase = Math.min(0.96, 0.22 + fMid * 0.76);
+    const opacity = layer === 0 ? opBase * 0.82 : opBase * 0.68;
+    return new THREE.MeshStandardMaterial({
+      map: fogTex,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      roughness: 1,
+      metalness: 0,
+      color: layer === 0 ? "#7a8498" : "#6a7388",
+      emissive: layer === 0 ? "#151820" : "#12151c",
+      emissiveIntensity: layer === 0 ? 0.022 : 0.015,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -1,
+    });
+  }, [fogTex, layer, bucket]);
+
+  useEffect(() => () => material.dispose(), [material]);
+
+  useLayoutEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh || cells.length === 0) return;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      const px = c.cx * CS + CS * 0.5;
+      const pz = c.cy * CS + CS * 0.5;
+      const y = layer === 0 ? 0.2 + c.f * 0.38 : 0.82 + c.f * 0.48;
+      const rot = layer === 0 ? c.rot : c.rot + 1.7;
+      const baseS = layer === 0 ? CS * 0.94 : CS * 0.78;
+      const s = baseS * (0.88 + 0.24 * c.f);
+      dummy.position.set(px, y, pz);
+      dummy.rotation.set(-Math.PI / 2, 0, rot);
+      dummy.scale.set(s, s, 1);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [cells, dummy, layer]);
+
+  if (cells.length === 0) return null;
+
+  return (
+    <instancedMesh
+      ref={meshRef}
+      args={[undefined, material, cells.length]}
+      renderOrder={1}
+      frustumCulled
+    >
+      <planeGeometry args={[1, 1]} />
+    </instancedMesh>
+  );
+}
+
+/** Ground-hugging mist on every corridor tile; game fog zones blend toward thicker opacity. */
 function CorridorFogVolumes({
   grid,
   mapWidth,
@@ -1309,159 +1427,51 @@ function CorridorFogVolumes({
   }, [fogTex]);
 
   const cells = useMemo(() => {
-    const out: Array<{ cx: number; cy: number; f: number; rot: number }> = [];
+    const out: CorridorFogCell[] = [];
     for (let y = 0; y < mapHeight; y++) {
       for (let x = 0; x < mapWidth; x++) {
         if (grid[y]?.[x] === WALL) continue;
-        const f = fogIntensityMap?.get(`${x},${y}`) ?? 0;
-        if (f < 0.035) continue;
+        const mapFog = fogIntensityMap?.get(`${x},${y}`) ?? 0;
+        let f = CORRIDOR_BASE_MIST + mapFog * (1 - CORRIDOR_BASE_MIST);
+        f += (cellNoise(x, y, 803) - 0.5) * CORRIDOR_FOG_LOCAL_JITTER;
+        f = Math.min(1, Math.max(0.05, f));
         out.push({ cx: x, cy: y, f, rot: cellNoise(x, y, 701) * Math.PI * 2 });
       }
     }
     return out;
   }, [grid, mapHeight, mapWidth, fogIntensityMap]);
 
-  return (
-    <>
-      {cells.map((c) => {
-        const px = c.cx * CS + CS * 0.5;
-        const pz = c.cy * CS + CS * 0.5;
-        const op = Math.min(0.72, 0.1 + c.f * 0.78);
-        return (
-          <group key={`fog-${c.cx}-${c.cy}`}>
-            <mesh position={[px, 0.22 + c.f * 0.35, pz]} rotation={[-Math.PI / 2, 0, c.rot]} renderOrder={1}>
-              <planeGeometry args={[CS * 0.94, CS * 0.94]} />
-              <meshStandardMaterial
-                map={fogTex}
-                transparent
-                opacity={op * 0.55}
-                depthWrite={false}
-                roughness={1}
-                metalness={0}
-                color="#9aa8c4"
-                emissive="#2a3144"
-                emissiveIntensity={0.04}
-                polygonOffset
-                polygonOffsetFactor={-2}
-                polygonOffsetUnits={-1}
-              />
-            </mesh>
-            <mesh position={[px, 0.85 + c.f * 0.45, pz]} rotation={[-Math.PI / 2, 0, c.rot + 1.7]} renderOrder={1}>
-              <planeGeometry args={[CS * 0.78, CS * 0.78]} />
-              <meshStandardMaterial
-                map={fogTex}
-                transparent
-                opacity={op * 0.42}
-                depthWrite={false}
-                roughness={1}
-                metalness={0}
-                color="#8a96b0"
-                emissive="#252a3a"
-                emissiveIntensity={0.03}
-                polygonOffset
-                polygonOffsetFactor={-2}
-                polygonOffsetUnits={-1}
-              />
-            </mesh>
-          </group>
-        );
-      })}
-    </>
-  );
-}
-
-/** Realistic web decals on maze-web cells + sparse corner cobwebs. */
-function SpiderWebDecor({
-  grid,
-  mapWidth,
-  mapHeight,
-  fogIntensityMap,
-  spiderWebCells = [],
-}: {
-  grid: string[][];
-  mapWidth: number;
-  mapHeight: number;
-  fogIntensityMap?: Map<string, number>;
-  spiderWebCells?: ReadonlyArray<readonly [number, number]>;
-}) {
-  const webTex = useTexture(MAZE_SPIDER_WEB_DECAL_TEXTURE);
-
-  const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
-  const walkable = (cx: number, cy: number) =>
-    cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && !isW(cx, cy);
-
-  const cornerWebs = useMemo(() => {
-    const out: Array<{
-      x: number;
-      y: number;
-      z: number;
-      yaw: number;
-      scale: number;
-      cellX: number;
-      cellY: number;
-    }> = [];
-    for (let y = 1; y < mapHeight - 1; y++) {
-      for (let x = 1; x < mapWidth - 1; x++) {
-        if (!walkable(x, y)) continue;
-        if (cellNoise(x, y, 151) > 0.88) continue;
-        const nearCorner =
-          (isW(x + 1, y) && isW(x, y + 1)) ||
-          (isW(x - 1, y) && isW(x, y + 1)) ||
-          (isW(x + 1, y) && isW(x, y - 1)) ||
-          (isW(x - 1, y) && isW(x, y - 1));
-        if (!nearCorner) continue;
-        const yaw = cellNoise(x, y, 157) * Math.PI * 2;
-        const scale = CS * (0.55 + cellNoise(x, y, 163) * 0.35);
-        out.push({
-          x: x * CS + (cellNoise(x, y, 167) - 0.5) * CS * 0.38,
-          y: WALL_HEIGHT * (0.38 + cellNoise(x, y, 173) * 0.28),
-          z: y * CS + (cellNoise(x, y, 179) - 0.5) * CS * 0.38,
-          yaw,
-          scale,
-          cellX: x,
-          cellY: y,
-        });
-      }
+  const byLayerBucket = useMemo(() => {
+    const layers: CorridorFogCell[][][] = [
+      Array.from({ length: CORRIDOR_FOG_BUCKETS }, () => []),
+      Array.from({ length: CORRIDOR_FOG_BUCKETS }, () => []),
+    ];
+    for (const c of cells) {
+      const b = Math.min(CORRIDOR_FOG_BUCKETS - 1, Math.floor(c.f * CORRIDOR_FOG_BUCKETS));
+      layers[0]![b]!.push(c);
+      layers[1]![b]!.push(c);
     }
-    return out;
-  }, [grid, mapHeight, mapWidth]);
-
-  const webMat = useMemo(
-    () =>
-      new THREE.MeshStandardMaterial({
-        map: webTex,
-        transparent: true,
-        alphaTest: 0.08,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        roughness: 0.94,
-        metalness: 0.02,
-        color: new THREE.Color("#eef2ff"),
-        emissive: new THREE.Color("#c5d0ec"),
-        emissiveIntensity: 0.07,
-        opacity: 0.94,
-      }),
-    [webTex],
-  );
+    return layers;
+  }, [cells]);
 
   return (
     <>
-      {cornerWebs.map((w, i) => {
-        const fog = fogIntensityMap?.get(`${w.cellX},${w.cellY}`) ?? 0;
-        if (fog > 0.16) return null;
-        return (
-          <group key={`cweb-${i}`} position={[w.x, w.y, w.z]} rotation={[0, w.yaw, 0]}>
-            <mesh material={webMat} renderOrder={6}>
-              <planeGeometry args={[w.scale, w.scale * 1.05]} />
-            </mesh>
-          </group>
-        );
-      })}
+      {([0, 1] as const).flatMap((layer) =>
+        byLayerBucket[layer]!.map((bucketCells, bucket) => (
+          <CorridorFogBucketLayer
+            key={`fog-${layer}-${bucket}`}
+            fogTex={fogTex}
+            layer={layer}
+            bucket={bucket}
+            cells={bucketCells}
+          />
+        )),
+      )}
     </>
   );
 }
 
-/** Meshy spider web GLB — one instance per maze web cell (replaces flat wall decals). */
+/** Meshy spider web GLB — one instance per `spiderWebCells` entry (`lab.webPositions`). */
 function SpiderWebMazeMeshInstances({
   grid,
   mapWidth,
@@ -1620,6 +1630,7 @@ function HorrorCornerRelics({
   const _mazeIsoPickupPreload = new Set<string>([
     ...COLLECTIBLE_ARTIFACT_GLB_URLS,
     ...MAZE_WORLD_FEATURE_GLB_URLS,
+    ...PLAYER_ARMOUR_GLB_PATHS,
     ...Object.values(ARTIFACT_KIND_VISUAL_GLB).filter((u): u is string => typeof u === "string"),
   ]);
   for (const _u of _mazeIsoPickupPreload) {
@@ -1805,7 +1816,7 @@ function MazeSetPieces({
                 <circleGeometry args={[0.36, 24]} />
                 <meshBasicMaterial color="#8d6cff" transparent opacity={0.45} />
               </mesh>
-              {near && <pointLight position={[0, 0, 0.05]} color="#8c68ff" intensity={0.85} distance={2.6} decay={2.4} />}
+              {near && <pointLight position={[0, 0, 0.05]} color="#8c68ff" intensity={0.48} distance={2.2} decay={2.5} />}
             </group>
           );
         }
@@ -1861,7 +1872,7 @@ function MazeSetPieces({
               <ringGeometry args={[0.08, 0.16, 3]} />
               <meshBasicMaterial color="#cfa5ff" transparent opacity={0.8} />
             </mesh>
-            {near && <pointLight position={[0, 0, 0.06]} color="#8f5cff" intensity={0.32} distance={1.9} decay={2.6} />}
+            {near && <pointLight position={[0, 0, 0.06]} color="#8f5cff" intensity={0.2} distance={1.65} decay={2.65} />}
           </group>
         );
       })}
@@ -1909,9 +1920,62 @@ const STAIN_PATHS = [
   "/textures/maze/Stains/Horror_Stain_13-256x256.png",
   "/textures/maze/Stains/Horror_Stain_14-256x256.png",
 ];
+for (const _st of STAIN_PATHS) void useTexture.preload(_st);
 /** Deterministic hash for per-cell stain placement. */
 function cellHash(x: number, y: number, salt: number) {
   return ((x * 374761393 + y * 668265263 + salt * 1440865359) >>> 0) % 1000;
+}
+
+type FloorStainInstance = { x: number; z: number; rot: number; scale: number };
+
+function FloorStainInstancedLayer({
+  map,
+  instances,
+}: {
+  map: THREE.Texture;
+  instances: FloorStainInstance[];
+}) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const material = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        map,
+        transparent: true,
+        alphaTest: 0.05,
+        depthWrite: false,
+        roughness: 0.95,
+        metalness: 0,
+        color: "#8a3030",
+      }),
+    [map],
+  );
+
+  useEffect(() => () => material.dispose(), [material]);
+
+  useLayoutEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh || instances.length === 0) return;
+    for (let i = 0; i < instances.length; i++) {
+      const s = instances[i]!;
+      dummy.position.set(s.x, FLOOR_Y + 0.02, s.z);
+      dummy.rotation.set(-Math.PI / 2, 0, s.rot);
+      const sc = CS * s.scale;
+      dummy.scale.set(sc, sc, 1);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [instances, dummy]);
+
+  if (instances.length === 0) return null;
+
+  return (
+    <instancedMesh ref={meshRef} args={[undefined, material, instances.length]} frustumCulled>
+      <planeGeometry args={[1, 1]} />
+    </instancedMesh>
+  );
 }
 
 function FloorStains({
@@ -1921,8 +1985,8 @@ function FloorStains({
 }) {
   const stainTextures = useTexture(STAIN_PATHS);
 
-  const stains = useMemo(() => {
-    const result: Array<{ x: number; z: number; rot: number; scale: number; texIdx: number }> = [];
+  const stainsByTex = useMemo(() => {
+    const buckets: FloorStainInstance[][] = stainTextures.map(() => []);
     for (let y = 0; y < mapHeight; y++) {
       for (let x = 0; x < mapWidth; x++) {
         if (grid[y]?.[x] === WALL) continue;
@@ -1933,31 +1997,21 @@ function FloorStains({
         const scale = 0.6 + (cellHash(x, y, 3) / 1000) * 1.2;
         const ox = ((cellHash(x, y, 4) / 1000) - 0.5) * CS * 0.4;
         const oz = ((cellHash(x, y, 5) / 1000) - 0.5) * CS * 0.4;
-        result.push({ x: x * CS + ox, z: y * CS + oz, rot, scale, texIdx });
+        buckets[texIdx]!.push({
+          x: x * CS + ox,
+          z: y * CS + oz,
+          rot,
+          scale,
+        });
       }
     }
-    return result;
+    return buckets;
   }, [grid, mapWidth, mapHeight, stainTextures.length]);
 
   return (
     <>
-      {stains.map((s, i) => (
-        <mesh
-          key={i}
-          position={[s.x, FLOOR_Y + 0.02, s.z]}
-          rotation={[-Math.PI / 2, 0, s.rot]}
-        >
-          <planeGeometry args={[CS * s.scale, CS * s.scale]} />
-          <meshStandardMaterial
-            map={stainTextures[s.texIdx]}
-            transparent
-            alphaTest={0.05}
-            depthWrite={false}
-            roughness={0.95}
-            metalness={0}
-            color="#8a3030"
-          />
-        </mesh>
+      {stainsByTex.map((instances, texIdx) => (
+        <FloorStainInstancedLayer key={texIdx} map={stainTextures[texIdx]!} instances={instances} />
       ))}
     </>
   );
@@ -2685,6 +2739,7 @@ const MONSTER_SPRITE_MAP: Record<string, string> = {
   L: "/monsters/lava/neutral.png",
   O: "/monsters/clown/idle.png",
 };
+for (const _sp of Object.values(MONSTER_SPRITE_MAP)) void useTexture.preload(_sp);
 
 const DRACULA_GLB_PATH = getMonsterGltfPathForReference("V");
 const MONSTER_GLB_SLUG: Record<MonsterType, string> = {
@@ -2696,6 +2751,12 @@ const MONSTER_GLB_SLUG: Record<MonsterType, string> = {
   L: "lava",
   O: "clown",
 };
+
+void useGLTF.preload(DRACULA_GLB_PATH);
+void useGLTF.preload(PLAYER_3D_GLB);
+for (const _mt of ["V", "Z", "S", "G", "K", "L"] as const) {
+  void useGLTF.preload(getMonsterGltfPathForReference(_mt));
+}
 
 function DraculaModel3D({
   visualState,
@@ -3259,7 +3320,7 @@ function MazeScene({
   zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, catapultMode,
   catapultFrom, catapultAimClient, catapultTrajectoryPreview, catapultLockCameraForPull,
   magicPortalPreviewOptions, teleportSourceType,
-  focusVersion, miniMonsters, fogIntensityMap, combatPulseVersion, combatMonster,
+  focusVersion, miniMonsters, fogIntensityMap, spiderWebCells = [], combatPulseVersion, combatMonster,
   touchUi = false,
   onTouchCameraForwardGrid,
   onIsoCameraBearingDeg,
@@ -3268,9 +3329,9 @@ function MazeScene({
   orbitRingPointerHeldRef,
   playerGlbPath,
   playerWeaponGltfPath,
+  playerOffhandArmourGltfPath,
   isoCombatPlayerCue,
   playerJumpPulseVersion = 0,
-  spiderWebCells = [],
   artifactPickups,
   worldFeaturePickups,
 }: Omit<Props, "visible"> & {
@@ -3287,6 +3348,7 @@ function MazeScene({
   teleportSourceType?: "magic" | "gem" | "artifact" | null;
   combatPulseVersion?: number;
   combatMonster?: { x: number; y: number; type?: string } | null;
+  spiderWebCells?: ReadonlyArray<readonly [number, number]>;
   onTouchCameraForwardGrid?: (dx: number, dy: number) => void;
   orbitLookApplierRef: MutableRefObject<((dxPx: number, dyPx: number) => void) | null>;
   orbitRingPointerHeldRef: MutableRefObject<boolean>;
@@ -3295,23 +3357,24 @@ function MazeScene({
   return (
     <>
       <MazeAtmosphericFog />
-      {/* Very low global light: unlit corridors stay dark; torches do the local lighting. */}
-      <ambientLight intensity={0.015} />
+      {/* Near-black fill so torch / player pools read as islands; key light paints hard shadow shapes. */}
+      <ambientLight intensity={0.0045} color="#1a1d28" />
       <directionalLight
         position={[18, 26, 10]}
-        intensity={0.2}
+        intensity={0.1}
+        color="#c8d2e2"
         castShadow
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
+        shadow-mapSize-width={1024}
+        shadow-mapSize-height={1024}
         shadow-camera-near={0.5}
         shadow-camera-far={220}
         shadow-camera-left={-shadowRange}
         shadow-camera-right={shadowRange}
         shadow-camera-top={shadowRange}
         shadow-camera-bottom={-shadowRange}
-        shadow-bias={-0.00018}
+        shadow-bias={-0.00022}
       />
-      <directionalLight position={[-12, 12, -12]} intensity={0.08} color="#b9c8ff" />
+      <directionalLight position={[-12, 12, -12]} intensity={0.028} color="#7a88a8" />
 
       <FloorTiles grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} onCellClick={onCellClick} />
       <CorridorFogVolumes grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
@@ -3339,13 +3402,6 @@ function MazeScene({
         <MazeWorldFeaturePickups items={worldFeaturePickups ?? []} />
       </Suspense>
       <WallBlocks grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
-      <SpiderWebDecor
-        grid={grid}
-        mapWidth={mapWidth}
-        mapHeight={mapHeight}
-        fogIntensityMap={fogIntensityMap}
-        spiderWebCells={spiderWebCells}
-      />
       <Suspense fallback={null}>
         <SpiderWebMazeMeshInstances
           grid={grid}
@@ -3372,6 +3428,7 @@ function MazeScene({
         combatPulse={combatPulseVersion}
         playerGlbPath={playerGlbPath}
         playerWeaponGltfPath={playerWeaponGltfPath}
+        playerOffhandArmourGltfPath={playerOffhandArmourGltfPath}
         isoCombatPlayerCue={isoCombatPlayerCue}
         playerJumpPulseVersion={playerJumpPulseVersion}
       />
@@ -3750,6 +3807,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     focusVersion,
     miniMonsters,
     fogIntensityMap,
+    spiderWebCells = [],
     combatActive = false,
     combatRolling = false,
     combatRollFace = null,
@@ -3763,11 +3821,11 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     combatRunDisabled = false,
     playerGlbPath,
     playerWeaponGltfPath = null,
+    playerOffhandArmourGltfPath = null,
     artifactPickups,
     worldFeaturePickups,
     isoCombatPlayerCue = null,
     playerJumpPulseVersion = 0,
-    spiderWebCells = [],
     teleportPickTimerOverlay = null,
     fillViewport = false,
   touchUi = false,
@@ -3783,6 +3841,11 @@ const MazeIsoView = forwardRef(function MazeIsoView(
   const [btnRotate, setBtnRotate] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   const [resetTick, setResetTick] = useState(0);
+  /** Bump after GPU context restore — remount Canvas so mixers / skinned meshes re-init cleanly. */
+  const [webglCanvasGeneration, setWebglCanvasGeneration] = useState(0);
+  const bumpWebglCanvas = useCallback(() => {
+    setWebglCanvasGeneration((n) => n + 1);
+  }, []);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const btnRotateRef = useRef(false);
   btnRotateRef.current = btnRotate;
@@ -3910,6 +3973,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       aria-label="Isometric 3D map view"
     >
       <Canvas
+        key={webglCanvasGeneration}
         shadows
         camera={{ position: [camDist, CAM_HEIGHT, camDist], fov: THREE.MathUtils.clamp(92 - zoom * 16, 58, 95), near: 0.1, far: 800 }}
         style={
@@ -3930,9 +3994,17 @@ const MazeIsoView = forwardRef(function MazeIsoView(
                 touchAction: "auto" as const,
               }
         }
-        gl={{ antialias: true, alpha: false }}
-        dpr={[1, 1.4]}
-        onCreated={({ gl }) => { gl.setClearColor("#06060a"); }}
+        gl={{
+          antialias: true,
+          alpha: false,
+          powerPreference: "high-performance",
+          stencil: false,
+          depth: true,
+        }}
+        dpr={[1, 1.25]}
+        onCreated={({ gl }) => {
+          gl.setClearColor("#06060a");
+        }}
         onPointerDown={(e) => {
           if (!combatActive || !onCombatRollRequest) return;
           if ((e.nativeEvent as PointerEvent).button !== 0) return;
@@ -3940,7 +4012,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
         }}
       >
         <CanvasContextBridge cameraRef={canvasCameraRef} glDomRef={canvasGlDomRef} />
-        <WebGlContextLossGuard />
+        <WebGlContextLossGuard onContextRestored={bumpWebglCanvas} />
         <MazeScene
           grid={grid} mapWidth={mapWidth} mapHeight={mapHeight}
           playerX={playerX} playerY={playerY}
@@ -3961,6 +4033,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           focusVersion={focusVersion}
           miniMonsters={miniMonsters}
           fogIntensityMap={fogIntensityMap}
+          spiderWebCells={spiderWebCells}
           combatPulseVersion={combatPulseVersion}
           combatMonster={combatMonster}
           touchUi={touchUi}
@@ -3971,11 +4044,11 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           orbitRingPointerHeldRef={orbitRingPointerHeldRef}
           playerGlbPath={playerGlbPath}
           playerWeaponGltfPath={playerWeaponGltfPath}
+          playerOffhandArmourGltfPath={playerOffhandArmourGltfPath}
           artifactPickups={artifactPickups}
           worldFeaturePickups={worldFeaturePickups}
           isoCombatPlayerCue={isoCombatPlayerCue}
           playerJumpPulseVersion={playerJumpPulseVersion}
-          spiderWebCells={spiderWebCells}
         />
       </Canvas>
       {teleportMode && teleportPickTimerOverlay ? (

@@ -28,12 +28,11 @@ export interface Combat3dContactRow {
 }
 
 /**
- * Hunt → hurt crossfade while monster **spell** (Jumping_Punch) is playing: default 0.38s keeps hunt locomotion
- * visible through the punch; shorter fade locks the player to hurt pose in time with contact.
+ * Legacy tight crossfade (no longer used for merged player hunt→hurt — handoff now matches
+ * `MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER` so the player keeps moving during monster wind-up).
  */
-/** Near-cut: hunt locomotion was still visible through Jumping_Punch contact. */
 export const MONSTER_SPELL_PLAYER_HUNT_TO_HURT_CROSSFADE_SEC = 0.08;
-/** Symmetric: player skill jump → monster standing hurt (same crossfade intent as monster spell → player hurt). */
+/** @deprecated Prefer matching monster hunt→attack duration; kept for reference / tooling. */
 export const PLAYER_SKILL_MONSTER_HUNT_TO_HURT_CROSSFADE_SEC = MONSTER_SPELL_PLAYER_HUNT_TO_HURT_CROSSFADE_SEC;
 
 /**
@@ -65,7 +64,8 @@ export const MONSTER_HITS_PLAYER: Record<Combat3dStrikeTier, Record<Combat3dDefe
       separationHalf: 0.52,
       /** Small skip so non-jump strikes near contact; was 0 + 1.16 defender (player deep in hurt while monster at t≈0). */
       attackerLeadInSec: 0.22,
-      defenderReactionLeadInSec: 0.22,
+      /** Nearer spell (0.28) — pairs with short hunt→hurt handoff so the flinch reads on the strike beat. */
+      defenderReactionLeadInSec: 0.28,
     },
     knockdown: {
       separationHalf: 0.42,
@@ -93,8 +93,10 @@ export const MONSTER_HITS_PLAYER: Record<Combat3dStrikeTier, Record<Combat3dDefe
  */
 export const PLAYER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER: Record<Combat3dStrikeTier, number> = {
   spell: 0.22,
-  /** Mirrored from `MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER.spell` — player skill jump reads like monster spell strike. */
-  skill: 0.34,
+  /**
+   * Shorter than spell: full-weight `Jumping_Punch` reaches the tuned contact seek sooner after hunt (`PLAYER_HITS_MONSTER.skill` + mixer compensation).
+   */
+  skill: 0.16,
   light: 0.34,
 };
 
@@ -127,18 +129,23 @@ export const PLAYER_HITS_MONSTER: Record<Combat3dStrikeTier, Record<Combat3dDefe
   skill: {
     hurt: {
       /**
-       * Player skill leads with `Jumping_Punch` (wasteland drifter). Mirroring `MONSTER_HITS_PLAYER.spell` (0.4 / 0.66)
-       * skipped so deep into the clip that root motion read as starting **past** the defender on merged rigs.
-       * Wider half + shallower skip match the intent of `playerSpell` / lab: visible approach, then contact.
+       * `Jumping_Punch`: **wider** half than monster skill (`MONSTER_HITS_PLAYER.skill.hurt` 0.52) so the jump starts
+       * before the rigs read nose-to-nose; **shallower** `attackerLeadInSec` keeps more takeoff at t→0 while root motion
+       * closes the gap. `defenderReactionLeadInSec` stays low so flinch tracks the earlier contact frame.
        */
-      separationHalf: 0.58,
-      attackerLeadInSec: 0.28,
-      defenderReactionLeadInSec: 0.16,
+      separationHalf: 0.66,
+      attackerLeadInSec: 0.2,
+      defenderReactionLeadInSec: 0.03,
     },
     knockdown: {
-      separationHalf: MONSTER_HITS_PLAYER.spell.knockdown.separationHalf,
-      attackerLeadInSec: MONSTER_HITS_PLAYER.spell.knockdown.attackerLeadInSec,
-      defenderReactionLeadInSec: MONSTER_HITS_PLAYER.spell.knockdown.defenderReactionLeadInSec,
+      /**
+       * Player skill vs **monster** knockdown (merged spell/skill wins) — must **not** reuse `MONSTER_HITS_PLAYER` rows
+       * (those tune monster→player). Match `skill.hurt` jump seek so `Jumping_Punch` wind-up matches standing hit; X
+       * slightly tighter than `hurt` so the strike reads on a grounded rig; shallow fall skip like `spell.knockdown`.
+       */
+      separationHalf: 0.6,
+      attackerLeadInSec: 0.2,
+      defenderReactionLeadInSec: 0.08,
     },
   },
   light: {
@@ -211,11 +218,14 @@ export function monsterSpellJumpContactLeadMultiplier(rollingApproachBlend: numb
   );
 }
 
-/** Player skill jump vs standing monster — same geometry as `monsterSpellJumpContactLeadMultiplier` (shared tight half). */
+/**
+ * Player skill jump vs standing monster — use the **same** tight half as monster spell `Jumping_Punch` (0.4) so
+ * approach blend scales lead-in like monster spell; player face-off X uses `PLAYER_HITS_MONSTER.skill.hurt.separationHalf` (wider in-table).
+ */
 export function playerSkillJumpContactLeadMultiplier(rollingApproachBlend: number): number {
   return contactJumpStrikeLeadMultiplier(
     rollingApproachBlend,
-    PLAYER_HITS_MONSTER.skill.hurt.separationHalf,
+    MONSTER_HITS_PLAYER.spell.hurt.separationHalf,
   );
 }
 
@@ -423,6 +433,11 @@ export interface Combat3dResolvedLeads {
   meshyPlayerAttackLeadInSec: number;
   meshyMonsterAttackLeadInSec: number;
   meshyMonsterHurtLeadInSec: number;
+  /**
+   * Monster `attack` → player `hurt`/`knockdown`: hunt→hurt crossfade = same duration as monster hunt→`attack`
+   * (`MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER`) so the defender **keeps locomotion** while the strike winds up.
+   */
+  meshyPlayerHurtHandoffCrossfadeSec: number | undefined;
   /** When player is in `attack` vs non-attacking monster — hunt→attack blend for merged player rig. */
   meshyPlayerHuntToAttackCrossfadeSec: number | undefined;
   /** When monster is in `attack` vs non-attacking player — hunt→attack blend for merged monster rig. */
@@ -456,6 +471,7 @@ export function resolveCombat3dClipLeads(args: {
     meshyPlayerAttackLeadInSec: 0,
     meshyMonsterAttackLeadInSec: 0,
     meshyMonsterHurtLeadInSec: 0,
+    meshyPlayerHurtHandoffCrossfadeSec: undefined,
     meshyPlayerHuntToAttackCrossfadeSec: undefined,
     meshyMonsterHuntToAttackCrossfadeSec: undefined,
   };
@@ -530,11 +546,21 @@ export function resolveCombat3dClipLeads(args: {
       ? MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER[draculaAttackVariant]
       : undefined;
 
+  const meshyPlayerHurtHandoffCrossfadeSec =
+    mAtk &&
+    !pAtk &&
+    (playerVisualState === "hurt" || playerVisualState === "knockdown") &&
+    !playerFatalJumpKill &&
+    isKnownCombatStrikeTier(draculaAttackVariant)
+      ? MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER[draculaAttackVariant]
+      : undefined;
+
   return {
     meshyPlayerHurtLeadInSec,
     meshyPlayerAttackLeadInSec,
     meshyMonsterAttackLeadInSec,
     meshyMonsterHurtLeadInSec,
+    meshyPlayerHurtHandoffCrossfadeSec,
     meshyPlayerHuntToAttackCrossfadeSec,
     meshyMonsterHuntToAttackCrossfadeSec,
   };

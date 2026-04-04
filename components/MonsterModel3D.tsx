@@ -33,12 +33,16 @@ import {
   resolveWalkFightBackClipName,
 } from "@/lib/monsterModels3d";
 import {
+  isRigidShieldGlbUrl,
+  resolveWeaponAttachHand,
   resolveWeaponAttachPose,
   resolveWeaponAttachTargetWorldLen,
   WEAPON_ATTACH_GRIP_FRACTION_FROM_AXIS_END,
   WEAPON_ATTACH_HAND,
   type WeaponAttachHand,
 } from "@/lib/weaponAttachConfig";
+import { CombatHitBloodFX } from "@/components/CombatHitBloodFX";
+import { WebGlContextLossGuard } from "@/components/WebGlContextLossGuard";
 
 /**
  * World X half-separation (|playerX| = |monsterX|). Looping stances lock armature root; one-shot attacks
@@ -279,7 +283,10 @@ function applyMonsterHurtClipContactSync(
   act.time = Math.min(startSec, Math.max(0, clip.duration - 0.04));
 }
 
-/** Player `attack`: skip into clip (lead-in from `combat3dContact` / `resolveCombat3dClipLeads`). */
+/**
+ * Player `attack`: skip into clip (lead-in from `combat3dContact` / `resolveCombat3dClipLeads`).
+ * Monster `attack` is **not** seek-skipped here — only player `hurt` lead is tuned to monster contact in the resolver.
+ */
 function applyPlayerAttackClipSkillLeadIn(
   act: THREE.AnimationAction,
   isPlayerModel: boolean,
@@ -788,19 +795,32 @@ function PositionedGltfSubject(
     playerLocomotionToAttackCrossfadeSec?: number;
     /** Merged monster: hunt/roll → `attack` blend (`MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER` from `resolveCombat3dClipLeads`). */
     monsterLocomotionToAttackCrossfadeSec?: number;
+    /** Monster strike → player hurt: hunt→hurt fade from `meshyPlayerHurtHandoffCrossfadeSec` (omit = long default). */
+    playerHurtHandoffCrossfadeSec?: number;
     weaponAttachHand?: WeaponAttachHand;
     weaponBladeTwistRad?: number;
     weaponExtraEulerRad?: readonly [number, number, number];
     weaponGripPositionLocal?: readonly [number, number, number];
+    /** Second prop (e.g. shield) — other hand via `resolveWeaponAttachHand`. */
+    offhandWeaponUrl?: string | null;
+    offhandWeaponAttachHand?: WeaponAttachHand;
+    offhandBladeTwistRad?: number;
+    offhandExtraEulerRad?: readonly [number, number, number];
+    offhandGripPositionLocal?: readonly [number, number, number];
   }
 ) {
   const {
     positionX = 0,
     weaponUrl,
-    weaponAttachHand = WEAPON_ATTACH_HAND,
+    weaponAttachHand,
     weaponBladeTwistRad,
     weaponExtraEulerRad,
     weaponGripPositionLocal,
+    offhandWeaponUrl,
+    offhandWeaponAttachHand,
+    offhandBladeTwistRad,
+    offhandExtraEulerRad,
+    offhandGripPositionLocal,
     hitRootRef,
     animationSyncKey,
     pairGateToken,
@@ -811,8 +831,14 @@ function PositionedGltfSubject(
     monsterHurtClipStartTimeSec = 0,
     playerLocomotionToAttackCrossfadeSec,
     monsterLocomotionToAttackCrossfadeSec,
+    playerHurtHandoffCrossfadeSec,
     ...rest
   } = props;
+  const effectiveWeaponAttachHand = weaponAttachHand ?? resolveWeaponAttachHand(weaponUrl ?? null);
+  const effectiveOffhandAttachHand =
+    offhandWeaponUrl && isRigidShieldGlbUrl(offhandWeaponUrl)
+      ? ("left" as const)
+      : offhandWeaponAttachHand ?? resolveWeaponAttachHand(offhandWeaponUrl ?? null);
   const groupRef = useRef<THREE.Group | null>(null);
   const setGroupRef = (node: THREE.Group | null) => {
     groupRef.current = node;
@@ -955,12 +981,17 @@ function PositionedGltfSubject(
             rest.visualState === "knockdown")));
 
     const crossFade = recoverContinuityCrossFade || locomotionHandoffToStrike;
-    /** Player hunt→defender hit: do not reuse short spell/skill hunt→attack fades — those snap hurt on too early. */
+    /**
+     * Player hunt→hurt/knockdown: merged combat passes `meshyPlayerHurtHandoffCrossfadeSec` = monster hunt→`attack` duration
+     * so the player **keeps moving** during strike wind-up; seek compensation backs up hurt clip time over that fade.
+     */
     const locomotionHandoffFadeSec =
       locomotionHandoffToStrike &&
       rest.isPlayerModel &&
       (rest.visualState === "hurt" || rest.visualState === "knockdown")
-        ? PLAYER_LOCOMOTION_TO_ATTACK_CROSSFADE_SEC
+        ? typeof playerHurtHandoffCrossfadeSec === "number"
+          ? playerHurtHandoffCrossfadeSec
+          : PLAYER_LOCOMOTION_TO_ATTACK_CROSSFADE_SEC
         : locomotionToAttackFadeSec;
     let fadeDuration = recoverContinuityCrossFade
       ? 0.4
@@ -1133,27 +1164,46 @@ function PositionedGltfSubject(
     if (pick && actions[pick]) {
       const act = actions[pick]!;
       act.reset();
-      applyPlayerHurtClipContactSync(
-        act,
-        !!rest.isPlayerModel,
-        rest.visualState,
-        playerHurtStartRef.current,
-        !!playerJumpKillRef.current,
-      );
-      applyMonsterHurtClipContactSync(act, !!rest.isPlayerModel, rest.visualState, monsterHurtStartRef.current);
-      applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackLeadRef.current);
-      if (loops) { act.setLoop(THREE.LoopRepeat, Infinity); act.clampWhenFinished = false; }
-      else { act.setLoop(THREE.LoopOnce, 1); act.clampWhenFinished = true; if (onFinishedRef.current) { actForListener = act; mixer.addEventListener("finished", onFin); } }
       const useLocomotionCross =
         mergedLocomotionIntoStrike &&
         outgoingLocomotion &&
         outgoingLocomotion !== act &&
         (outgoingLocomotion.getEffectiveWeight() > 1e-4 || outgoingLocomotion.isRunning());
+      /**
+       * Hunt→incoming clip: time advances for the whole crossfade — back up seek so the intended frame lands when weight reaches 1.
+       */
+      const rawPlayerAttackLead = playerAttackLeadRef.current;
+      const playerAttackSeekLead =
+        useLocomotionCross && rest.isPlayerModel && rest.visualState === "attack"
+          ? Math.max(0, rawPlayerAttackLead - locomotionHandoffFadeSec)
+          : rawPlayerAttackLead;
+      const rawPlayerHurtLead = playerHurtStartRef.current;
+      const playerHurtSeekLead =
+        useLocomotionCross && rest.isPlayerModel && (rest.visualState === "hurt" || rest.visualState === "knockdown")
+          ? Math.max(0, rawPlayerHurtLead - locomotionHandoffFadeSec)
+          : rawPlayerHurtLead;
+      applyPlayerHurtClipContactSync(
+        act,
+        !!rest.isPlayerModel,
+        rest.visualState,
+        playerHurtSeekLead,
+        !!playerJumpKillRef.current,
+      );
+      applyMonsterHurtClipContactSync(act, !!rest.isPlayerModel, rest.visualState, monsterHurtStartRef.current);
+      applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackSeekLead);
+      if (loops) { act.setLoop(THREE.LoopRepeat, Infinity); act.clampWhenFinished = false; }
+      else { act.setLoop(THREE.LoopOnce, 1); act.clampWhenFinished = true; if (onFinishedRef.current) { actForListener = act; mixer.addEventListener("finished", onFin); } }
       if (useLocomotionCross) {
         act.play();
         outgoingLocomotion.crossFadeTo(act, locomotionHandoffFadeSec, false);
-        /** `crossFadeTo` can leave the incoming action at t≈0 for the blend — re-seek player strike contact. */
-        applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackLeadRef.current);
+        applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackSeekLead);
+        applyPlayerHurtClipContactSync(
+          act,
+          !!rest.isPlayerModel,
+          rest.visualState,
+          playerHurtSeekLead,
+          !!playerJumpKillRef.current,
+        );
       } else {
         if (crossFade) { for (const a of Object.values(actions)) { if (a && a !== act) a.fadeOut(fadeDuration); } }
         act.fadeIn(fadeDuration).play();
@@ -1195,6 +1245,7 @@ function PositionedGltfSubject(
     monsterHurtClipStartTimeSec,
     locomotionToAttackFadeSec,
     monsterLocomotionToAttackCrossfadeSec,
+    playerHurtHandoffCrossfadeSec,
   ]);
 
   const scale =
@@ -1223,10 +1274,24 @@ function PositionedGltfSubject(
                 <BoneAttachedWeapon
                   parentScene={scene}
                   url={weaponUrl}
-                  attachHand={weaponAttachHand}
+                  attachHand={effectiveWeaponAttachHand}
                   bladeTwistRad={weaponBladeTwistRad}
                   extraEulerRad={weaponExtraEulerRad}
                   gripPositionLocal={weaponGripPositionLocal}
+                />
+              </Suspense>
+            </WeaponLoadErrorBoundary>
+          ) : null}
+          {rest.isPlayerModel && offhandWeaponUrl ? (
+            <WeaponLoadErrorBoundary key={offhandWeaponUrl}>
+              <Suspense fallback={null}>
+                <BoneAttachedWeapon
+                  parentScene={scene}
+                  url={offhandWeaponUrl}
+                  attachHand={effectiveOffhandAttachHand}
+                  bladeTwistRad={offhandBladeTwistRad}
+                  extraEulerRad={offhandExtraEulerRad}
+                  gripPositionLocal={offhandGripPositionLocal}
                 />
               </Suspense>
             </WeaponLoadErrorBoundary>
@@ -1557,8 +1622,13 @@ function classifyHandSide(name: string): { isRight: boolean; isLeft: boolean } {
 /**
  * Pick the **hand / fist / wrist** bone for the requested side so the weapon is rigid to the palm, not the forearm.
  * Forearm is only used if no hand-like bone exists (avoids invisible weapons on odd rigs).
+ * **`strictHandOnly`** (shields): only exact-name + same-side hand/fist — no ambiguous “any”, opposite hand, or forearm.
  */
-function findHandBoneForSide(root: THREE.Object3D, side: WeaponAttachHand): THREE.Bone | null {
+function findHandBoneForSide(
+  root: THREE.Object3D,
+  side: WeaponAttachHand,
+  strictHandOnly = false,
+): THREE.Bone | null {
   const primaryExact = side === "right" ? RIGHT_HAND_EXACT_NAMES : LEFT_HAND_EXACT_NAMES;
   const secondaryExact = side === "right" ? LEFT_HAND_EXACT_NAMES : RIGHT_HAND_EXACT_NAMES;
 
@@ -1586,6 +1656,7 @@ function findHandBoneForSide(root: THREE.Object3D, side: WeaponAttachHand): THRE
     else if (!isLeft && !isRight && !any) any = b;
   });
   if (primary) return primary;
+  if (strictHandOnly) return null;
   if (any) return any;
   if (opposite) return opposite;
 
@@ -1666,9 +1737,17 @@ export function BoneAttachedWeapon({
   useEffect(() => { useGLTF.preload(url); }, [url]);
 
   useEffect(() => {
-    const bone = findHandBoneForSide(parentScene, attachHand);
+    const strictShield = isRigidShieldGlbUrl(url);
+    const effectiveHand = strictShield ? ("left" as const) : attachHand;
+    const bone = findHandBoneForSide(parentScene, effectiveHand, strictShield);
     if (!bone) {
-      if (process.env.NODE_ENV !== "production") console.warn("[BoneAttachedWeapon] no hand bone found");
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          strictShield
+            ? "[BoneAttachedWeapon] no left hand/fist bone for shield (strict) — check rig names"
+            : "[BoneAttachedWeapon] no hand bone found",
+        );
+      }
       return;
     }
 
@@ -1748,13 +1827,17 @@ export function BoneAttachedWeapon({
     /**
      * Sliders are authored as ~meters along hand-bone axes. Parent `Center` + rig root scale shrink the hand’s
      * world scale; raw bone-local units then move the mesh by `scale * delta`, which reads as “sliders do nothing”.
-     * Divide by `matrixWorld` scale so a 0.1 edit stays ~0.1m visually on merged Meshy GLBs.
+     * We still need a world-scale factor, but `matrixWorld.decompose`’s sx/sy/sz are **column lengths of the world
+     * linear part** — they swing as the bone rotates under non-uniform ancestor scale. Per-axis division then
+     * changes `weaponRoot.position` every frame even though the grip is bone-local → shield drifts / clips the hand.
+     * Use one uniform factor (geometric mean) so the offset stays fixed in hand space while staying ~meter-correct.
      */
     bone.matrixWorld.decompose(_gripDecompPos, _gripDecompQuat, _gripDecompScale);
     const sx = Math.max(Math.abs(_gripDecompScale.x), 1e-8);
     const sy = Math.max(Math.abs(_gripDecompScale.y), 1e-8);
     const sz = Math.max(Math.abs(_gripDecompScale.z), 1e-8);
-    weaponRoot.position.set(gp[0] / sx, gp[1] / sy, gp[2] / sz);
+    const u = Math.max(Math.cbrt(sx * sy * sz), 1e-8);
+    weaponRoot.position.set(gp[0] / u, gp[1] / u, gp[2] / u);
 
     /**
      * Hard attach: rotation is **only** config (twist around mesh long axis + extra Euler) in **hand-bone local**
@@ -1779,7 +1862,7 @@ export interface CombatScene3DProps {
   playerGltfPath: string;
   /** Optional weapon/armour GLB parented to the player rig hand (see `BoneAttachedWeapon`). Empty string = none. */
   armourGltfPath?: string | null;
-  /** Defaults in `lib/weaponAttachConfig.ts` when omitted */
+  /** Override hand bone; omit to use `resolveWeaponAttachHand(armourGltfPath)` (shields → left). */
   armourAttachHand?: WeaponAttachHand;
   armourBladeTwistRad?: number;
   armourExtraEulerRad?: readonly [number, number, number];
@@ -1788,6 +1871,13 @@ export interface CombatScene3DProps {
    * globals). Face-off lab passes explicit values.
    */
   armourGripPositionLocal?: readonly [number, number, number];
+  /** Off-hand shield / second prop — combines with `armourGltfPath`. */
+  armourOffhandGltfPath?: string | null;
+  /** Ignored for roster shield GLBs — they always attach to the **left** hand bone (`isRigidShieldGlbUrl`). */
+  armourOffhandAttachHand?: WeaponAttachHand;
+  armourOffhandBladeTwistRad?: number;
+  armourOffhandExtraEulerRad?: readonly [number, number, number];
+  armourOffhandGripPositionLocal?: readonly [number, number, number];
   monsterVisualState: Monster3DSpriteState;
   playerVisualState: Monster3DSpriteState;
   monsterType?: MonsterType | null;
@@ -1811,6 +1901,8 @@ export interface CombatScene3DProps {
   monsterLocomotionToAttackCrossfadeSec?: number;
   /** Monster `hurt`: skip into reaction clip when player connects (spell/skill rows in `PLAYER_HITS_MONSTER`). */
   monsterHurtClipStartTimeSec?: number;
+  /** Monster strike → player hurt: hunt→hurt crossfade from `resolveCombat3dClipLeads` (matches monster hunt→attack). */
+  playerHurtHandoffCrossfadeSec?: number;
   /** Rotates player `attack` clip try-order when the same strike tier is picked repeatedly during one roll. */
   playerAttackClipCycleIndex?: number;
   onOneShotAnimationFinished?: () => void;
@@ -2049,10 +2141,15 @@ export function CombatScene3D({
   monsterGltfPath,
   playerGltfPath,
   armourGltfPath,
-  armourAttachHand = WEAPON_ATTACH_HAND,
+  armourAttachHand,
   armourBladeTwistRad,
   armourExtraEulerRad,
   armourGripPositionLocal,
+  armourOffhandGltfPath,
+  armourOffhandAttachHand,
+  armourOffhandBladeTwistRad,
+  armourOffhandExtraEulerRad,
+  armourOffhandGripPositionLocal,
   monsterVisualState,
   playerVisualState,
   monsterType = null,
@@ -2068,6 +2165,7 @@ export function CombatScene3D({
   playerLocomotionToAttackCrossfadeSec,
   monsterLocomotionToAttackCrossfadeSec,
   monsterHurtClipStartTimeSec = 0,
+  playerHurtHandoffCrossfadeSec,
   playerAttackClipCycleIndex = 0,
   onOneShotAnimationFinished,
   width,
@@ -2081,6 +2179,10 @@ export function CombatScene3D({
   orbitMinDistance,
   orbitMaxDistance,
 }: CombatScene3DProps) {
+  const [webglRestoreGeneration, setWebglRestoreGeneration] = useState(0);
+  const bumpWebglCombatCanvas = useCallback(() => {
+    setWebglRestoreGeneration((n) => n + 1);
+  }, []);
   const monsterHitRootRef = useRef<THREE.Group | null>(null);
   const isMergedMeshy =
     monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "G" || monsterType === "S" || monsterType === "L";
@@ -2091,6 +2193,7 @@ export function CombatScene3D({
   const orbitMinD = orbitMinDistance ?? (compactCombatViewport ? 1.12 : 2);
   const orbitMaxD = orbitMaxDistance ?? (compactCombatViewport ? 5.8 : 10);
   const orbitTargetY = compactCombatViewport ? 0.56 : 0.8;
+  const resolvedArmourAttachHand = armourAttachHand ?? resolveWeaponAttachHand(armourGltfPath ?? null);
 
   const isContactExchange =
     (playerVisualState === "attack" || playerVisualState === "angry" || playerVisualState === "hurt" || playerVisualState === "knockdown") &&
@@ -2153,9 +2256,45 @@ export function CombatScene3D({
     };
   }, [playerGltfPath]);
 
+  useEffect(() => {
+    if (!armourGltfPath) return;
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const r = await fetch(armourGltfPath, { signal: ac.signal });
+        if (!r.ok) throw 0;
+        await r.arrayBuffer();
+        await Promise.resolve(useGLTF.preload(armourGltfPath) as PromiseLike<unknown> | undefined);
+      } catch {
+        /* preload best-effort */
+      }
+    })();
+    return () => {
+      ac.abort();
+    };
+  }, [armourGltfPath]);
+
+  useEffect(() => {
+    if (!armourOffhandGltfPath) return;
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const r = await fetch(armourOffhandGltfPath, { signal: ac.signal });
+        if (!r.ok) throw 0;
+        await r.arrayBuffer();
+        await Promise.resolve(useGLTF.preload(armourOffhandGltfPath) as PromiseLike<unknown> | undefined);
+      } catch {
+        /* preload best-effort */
+      }
+    })();
+    return () => {
+      ac.abort();
+    };
+  }, [armourOffhandGltfPath]);
+
   /** Include roster so the Canvas remounts when the monster or either GLB changes — fresh OrbitControls + camera (avoids stale dolly/rotate hiding one fighter after swaps; face-off lab had no outer `key` like the combat modal). */
-  const sceneAnchorKey = `${monsterType ?? "?"}|${monsterGltfPath}|${playerGltfPath}`;
-  const canvasKey = `meshy-combat-${width}--${sceneAnchorKey}`;
+  const sceneAnchorKey = `${monsterType ?? "?"}|${monsterGltfPath}|${playerGltfPath}|${armourGltfPath ?? ""}|${armourOffhandGltfPath ?? ""}`;
+  const canvasKey = `meshy-combat-${width}--${sceneAnchorKey}--wg${webglRestoreGeneration}`;
   const initialCombatCamera = useMemo(
     (): readonly [number, number, number] => [0, cameraY, cameraZ],
     [cameraY, cameraZ],
@@ -2180,6 +2319,7 @@ export function CombatScene3D({
         camera={{ position: [0, cameraY, cameraZ], fov, near: 0.1, far: 80 }}
         onCreated={() => invalidate()}
       >
+        <WebGlContextLossGuard onContextRestored={bumpWebglCombatCanvas} />
         <Suspense fallback={null}>
           <MeshyCombatCameraFraming
             enabled={isMergedMeshy}
@@ -2218,15 +2358,21 @@ export function CombatScene3D({
                   playerFatalJumpKill={playerFatalJumpKill}
                   playerHurtAnimContext={playerHurtAnimContext}
                   playerHurtClipStartTimeSec={playerHurtClipStartTimeSec}
+                  playerHurtHandoffCrossfadeSec={playerHurtHandoffCrossfadeSec}
                   playerAttackClipLeadInSec={playerAttackClipLeadInSec}
                   playerLocomotionToAttackCrossfadeSec={playerLocomotionToAttackCrossfadeSec}
                   playerAttackClipCycleIndex={playerAttackClipCycleIndex}
                   positionX={playerPosX}
                   weaponUrl={armourGltfPath}
-                  weaponAttachHand={armourAttachHand}
+                  weaponAttachHand={resolvedArmourAttachHand}
                   weaponBladeTwistRad={armourBladeTwistRad}
                   weaponExtraEulerRad={armourExtraEulerRad}
                   weaponGripPositionLocal={armourGripPositionLocal}
+                  offhandWeaponUrl={armourOffhandGltfPath}
+                  offhandWeaponAttachHand={armourOffhandAttachHand}
+                  offhandBladeTwistRad={armourOffhandBladeTwistRad}
+                  offhandExtraEulerRad={armourOffhandExtraEulerRad}
+                  offhandGripPositionLocal={armourOffhandGripPositionLocal}
                 />
               }
               monsterEl={
@@ -2260,15 +2406,21 @@ export function CombatScene3D({
                 playerFatalJumpKill={playerFatalJumpKill}
                 playerHurtAnimContext={playerHurtAnimContext}
                 playerHurtClipStartTimeSec={playerHurtClipStartTimeSec}
+                playerHurtHandoffCrossfadeSec={playerHurtHandoffCrossfadeSec}
                 playerAttackClipLeadInSec={playerAttackClipLeadInSec}
                 playerLocomotionToAttackCrossfadeSec={playerLocomotionToAttackCrossfadeSec}
                 playerAttackClipCycleIndex={playerAttackClipCycleIndex}
                 positionX={playerPosX}
                 weaponUrl={armourGltfPath}
-                weaponAttachHand={armourAttachHand}
+                weaponAttachHand={resolvedArmourAttachHand}
                 weaponBladeTwistRad={armourBladeTwistRad}
                 weaponExtraEulerRad={armourExtraEulerRad}
                 weaponGripPositionLocal={armourGripPositionLocal}
+                offhandWeaponUrl={armourOffhandGltfPath}
+                offhandWeaponAttachHand={armourOffhandAttachHand}
+                offhandBladeTwistRad={armourOffhandBladeTwistRad}
+                offhandExtraEulerRad={armourOffhandExtraEulerRad}
+                offhandGripPositionLocal={armourOffhandGripPositionLocal}
               />
               <PositionedGltfSubject
                 key={monsterGltfPath}
@@ -2288,6 +2440,13 @@ export function CombatScene3D({
               />
             </>
           )}
+          <CombatHitBloodFX
+            playerPosX={playerPosX}
+            monsterPosX={monsterPosX}
+            playerVisualState={playerVisualState}
+            monsterVisualState={monsterVisualState}
+            faceOffAnimationSyncKey={faceOffAnimationSyncKey}
+          />
           {strikePickActive && onStrikeTargetPick ? (
             <CombatStrikeZonePicker
               monsterRootRef={monsterHitRootRef}

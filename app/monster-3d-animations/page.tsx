@@ -26,12 +26,10 @@ function formatDraculaReferenceCell(state: Monster3DSpriteState) {
           color: "#c8b8d4",
         }}
       >
-        <strong style={{ color: "#ddb8c4" }}>Combat nuance:</strong> when{" "}
-        <code style={{ color: "#c4e8ff" }}>combatRecoveryPhase === &quot;ready&quot;</code> (wounded calm between strikes), 2D
-        still shows recover art but <code style={{ color: "#c4e8ff" }}>gltfVisualState</code> is <code>idle</code> — same{" "}
-        <code style={{ color: "#c4e8ff" }}>dracula.glb</code>, <strong>Idle_6</strong> while awaiting the next roll (
-        <code style={{ color: "#c4e8ff" }}>dracula3dAwaitingRollIdle</code> in <code style={{ color: "#c4e8ff" }}>LabyrinthGame</code>
-        ).
+        <strong style={{ color: "#ddb8c4" }}>Combat nuance:</strong> merged 3D{" "}
+        <code style={{ color: "#c4e8ff" }}>gltfVisualState</code> follows{" "}
+        <code style={{ color: "#c4e8ff" }}>headerMonsterCombatState</code> (e.g. <code>hunt</code> between rolls when surprise
+        stance is hunt) so hunt→strike crossfades work; 2D recover art can still differ when the header uses recover sprites.
       </p>
     ) : null;
 

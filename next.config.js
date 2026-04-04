@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const path = require("path");
+
 const itchExport = process.env.ITCH_EXPORT === "1";
 /**
  * Crazy Games **lite** HTML5 zip only (`npm run build:crazygames-lite`). Do not set for Vercel, dev, or itch.io.
@@ -22,6 +24,11 @@ const nextConfig = {
     : {}),
   webpack: (config, { dev }) => {
     if (dev) config.cache = false;
+    /** One `three` instance for app + @react-three/* + dice-box-threejs (avoids cross-realm Object3D / duplicate WebGL load). */
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      three: path.resolve(__dirname, "node_modules/three"),
+    };
     return config;
   },
 };

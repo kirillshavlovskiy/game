@@ -19,6 +19,8 @@ export const COLLECTIBLE_ARTIFACT_GLB_BY_KIND = {
 
 /** Same mechanics as holy sword / holy cross; each maps to its display GLB when equipped. */
 export const ARTIFACT_KIND_VISUAL_GLB: Partial<Record<StoredArtifactKind, string>> = {
+  /** Base shield stack artifact — same visual as warden shield pickup (off-hand in 3D). */
+  shield: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.wardShield,
   dragonFuryAxe: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.dragonFuryAxe,
   eternalFrostblade: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.eternalFrostblade,
   zweihandhammer: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.zweihandhammer,

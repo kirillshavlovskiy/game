@@ -2,12 +2,32 @@
  * Global defaults for `BoneAttachedWeapon` (combat 3D, maze ISO, labs).
  * Edit these to retune grip hand and sword aim without hunting through components.
  */
-import { PLAYER_ARMOUR_GLB_OPTIONS } from "./playerArmourGlbs";
+import { PLAYER_ARMOUR_GLB_OPTIONS, PLAYER_OFFHAND_ARMOUR_GLB_OPTIONS } from "./playerArmourGlbs";
 
 export type WeaponAttachHand = "left" | "right";
 
 /** Which hand bone receives the weapon GLB */
 export const WEAPON_ATTACH_HAND: WeaponAttachHand = "right";
+
+/** Roster shield GLBs (`PLAYER_OFFHAND_ARMOUR_GLB_OPTIONS`) — always **left** hand bone; overrides ignored in 3D. */
+const SHIELD_GLB_URL_SET: ReadonlySet<string> = new Set(
+  PLAYER_OFFHAND_ARMOUR_GLB_OPTIONS.map((o) => o.path),
+);
+
+export function isRigidShieldGlbUrl(weaponGltfUrl: string | null | undefined): boolean {
+  return !!weaponGltfUrl && SHIELD_GLB_URL_SET.has(weaponGltfUrl);
+}
+
+/** Uses optional `attachHand` on `PLAYER_ARMOUR_GLB_OPTIONS` (e.g. shields → left). */
+export function resolveWeaponAttachHand(weaponGltfUrl: string | null | undefined): WeaponAttachHand {
+  if (!weaponGltfUrl) return WEAPON_ATTACH_HAND;
+  if (SHIELD_GLB_URL_SET.has(weaponGltfUrl)) return "left";
+  for (const o of PLAYER_ARMOUR_GLB_OPTIONS) {
+    if (o.path !== weaponGltfUrl) continue;
+    if ("attachHand" in o && o.attachHand) return o.attachHand;
+  }
+  return WEAPON_ATTACH_HAND;
+}
 
 /**
  * Twist around the weapon mesh long axis (radians), hand-bone local — rigid attach.
@@ -49,9 +69,15 @@ export const WEAPON_ATTACH_ROSTER_TARGET_WORLD_LEN = 0.64;
 /** Fraction along the longest bbox axis from the chosen “handle” end toward the blade (0 = end, 1 = other end). */
 export const WEAPON_ATTACH_GRIP_FRACTION_FROM_AXIS_END = 0.12;
 
-const WEAPON_ATTACH_TARGET_WORLD_LEN_BY_URL: Readonly<Record<string, number>> = Object.fromEntries(
-  PLAYER_ARMOUR_GLB_OPTIONS.map((o) => [o.path, WEAPON_ATTACH_ROSTER_TARGET_WORLD_LEN]),
-) as Readonly<Record<string, number>>;
+const WEAPON_ATTACH_TARGET_WORLD_LEN_BY_URL: Readonly<Record<string, number>> = {
+  ...(Object.fromEntries(
+    PLAYER_ARMOUR_GLB_OPTIONS.map((o) => [o.path, WEAPON_ATTACH_ROSTER_TARGET_WORLD_LEN]),
+  ) as Readonly<Record<string, number>>),
+  /** Roman Gladius — short mesh at roster scale; bump longest-edge target vs `WEAPON_ATTACH_ROSTER_TARGET_WORLD_LEN`. */
+  "/models/armour/Meshy_AI_Decorative_Roman_Glad_0329003212_texture.glb": 0.8,
+  /** Eternal Frostblade — reads small at roster scale; nudge longest-edge target up. */
+  "/models/armour/Meshy_AI_Eternal_Frostblade_0403174010_texture.glb": 0.78,
+};
 
 export function resolveWeaponAttachTargetWorldLen(weaponGltfUrl: string): number {
   return WEAPON_ATTACH_TARGET_WORLD_LEN_BY_URL[weaponGltfUrl] ?? WEAPON_ATTACH_TARGET_WORLD_LEN_DEFAULT;
@@ -62,6 +88,13 @@ export type WeaponAttachPosePartial = {
   gripPositionLocal?: readonly [number, number, number];
   extraEulerRad?: readonly [number, number, number];
   bladeTwistRad?: number;
+};
+
+/** Shared off-hand shield attach (tuned on Azure Dragon) — all roster shield GLBs until a mesh needs its own entry. */
+const PLAYER_OFFHAND_SHIELD_ROSTER_POSE: WeaponAttachPosePartial = {
+  gripPositionLocal: [0.336, 0.086, 0.042],
+  extraEulerRad: [3.839724354387525, 0.2617993877991494, 1.4835298641951802],
+  bladeTwistRad: 0,
 };
 
 /** Per-weapon grip + Euler + twist when a mesh needs different numbers than the global defaults. */
@@ -84,6 +117,18 @@ const WEAPON_ATTACH_POSE_BY_URL: Readonly<Record<string, WeaponAttachPosePartial
     extraEulerRad: [-0.4363323129985824, 0.3665191429188092, -1.3962634015954636],
     bladeTwistRad: 0,
   },
+  /** Eternal Frostblade — attach fix; 180° blade twist (π rad); scale in `WEAPON_ATTACH_TARGET_WORLD_LEN_BY_URL` */
+  "/models/armour/Meshy_AI_Eternal_Frostblade_0403174010_texture.glb": {
+    gripPositionLocal: [-0.007, 0.075, 0.034],
+    extraEulerRad: [0.08726646259971647, 0.4363323129985824, 1.3962634015954636],
+    bladeTwistRad: Math.PI,
+  },
+  /** Roman Gladius (Decorative) */
+  "/models/armour/Meshy_AI_Decorative_Roman_Glad_0329003212_texture.glb": {
+    gripPositionLocal: [0.5, -0.03, -0.212],
+    extraEulerRad: [1.3089969389957472, -0.08726646259971647, 2.6179938779914944],
+    bladeTwistRad: 0,
+  },
   /** Elfic Blade (Luminous) — grip/Euler fix */
   "/models/armour/Meshy_AI_Luminous_Elfic_Blade_0329003430_texture.glb": {
     gripPositionLocal: [-0.044, 0.06, 0.038],
@@ -101,6 +146,32 @@ const WEAPON_ATTACH_POSE_BY_URL: Readonly<Record<string, WeaponAttachPosePartial
     gripPositionLocal: [0.274, 0.08, -0.266],
     extraEulerRad: [-0.4363323129985824, 0.7853981633974483, 1.5707963267948966],
     bladeTwistRad: Math.PI,
+  },
+  /** Dragon Fury Axe — 180° blade twist (π rad) */
+  "/models/armour/Meshy_AI_Dragon_Fury_Axe_0403170000_texture.glb": {
+    gripPositionLocal: [0.419, 0.093, 0.044],
+    extraEulerRad: [-0.7853981633974483, 0, 1.4835298641951802],
+    bladeTwistRad: Math.PI,
+  },
+  /** Zweihandhammer — grip/Euler fix, 180° blade twist (π rad) */
+  "/models/armour/Meshy_AI_Zweihandhammer_Doppe_0403170009_texture.glb": {
+    gripPositionLocal: [-0.073, 0.065, 0.035],
+    extraEulerRad: [-0.17453292519943295, 0, 1.4835298641951802],
+    bladeTwistRad: Math.PI,
+  },
+  /** Azure Dragon Shield — off-hand roster */
+  "/models/armour/Meshy_AI_Azure_Dragon_Shield_0403173852_texture.glb": { ...PLAYER_OFFHAND_SHIELD_ROSTER_POSE },
+  /** Nordic Shield — per-mesh grip / Euler */
+  "/models/armour/Meshy_AI_Nordic_Shield_Design__0403170042_texture.glb": {
+    gripPositionLocal: [0.002, 0.332, -0.01],
+    extraEulerRad: [3.3161255787892263, 0.4363323129985824, 1.4835298641951802],
+    bladeTwistRad: 0,
+  },
+  /** Warden Shield — per-mesh grip / Euler */
+  "/models/armour/Meshy_AI_shield_0403170046_texture.glb": {
+    gripPositionLocal: [-0.208, 0.044, -0.14],
+    extraEulerRad: [3.4033920413889422, 0.4363323129985824, 1.5707963267948966],
+    bladeTwistRad: 0,
   },
 };
 

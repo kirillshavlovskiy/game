@@ -94,11 +94,9 @@ import {
 } from "@/lib/monsterModels3d";
 import {
   NO_PLAYER_ARMOUR_GLB as NO_ARMOUR_SENTINEL,
-  PLAYER_ARMOUR_GLB_OPTIONS as ARMOUR_OPTIONS,
+  PLAYER_OFFHAND_ARMOUR_GLB_OPTIONS as OFFHAND_ARMOUR_OPTIONS,
+  PLAYER_WEAPON_GLB_OPTIONS as WEAPON_OPTIONS,
 } from "@/lib/playerArmourGlbs";
-import {
-  WEAPON_ATTACH_HAND,
-} from "@/lib/weaponAttachConfig";
 import { resolveCombat3dClipLeads } from "@/lib/combat3dContact";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import MazeIsoView, {
@@ -628,7 +626,7 @@ const MAGIC_TELEPORT_PICKER_OPTIONS = 20;
 /** If the destination picker stays open this long without a tap — only when you still have moves left (not last move). Last move: no auto-pick. */
 const MAGIC_TELEPORT_PICK_IDLE_MS = 5000;
 
-/** Spider web: same asset as ArtifactIcon web variant */
+/** Spider web: 2D grid / artifact icon — same asset as `ArtifactIcon` web variant */
 const SPIDER_WEB_SPRITE = "artifacts/spider web.PNG";
 
 function storedArtifactCount(
@@ -694,6 +692,18 @@ function hasCombatVisibleStoredArtifacts(
   return STORED_ARTIFACT_ORDER.some(
     (k) => !isStoredArtifactMazePhaseOnly(k) && storedArtifactCount(p, k) > 0
   );
+}
+
+/** Off-hand shield GLB: explicit picker slot, else unspent shield artifacts (starter shield visible on player). */
+function playerOffhandArmourGltfEffective(
+  player: Parameters<typeof storedArtifactCount>[0],
+  pickedSlot: string | undefined
+): string | null {
+  if (pickedSlot && pickedSlot !== NO_ARMOUR_SENTINEL) return pickedSlot;
+  if (player && storedArtifactCount(player, "shield") > 0) {
+    return ARTIFACT_KIND_VISUAL_GLB.shield ?? null;
+  }
+  return null;
 }
 
 function dockActionIconVariant(id: MobileDockAction): ArtifactIconVariant {
@@ -3031,12 +3041,15 @@ export default function LabyrinthGame() {
     playerIndex: number;
     monsterType: MonsterType;
     monsterIndex: number;
+    /** Monotonic per encounter — same playerIndex/monsterIndex after a kill can repeat; init + 3D key use this. */
+    sessionId: number;
     prevX?: number;
     prevY?: number;
     /** Monster cell before ambush — same math as prevX/Y for pass-through flee, without breaking skeleton shield (player prev). */
     approachX?: number;
     approachY?: number;
   } | null>(null);
+  const combatEncounterSerialRef = useRef(0);
   const [pendingCombatOffer, setPendingCombatOffer] = useState<PendingCombatOffer | null>(null);
   const pendingCombatOfferRef = useRef<PendingCombatOffer | null>(null);
   const [combatResult, setCombatResult] = useState<
@@ -3196,8 +3209,11 @@ export default function LabyrinthGame() {
         : PLAYER_AVATARS[i % PLAYER_AVATARS.length]
     )
   );
-  const [playerArmour, setPlayerArmour] = useState<string[]>(() =>
-    Array.from({ length: 10 }, (_, i) => ARMOUR_OPTIONS[i % ARMOUR_OPTIONS.length]!.path)
+  const [playerWeaponGlb, setPlayerWeaponGlb] = useState<string[]>(() =>
+    Array.from({ length: 10 }, (_, i) => WEAPON_OPTIONS[i % WEAPON_OPTIONS.length]!.path),
+  );
+  const [playerOffhandArmourGlb, setPlayerOffhandArmourGlb] = useState<string[]>(() =>
+    Array.from({ length: 10 }, () => NO_ARMOUR_SENTINEL),
   );
   const diceRef = useRef<Dice3DRef>(null);
   const combatDiceRef = useRef<Dice3DRef>(null);
@@ -3847,9 +3863,14 @@ export default function LabyrinthGame() {
       prevCombatKeyRef.current = null;
       return;
     }
-    const key = `${combatState.playerIndex}-${combatState.monsterIndex}`;
+    const key = `${combatState.playerIndex}-${combatState.monsterIndex}-${combatState.monsterType}-${combatState.sessionId}`;
     if (prevCombatKeyRef.current === key) return;
     prevCombatKeyRef.current = key;
+    if (strikeLabCommitTimerRef.current != null) {
+      clearTimeout(strikeLabCommitTimerRef.current);
+      strikeLabCommitTimerRef.current = null;
+    }
+    setCombatStrikeHpHold(null);
     setRolling(false); // Ensure not stuck in "Rolling..." when combat opens
     combatDiceRerollReservedRef.current = false;
     setCombatDiceRerollReserved(false);
@@ -3857,6 +3878,13 @@ export default function LabyrinthGame() {
     pendingArtifactRerollRef.current = null;
     setCombatArtifactRerollPrompt(false);
     combatHasRolledRef.current = false;
+    combatStrikeTargetDuringRollRef.current = null;
+    combatStrikeDiceOutcomeKnownRef.current = false;
+    lastCombatRecoveryClipFinishMs.current = 0;
+    setCombatFooterSnapshot(null);
+    setCombatRecoveryPhase("ready");
+    setIsoCombatRollFace(null);
+    setIsoCombatPlayerCue(null);
     const stance = rollCombatSurprise();
     combatSurpriseRef.current = stance;
     setCombatMonsterStance(stance);
@@ -4430,6 +4458,12 @@ export default function LabyrinthGame() {
       const result = resolveResult;
       const combat = c;
       const p = pl;
+      /** Stale staggered `flushCombatLab` after combat end / new encounter / HMR must not mutate `lab` or call `runAfterLabCommit`. */
+      const encounterFlushGuard = {
+        sessionId: combat.sessionId,
+        playerIndex: combat.playerIndex,
+        monsterIndex: combat.monsterIndex,
+      } as const;
       /** Do not setRolling(false) before flushSync(setLab) — one frame would show rolling=false with stale monster HP (idle at full) then recover after lab updates. */
       combatContinuesAfterRollRef.current = false;
       let shieldAbsorbedFlag = false;
@@ -4727,6 +4761,31 @@ export default function LabyrinthGame() {
       };
 
       const flushCombatLab = () => {
+        const liveCombat = combatStateRef.current;
+        if (
+          !liveCombat ||
+          liveCombat.sessionId !== encounterFlushGuard.sessionId ||
+          liveCombat.playerIndex !== encounterFlushGuard.playerIndex ||
+          liveCombat.monsterIndex !== encounterFlushGuard.monsterIndex
+        ) {
+          combatLog("flushCombatLab: ABORT — encounter mismatch or combat closed (stale stagger/HMR)", {
+            expected: encounterFlushGuard,
+            live: liveCombat
+              ? {
+                  sessionId: liveCombat.sessionId,
+                  playerIndex: liveCombat.playerIndex,
+                  monsterIndex: liveCombat.monsterIndex,
+                }
+              : null,
+          });
+          if (strikeLabCommitTimerRef.current != null) {
+            clearTimeout(strikeLabCommitTimerRef.current);
+            strikeLabCommitTimerRef.current = null;
+          }
+          setCombatStrikeHpHold(null);
+          setRolling(false);
+          return;
+        }
       flushSync(() => {
         pendingPlayerDamageHighlightIndexRef.current = null;
       setLab((prev) => {
@@ -5225,24 +5284,30 @@ export default function LabyrinthGame() {
     return () => clearTimeout(t);
   }, [combatToast]);
 
+  const combatMonsterHintEffectKey = combatState
+    ? `${combatState.monsterIndex}-${combatState.monsterType}`
+    : "";
   useEffect(() => {
-    if (!combatState) return;
+    if (!combatMonsterHintEffectKey) return;
     setCombatMonsterHintOpen(false);
     setCombatAutoHintVisible(true);
-  }, [combatState?.monsterIndex, combatState?.monsterType]);
+  }, [combatMonsterHintEffectKey]);
 
-  /** New encounter or combat closed — reset last strike d6 (same fight keeps value across rolls). */
+  /** New encounter or combat closed — reset last strike d6 (same fight keeps value across rolls). Single dep avoids Fast Refresh "dependency array changed size" warnings. */
+  const lastStrikeDiceEncounterKey = combatState
+    ? `${combatState.sessionId}:${combatState.playerIndex}:${combatState.monsterIndex}:${combatState.monsterType}`
+    : "";
   useEffect(() => {
-    if (!combatState) {
-      setLastCombatStrikeDiceFace(null);
-      return;
-    }
     setLastCombatStrikeDiceFace(null);
-  }, [combatState?.playerIndex, combatState?.monsterIndex, combatState?.monsterType]);
+  }, [lastStrikeDiceEncounterKey]);
 
+  const bonusLootOptionsFingerprint =
+    combatResult?.bonusRewardOptions != null && combatResult.bonusRewardOptions.length > 0
+      ? JSON.stringify(combatResult.bonusRewardOptions)
+      : "";
   useEffect(() => {
     setBonusLootSelectedIndex(0);
-  }, [combatResult?.bonusRewardOptions]);
+  }, [bonusLootOptionsFingerprint]);
 
   const handlePickCombatBonusReward = useCallback(
     (pi: number, monsterType: MonsterType, chosen: MonsterBonusReward | "skip") => {
@@ -5876,6 +5941,14 @@ export default function LabyrinthGame() {
         p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
         p.shield = (p.shield ?? 0) + 1;
         setShieldGained(true);
+        const equipShieldUrl = ARTIFACT_KIND_VISUAL_GLB.shield;
+        if (equipShieldUrl) {
+          setPlayerOffhandArmourGlb((prev) => {
+            const arr = [...prev];
+            if (currentPlayer >= 0 && currentPlayer < arr.length) arr[currentPlayer] = equipShieldUrl;
+            return arr;
+          });
+        }
         if (inCombat) {
           combatUseShieldRef.current = true;
           setCombatUseShield(true);
@@ -5927,7 +6000,7 @@ export default function LabyrinthGame() {
         p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
         const equipUrl = ARTIFACT_KIND_VISUAL_GLB[type];
         if (equipUrl) {
-          setPlayerArmour((prev) => {
+          setPlayerWeaponGlb((prev) => {
             const arr = [...prev];
             if (currentPlayer >= 0 && currentPlayer < arr.length) arr[currentPlayer] = equipUrl;
             return arr;
@@ -5961,7 +6034,7 @@ export default function LabyrinthGame() {
         p.artifacts = Math.max(0, (p.artifacts ?? 0) - 1);
         const equipDefUrl = ARTIFACT_KIND_VISUAL_GLB[type];
         if (equipDefUrl) {
-          setPlayerArmour((prev) => {
+          setPlayerOffhandArmourGlb((prev) => {
             const arr = [...prev];
             if (currentPlayer >= 0 && currentPlayer < arr.length) arr[currentPlayer] = equipDefUrl;
             return arr;
@@ -5976,7 +6049,7 @@ export default function LabyrinthGame() {
       }
       setLab(next);
     },
-    [lab, winner, currentPlayer, setCombatUseDiceBonus, setCombatUseShield, setPlayerArmour]
+    [lab, winner, currentPlayer, setCombatUseDiceBonus, setCombatUseShield, setPlayerWeaponGlb, setPlayerOffhandArmourGlb]
   );
 
   const applyMobileDockSelection = useCallback(() => {
@@ -7328,10 +7401,13 @@ export default function LabyrinthGame() {
         });
       });
     }
+    combatEncounterSerialRef.current += 1;
+    const sessionId = combatEncounterSerialRef.current;
     setCombatState({
       playerIndex: o.playerIndex,
       monsterType: o.monsterType,
       monsterIndex: o.monsterIndex,
+      sessionId,
       ...(o.source === "player" && o.prevX !== undefined && o.prevY !== undefined
         ? { prevX: o.prevX, prevY: o.prevY }
         : {}),
@@ -7868,18 +7944,20 @@ export default function LabyrinthGame() {
               }}
             >
               <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>
-                Weapon selection <span style={{ opacity: 0.75, fontWeight: 500 }}>(per player)</span>
+                {"Weapon & armour "}
+                <span style={{ opacity: 0.75, fontWeight: 500 }}>(per player — combine freely)</span>
               </label>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
                   <div
-                    key={`armour-${i}`}
+                    key={`equip-${i}`}
                     style={{
                       display: "flex",
-                      flexDirection: isMobile ? "column" : "row",
-                      alignItems: isMobile ? "stretch" : "center",
-                      gap: isMobile ? 6 : 10,
+                      flexDirection: "column",
+                      gap: 6,
                       width: "100%",
+                      padding: "6px 0",
+                      borderBottom: i < numPlayers - 1 ? "1px solid rgba(255,255,255,0.06)" : undefined,
                     }}
                   >
                     <span
@@ -7887,8 +7965,6 @@ export default function LabyrinthGame() {
                         color: PLAYER_COLORS[i] ?? "#ecc0b0",
                         fontSize: "0.82rem",
                         fontWeight: 600,
-                        minWidth: 72,
-                        flexShrink: 0,
                       }}
                     >
                       {(playerNames[i] ?? `P${i + 1}`).slice(0, 10)}
@@ -7896,55 +7972,40 @@ export default function LabyrinthGame() {
                     <div
                       style={{
                         display: "flex",
-                        flexWrap: "wrap",
-                        gap: 4,
-                        flex: 1,
+                        flexDirection: isMobile ? "column" : "row",
+                        alignItems: isMobile ? "stretch" : "flex-start",
+                        gap: isMobile ? 4 : 8,
+                        width: "100%",
                       }}
                     >
-                      <button
-                        type="button"
-                        className="start-menu-avatar-btn"
-                        onClick={() => {
-                          setPlayerArmour((prev) => {
-                            const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => ARMOUR_OPTIONS[j % ARMOUR_OPTIONS.length]!.path)];
-                            next[i] = NO_ARMOUR_SENTINEL;
-                            return next;
-                          });
-                        }}
+                      <span
                         style={{
-                          height: 32,
-                          padding: "0 8px",
-                          lineHeight: 1,
-                          border:
-                            (playerArmour[i] ?? ARMOUR_OPTIONS[0]!.path) === NO_ARMOUR_SENTINEL
-                              ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
-                              : `1px solid ${START_MENU_BORDER_MUTE}`,
-                          borderRadius: 6,
-                          background:
-                            (playerArmour[i] ?? ARMOUR_OPTIONS[0]!.path) === NO_ARMOUR_SENTINEL
-                              ? START_MENU_SELECTED_FILL
-                              : START_MENU_CTRL_BG,
-                          cursor: "pointer",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: "0.72rem",
-                          color: "#c9a090",
-                          whiteSpace: "nowrap",
+                          fontSize: "0.7rem",
+                          color: "#8a7a72",
+                          minWidth: isMobile ? undefined : 52,
+                          paddingTop: isMobile ? 0 : 6,
+                          flexShrink: 0,
                         }}
                       >
-                        None
-                      </button>
-                      {ARMOUR_OPTIONS.map((a) => (
+                        Weapon
+                      </span>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flex: 1 }}>
                         <button
-                          key={a.path}
                           type="button"
-                          title={a.label}
                           className="start-menu-avatar-btn"
                           onClick={() => {
-                            setPlayerArmour((prev) => {
-                              const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => ARMOUR_OPTIONS[j % ARMOUR_OPTIONS.length]!.path)];
-                              next[i] = a.path;
+                            setPlayerWeaponGlb((prev) => {
+                              const next =
+                                prev.length >= numPlayers
+                                  ? [...prev]
+                                  : [
+                                      ...prev,
+                                      ...Array.from(
+                                        { length: numPlayers - prev.length },
+                                        (_, j) => WEAPON_OPTIONS[j % WEAPON_OPTIONS.length]!.path,
+                                      ),
+                                    ];
+                              next[i] = NO_ARMOUR_SENTINEL;
                               return next;
                             });
                           }}
@@ -7953,27 +8014,176 @@ export default function LabyrinthGame() {
                             padding: "0 8px",
                             lineHeight: 1,
                             border:
-                              (playerArmour[i] ?? ARMOUR_OPTIONS[0]!.path) === a.path
+                              (playerWeaponGlb[i] ?? WEAPON_OPTIONS[0]!.path) === NO_ARMOUR_SENTINEL
                                 ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
                                 : `1px solid ${START_MENU_BORDER_MUTE}`,
                             borderRadius: 6,
                             background:
-                              (playerArmour[i] ?? ARMOUR_OPTIONS[0]!.path) === a.path
+                              (playerWeaponGlb[i] ?? WEAPON_OPTIONS[0]!.path) === NO_ARMOUR_SENTINEL
                                 ? START_MENU_SELECTED_FILL
                                 : START_MENU_CTRL_BG,
                             cursor: "pointer",
                             display: "inline-flex",
                             alignItems: "center",
-                            gap: 4,
+                            justifyContent: "center",
                             fontSize: "0.72rem",
-                            color: "#ecc0b0",
+                            color: "#c9a090",
                             whiteSpace: "nowrap",
                           }}
                         >
-                          <span>{a.emoji}</span>
-                          <span>{a.label}</span>
+                          None
                         </button>
-                      ))}
+                        {WEAPON_OPTIONS.map((a) => (
+                          <button
+                            key={a.path}
+                            type="button"
+                            title={a.label}
+                            className="start-menu-avatar-btn"
+                            onClick={() => {
+                              setPlayerWeaponGlb((prev) => {
+                                const next =
+                                  prev.length >= numPlayers
+                                    ? [...prev]
+                                    : [
+                                        ...prev,
+                                        ...Array.from(
+                                          { length: numPlayers - prev.length },
+                                          (_, j) => WEAPON_OPTIONS[j % WEAPON_OPTIONS.length]!.path,
+                                        ),
+                                      ];
+                                next[i] = a.path;
+                                return next;
+                              });
+                            }}
+                            style={{
+                              height: 32,
+                              padding: "0 8px",
+                              lineHeight: 1,
+                              border:
+                                (playerWeaponGlb[i] ?? WEAPON_OPTIONS[0]!.path) === a.path
+                                  ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
+                                  : `1px solid ${START_MENU_BORDER_MUTE}`,
+                              borderRadius: 6,
+                              background:
+                                (playerWeaponGlb[i] ?? WEAPON_OPTIONS[0]!.path) === a.path
+                                  ? START_MENU_SELECTED_FILL
+                                  : START_MENU_CTRL_BG,
+                              cursor: "pointer",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              fontSize: "0.72rem",
+                              color: "#ecc0b0",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            <span>{a.emoji}</span>
+                            <span>{a.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: isMobile ? "column" : "row",
+                        alignItems: isMobile ? "stretch" : "flex-start",
+                        gap: isMobile ? 4 : 8,
+                        width: "100%",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: "0.7rem",
+                          color: "#8a7a72",
+                          minWidth: isMobile ? undefined : 52,
+                          paddingTop: isMobile ? 0 : 6,
+                          flexShrink: 0,
+                        }}
+                      >
+                        Armour
+                      </span>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flex: 1 }}>
+                        <button
+                          type="button"
+                          className="start-menu-avatar-btn"
+                          onClick={() => {
+                            setPlayerOffhandArmourGlb((prev) => {
+                              const next =
+                                prev.length >= numPlayers
+                                  ? [...prev]
+                                  : [...prev, ...Array.from({ length: numPlayers - prev.length }, () => NO_ARMOUR_SENTINEL)];
+                              next[i] = NO_ARMOUR_SENTINEL;
+                              return next;
+                            });
+                          }}
+                          style={{
+                            height: 32,
+                            padding: "0 8px",
+                            lineHeight: 1,
+                            border:
+                              (playerOffhandArmourGlb[i] ?? NO_ARMOUR_SENTINEL) === NO_ARMOUR_SENTINEL
+                                ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
+                                : `1px solid ${START_MENU_BORDER_MUTE}`,
+                            borderRadius: 6,
+                            background:
+                              (playerOffhandArmourGlb[i] ?? NO_ARMOUR_SENTINEL) === NO_ARMOUR_SENTINEL
+                                ? START_MENU_SELECTED_FILL
+                                : START_MENU_CTRL_BG,
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: "0.72rem",
+                            color: "#c9a090",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          None
+                        </button>
+                        {OFFHAND_ARMOUR_OPTIONS.map((a) => (
+                          <button
+                            key={a.path}
+                            type="button"
+                            title={a.label}
+                            className="start-menu-avatar-btn"
+                            onClick={() => {
+                              setPlayerOffhandArmourGlb((prev) => {
+                                const next =
+                                  prev.length >= numPlayers
+                                    ? [...prev]
+                                    : [...prev, ...Array.from({ length: numPlayers - prev.length }, () => NO_ARMOUR_SENTINEL)];
+                                next[i] = a.path;
+                                return next;
+                              });
+                            }}
+                            style={{
+                              height: 32,
+                              padding: "0 8px",
+                              lineHeight: 1,
+                              border:
+                                (playerOffhandArmourGlb[i] ?? NO_ARMOUR_SENTINEL) === a.path
+                                  ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
+                                  : `1px solid ${START_MENU_BORDER_MUTE}`,
+                              borderRadius: 6,
+                              background:
+                                (playerOffhandArmourGlb[i] ?? NO_ARMOUR_SENTINEL) === a.path
+                                  ? START_MENU_SELECTED_FILL
+                                  : START_MENU_CTRL_BG,
+                              cursor: "pointer",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              fontSize: "0.72rem",
+                              color: "#ecc0b0",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            <span>{a.emoji}</span>
+                            <span>{a.label}</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -9837,24 +10047,12 @@ export default function LabyrinthGame() {
                     COMBAT_3D_FALLBACK_TRANSPARENT_PX
                   : COMBAT_3D_FALLBACK_TRANSPARENT_PX;
 
-              const dracula3dAwaitingRollIdle =
-                (headerMt === "V" ||
-                  headerMt === "K" ||
-                  headerMt === "Z" ||
-                  headerMt === "G" ||
-                  headerMt === "S" ||
-                  headerMt === "L" ||
-                  headerMt === "O") &&
-                isMonster3DEnabled() &&
-                inActiveFight &&
-                !rolling &&
-                !combatResult &&
-                combatRecoveryPhase === "ready" &&
-                headerMonsterCombatState !== "defeated";
-              /** Ghost / lava: merged calm uses `hunt` locomotion lists (walk/run). In combat, keep them on true idle clips like other Meshy rigs. */
-              const gltfVisualStateBase: MonsterSpriteState = dracula3dAwaitingRollIdle
-                ? "idle"
-                : headerMonsterCombatState;
+              /**
+               * Merged 3D must follow `headerMonsterCombatState` between rolls (usually `hunt` from surprise stance).
+               * Forcing `idle` here made the player/monster snap from static idle into hurt/attack with no hunt→strike
+               * crossfade — reads as “frozen until hit”. 2D header sprites still use the same `headerMonsterCombatState`.
+               */
+              const gltfVisualStateBase: MonsterSpriteState = headerMonsterCombatState;
               const gltfVisualState: MonsterSpriteState =
                 inActiveFight &&
                 isMonster3DEnabled() &&
@@ -9869,15 +10067,18 @@ export default function LabyrinthGame() {
                     })
                   : null;
               /** Same player index as `combatPlayerGlb` / portraits — must stay defined after `setCombatState(null)` while `combatResult` (e.g. bonus loot) keeps the modal open. */
-              const combatArmourPath = (() => {
-                const a = playerArmour[headerPi];
+              const combatWeaponPath = (() => {
+                const a = playerWeaponGlb[headerPi];
                 return a && a !== NO_ARMOUR_SENTINEL ? a : null;
               })();
+                const combatOffhandArmourPath = playerOffhandArmourGltfEffective(
+                labForCombatFaceoff?.players[headerPi],
+                playerOffhandArmourGlb[headerPi]
+              );
               const combatPlayerGlb = getPlayer3DGlb(playerAvatars[headerPi]);
 
               const playerGltfVisualState: MonsterSpriteState = (() => {
                 if (combatResult?.playerDefeated && !combatState) return "defeated";
-                if (dracula3dAwaitingRollIdle) return "idle";
                 switch (gltfVisualState) {
                   case "attack": return "hurt";
                   case "angry": return "knockdown";
@@ -9992,6 +10193,7 @@ export default function LabyrinthGame() {
                 isDracula3dCombatPortrait ? combat3dClipLeads.meshyMonsterHuntToAttackCrossfadeSec : undefined;
               const monsterHurtClipStartTimeSecFor3d = combat3dClipLeads.meshyMonsterHurtLeadInSec;
               const playerHurtClipStartTimeSecFor3d = combat3dClipLeads.meshyPlayerHurtLeadInSec;
+              const playerHurtHandoffCrossfadeSecFor3d = combat3dClipLeads.meshyPlayerHurtHandoffCrossfadeSec;
               const draculaHurtStrikeZoneFor3d: StrikeTarget | undefined =
                 isDracula3dCombatPortrait &&
                 (gltfVisualState === "hurt" || gltfVisualState === "recover") &&
@@ -10041,7 +10243,11 @@ export default function LabyrinthGame() {
                   ? handleCombatRecoveryClipFinished
                   : undefined;
               const combat3dInstanceKey =
-                headerMt != null ? `c3d-h-${headerPi}-${headerMt}` : "c3d";
+                combatState != null && headerMt != null
+                  ? `c3d-${combatState.sessionId}-${combatState.monsterIndex}-${headerMt}-${headerPi}`
+                  : headerMt != null
+                    ? `c3d-post-${headerPi}-${headerMt}`
+                    : "c3d";
               let monsterMaxHp = 1;
               let monsterCurHp = 1;
               if (headerMt) {
@@ -10250,9 +10456,11 @@ export default function LabyrinthGame() {
                 const pi = combatState.playerIndex;
                 const cp = lab.players[pi] ?? lab.players[headerPi];
                 if (combatArtifactRerollPrompt) return null;
-                const hasShield = cp ? (cp.shield ?? 0) > 0 : false;
+                const hasShieldCombatSkill = cp
+                  ? (cp.shield ?? 0) > 0 || (cp.artifactShield ?? 0) > 0
+                  : false;
                 const hasStored = hasCombatVisibleStoredArtifacts(cp);
-                const hasSkillRow = hasShield || hasStored;
+                const hasSkillRow = hasShieldCombatSkill || hasStored;
                 return (
                   <div
                     style={{
@@ -10290,20 +10498,32 @@ export default function LabyrinthGame() {
                     >
                       {hasSkillRow ? (
                         <>
-                          {hasShield && (
+                          {hasShieldCombatSkill && (
                             <CombatSkillItemIcon
-                              mode="toggle"
+                              mode={(cp.shield ?? 0) > 0 ? "toggle" : "consume"}
                               variant="shield"
                               selected={combatUseShield}
                               disabled={rolling || combatArtifactRerollPrompt || combatStrikeLabPending}
-                              onClick={() => !rolling && !combatArtifactRerollPrompt && setCombatUseShield((v) => !v)}
-                              title="Shield: tap to use / not use on this roll (blocks damage if you lose)"
+                              onClick={() => {
+                                if (rolling || combatArtifactRerollPrompt || combatStrikeLabPending) return;
+                                if ((cp.shield ?? 0) > 0) {
+                                  setCombatUseShield((v) => !v);
+                                } else {
+                                  handleUseArtifact("shield");
+                                }
+                              }}
+                              title={
+                                (cp.shield ?? 0) > 0
+                                  ? "Shield: tap to use / not use on this roll (blocks damage if you lose)"
+                                  : "Spend shield artifact: +1 block charge, then you can toggle shield on/off each roll"
+                              }
                             />
                           )}
                           {STORED_ARTIFACT_ORDER.map((kind) => {
                             const n = storedArtifactCount(cp, kind);
                             if (n <= 0) return null;
                             if (isStoredArtifactMazePhaseOnly(kind)) return null;
+                            if (kind === "shield") return null;
                             if (kind === "dice") {
                               return (
                                 <CombatSkillItemIcon
@@ -10314,19 +10534,6 @@ export default function LabyrinthGame() {
                                   disabled={rolling || combatArtifactRerollPrompt || combatStrikeLabPending}
                                   onClick={() => !rolling && !combatArtifactRerollPrompt && handleCombatDiceArtifactRerollToggle()}
                                   title={`${STORED_ARTIFACT_LINE.dice} — before you roll: tap to mark a reroll. After the roll, choose whether to spend 1 dice artifact for a second strike roll (only that reroll).`}
-                                  stackCount={n}
-                                />
-                              );
-                            }
-                            if (kind === "shield") {
-                              return (
-                                <CombatSkillItemIcon
-                                  key={kind}
-                                  mode="consume"
-                                  variant="shield"
-                                  disabled={rolling}
-                                  onClick={() => !rolling && handleUseArtifact("shield")}
-                                  title={`${STORED_ARTIFACT_LINE.shield}. ${STORED_ARTIFACT_TOOLTIP.shield}`}
                                   stackCount={n}
                                 />
                               );
@@ -10549,8 +10756,8 @@ export default function LabyrinthGame() {
                           key={combat3dInstanceKey}
                           monsterGltfPath={monsterGltfPath}
                           playerGltfPath={combatPlayerGlb}
-                          armourGltfPath={combatArmourPath}
-                          armourAttachHand={WEAPON_ATTACH_HAND}
+                          armourGltfPath={combatWeaponPath}
+                          armourOffhandGltfPath={combatOffhandArmourPath}
                           monsterVisualState={gltfVisualState}
                           playerVisualState={playerGltfVisualState}
                           monsterType={headerMt}
@@ -10559,6 +10766,7 @@ export default function LabyrinthGame() {
                           playerFatalJumpKill={playerFatalJumpKill3d}
                           playerHurtAnimContext={playerHurtAnimContextFor3d}
                           playerHurtClipStartTimeSec={playerHurtClipStartTimeSecFor3d}
+                          playerHurtHandoffCrossfadeSec={playerHurtHandoffCrossfadeSecFor3d}
                           playerAttackClipLeadInSec={playerAttackClipLeadInSecFor3d}
                           playerAttackClipCycleIndex={playerAttackClipCycleIndexFor3d}
                           playerLocomotionToAttackCrossfadeSec={playerLocomotionToAttackCrossfadeSecFor3d}
@@ -11380,8 +11588,8 @@ export default function LabyrinthGame() {
                             key={combat3dInstanceKey}
                             monsterGltfPath={monsterGltfPath}
                             playerGltfPath={combatPlayerGlb}
-                            armourGltfPath={combatArmourPath}
-                            armourAttachHand={WEAPON_ATTACH_HAND}
+                            armourGltfPath={combatWeaponPath}
+                            armourOffhandGltfPath={combatOffhandArmourPath}
                             monsterVisualState={gltfVisualState}
                             playerVisualState={playerGltfVisualState}
                             monsterType={headerMt}
@@ -11390,6 +11598,7 @@ export default function LabyrinthGame() {
                             playerFatalJumpKill={playerFatalJumpKill3d}
                             playerHurtAnimContext={playerHurtAnimContextFor3d}
                             playerHurtClipStartTimeSec={playerHurtClipStartTimeSecFor3d}
+                            playerHurtHandoffCrossfadeSec={playerHurtHandoffCrossfadeSecFor3d}
                             playerAttackClipLeadInSec={playerAttackClipLeadInSecFor3d}
                             playerAttackClipCycleIndex={playerAttackClipCycleIndexFor3d}
                             playerLocomotionToAttackCrossfadeSec={playerLocomotionToAttackCrossfadeSecFor3d}
@@ -12256,9 +12465,13 @@ export default function LabyrinthGame() {
                 playerJumpPulseVersion={isoPlayerJumpPulse}
                 playerGlbPath={getPlayer3DGlb(playerAvatars[currentPlayer])}
                 playerWeaponGltfPath={(() => {
-                  const a = playerArmour[currentPlayer];
+                  const a = playerWeaponGlb[currentPlayer];
                   return a && a !== NO_ARMOUR_SENTINEL ? a : null;
                 })()}
+                playerOffhandArmourGltfPath={playerOffhandArmourGltfEffective(
+                  cp,
+                  playerOffhandArmourGlb[currentPlayer]
+                )}
                 fillViewport={mazeIsoFillViewport}
                 onTouchCameraForwardGrid={mazeMapView === "iso" ? onTouchCameraForwardGrid : undefined}
                 onIsoCameraBearingDeg={mazeMapView === "iso" ? onIsoCameraBearingDeg : undefined}

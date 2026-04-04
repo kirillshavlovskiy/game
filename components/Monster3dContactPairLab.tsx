@@ -15,8 +15,13 @@ import {
   PLAYER_3D_GLB,
   type Monster3DSpriteState,
 } from "@/lib/monsterModels3d";
-import { DEFAULT_LAB_PLAYER_WEAPON_GLB, PLAYER_ARMOUR_GLB_OPTIONS } from "@/lib/playerArmourGlbs";
 import {
+  DEFAULT_LAB_PLAYER_WEAPON_GLB,
+  PLAYER_OFFHAND_ARMOUR_GLB_OPTIONS,
+  PLAYER_WEAPON_GLB_OPTIONS,
+} from "@/lib/playerArmourGlbs";
+import {
+  resolveWeaponAttachPose,
   WEAPON_ATTACH_BLADE_TWIST_RAD,
   WEAPON_ATTACH_EXTRA_EULER_RAD,
   WEAPON_ATTACH_GRIP_POSITION_LOCAL,
@@ -112,6 +117,70 @@ function labBladeTwistPresetFromConfigRad(rad: number): LabBladeTwistPreset {
   return best;
 }
 
+/** Grip / twist / Euler for the lab UI — from `weaponAttachConfig` saved map + globals. */
+function savedWeaponLabAttachState(weaponPath: string | null): {
+  hand: WeaponAttachHand;
+  bladePreset: LabBladeTwistPreset;
+  eulerDeg: [number, number, number];
+  grip: [number, number, number];
+} {
+  if (!weaponPath) {
+    return {
+      hand: WEAPON_ATTACH_HAND,
+      bladePreset: labBladeTwistPresetFromConfigRad(WEAPON_ATTACH_BLADE_TWIST_RAD),
+      eulerDeg: [
+        (WEAPON_ATTACH_EXTRA_EULER_RAD[0] * 180) / Math.PI,
+        (WEAPON_ATTACH_EXTRA_EULER_RAD[1] * 180) / Math.PI,
+        (WEAPON_ATTACH_EXTRA_EULER_RAD[2] * 180) / Math.PI,
+      ],
+      grip: [...WEAPON_ATTACH_GRIP_POSITION_LOCAL] as [number, number, number],
+    };
+  }
+  const p = resolveWeaponAttachPose(weaponPath, {});
+  return {
+    hand: WEAPON_ATTACH_HAND,
+    bladePreset: labBladeTwistPresetFromConfigRad(p.bladeTwistRad),
+    eulerDeg: [
+      (p.extraEulerRad[0] * 180) / Math.PI,
+      (p.extraEulerRad[1] * 180) / Math.PI,
+      (p.extraEulerRad[2] * 180) / Math.PI,
+    ],
+    grip: [p.gripPositionLocal[0], p.gripPositionLocal[1], p.gripPositionLocal[2]],
+  };
+}
+
+/** Shield / off-hand pose from `weaponAttachConfig` (hand is always **left** for roster shields in 3D). */
+function savedOffhandLabAttachState(shieldPath: string | null): {
+  bladePreset: LabBladeTwistPreset;
+  eulerDeg: [number, number, number];
+  grip: [number, number, number];
+} {
+  if (!shieldPath) {
+    return {
+      bladePreset: labBladeTwistPresetFromConfigRad(WEAPON_ATTACH_BLADE_TWIST_RAD),
+      eulerDeg: [
+        (WEAPON_ATTACH_EXTRA_EULER_RAD[0] * 180) / Math.PI,
+        (WEAPON_ATTACH_EXTRA_EULER_RAD[1] * 180) / Math.PI,
+        (WEAPON_ATTACH_EXTRA_EULER_RAD[2] * 180) / Math.PI,
+      ],
+      grip: [...WEAPON_ATTACH_GRIP_POSITION_LOCAL] as [number, number, number],
+    };
+  }
+  const p = resolveWeaponAttachPose(shieldPath, {});
+  return {
+    bladePreset: labBladeTwistPresetFromConfigRad(p.bladeTwistRad),
+    eulerDeg: [
+      (p.extraEulerRad[0] * 180) / Math.PI,
+      (p.extraEulerRad[1] * 180) / Math.PI,
+      (p.extraEulerRad[2] * 180) / Math.PI,
+    ],
+    grip: [p.gripPositionLocal[0], p.gripPositionLocal[1], p.gripPositionLocal[2]],
+  };
+}
+
+const LAB_WEAPON_ATTACH_UI_DEFAULT = savedWeaponLabAttachState(DEFAULT_LAB_PLAYER_WEAPON_GLB);
+const LAB_OFFHAND_ATTACH_UI_DEFAULT = savedOffhandLabAttachState(null);
+
 const selectStyle: CSSProperties = {
   padding: "6px 8px",
   borderRadius: 8,
@@ -172,19 +241,26 @@ export function Monster3dContactPairLab() {
   const [playerHurtClipSource, setPlayerHurtClipSource] = useState<PlayerHurtClipSource>("preset");
   /** Same `armourGltfPath` as combat / maze — `BoneAttachedWeapon` on player rig. */
   const [labPlayerWeaponGlb, setLabPlayerWeaponGlb] = useState<string | null>(DEFAULT_LAB_PLAYER_WEAPON_GLB);
+  const [labPlayerOffhandGlb, setLabPlayerOffhandGlb] = useState<string | null>(null);
   const [weaponFileOk, setWeaponFileOk] = useState<boolean | null>(null);
-  const [labWeaponHand, setLabWeaponHand] = useState<WeaponAttachHand>(WEAPON_ATTACH_HAND);
-  const [labBladeTwistPreset, setLabBladeTwistPreset] = useState<LabBladeTwistPreset>(() =>
-    labBladeTwistPresetFromConfigRad(WEAPON_ATTACH_BLADE_TWIST_RAD),
+  const [offhandFileOk, setOffhandFileOk] = useState<boolean | null>(null);
+  const [labWeaponHand, setLabWeaponHand] = useState<WeaponAttachHand>(LAB_WEAPON_ATTACH_UI_DEFAULT.hand);
+  const [labBladeTwistPreset, setLabBladeTwistPreset] = useState<LabBladeTwistPreset>(
+    LAB_WEAPON_ATTACH_UI_DEFAULT.bladePreset,
   );
   const labBladeTwistRad = labBladeTwistRadFromPreset(labBladeTwistPreset);
-  const [labExtraEulerDeg, setLabExtraEulerDeg] = useState<[number, number, number]>([
-    (WEAPON_ATTACH_EXTRA_EULER_RAD[0] * 180) / Math.PI,
-    (WEAPON_ATTACH_EXTRA_EULER_RAD[1] * 180) / Math.PI,
-    (WEAPON_ATTACH_EXTRA_EULER_RAD[2] * 180) / Math.PI,
-  ]);
+  const [labExtraEulerDeg, setLabExtraEulerDeg] = useState<[number, number, number]>(LAB_WEAPON_ATTACH_UI_DEFAULT.eulerDeg);
   /** Hand bone local (meters) — same as `WEAPON_ATTACH_GRIP_POSITION_LOCAL`; tune with both fighters idle. */
-  const [labGripPosM, setLabGripPosM] = useState<[number, number, number]>([...WEAPON_ATTACH_GRIP_POSITION_LOCAL]);
+  const [labGripPosM, setLabGripPosM] = useState<[number, number, number]>(LAB_WEAPON_ATTACH_UI_DEFAULT.grip);
+
+  const [labOffhandBladeTwistPreset, setLabOffhandBladeTwistPreset] = useState<LabBladeTwistPreset>(
+    LAB_OFFHAND_ATTACH_UI_DEFAULT.bladePreset,
+  );
+  const labOffhandBladeTwistRad = labBladeTwistRadFromPreset(labOffhandBladeTwistPreset);
+  const [labOffhandExtraEulerDeg, setLabOffhandExtraEulerDeg] = useState<[number, number, number]>(
+    LAB_OFFHAND_ATTACH_UI_DEFAULT.eulerDeg,
+  );
+  const [labOffhandGripPosM, setLabOffhandGripPosM] = useState<[number, number, number]>(LAB_OFFHAND_ATTACH_UI_DEFAULT.grip);
 
   useEffect(() => {
     if (!labPlayerWeaponGlb) {
@@ -201,6 +277,39 @@ export function Monster3dContactPairLab() {
       cancelled = true;
     };
   }, [labPlayerWeaponGlb]);
+
+  useEffect(() => {
+    if (!labPlayerOffhandGlb) {
+      setOffhandFileOk(null);
+      return;
+    }
+    let cancelled = false;
+    setOffhandFileOk(null);
+    void (async () => {
+      const ok = await glbReachable(labPlayerOffhandGlb);
+      if (!cancelled) setOffhandFileOk(ok);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [labPlayerOffhandGlb]);
+
+  /** Dropdown weapon → saved pose in `weaponAttachConfig` (`WEAPON_ATTACH_POSE_BY_URL` + globals). */
+  useEffect(() => {
+    const s = savedWeaponLabAttachState(labPlayerWeaponGlb);
+    setLabWeaponHand(s.hand);
+    setLabBladeTwistPreset(s.bladePreset);
+    setLabExtraEulerDeg(s.eulerDeg);
+    setLabGripPosM(s.grip);
+  }, [labPlayerWeaponGlb]);
+
+  /** Dropdown shield → saved pose from `weaponAttachConfig` (left hand is fixed in `BoneAttachedWeapon`). */
+  useEffect(() => {
+    const s = savedOffhandLabAttachState(labPlayerOffhandGlb);
+    setLabOffhandBladeTwistPreset(s.bladePreset);
+    setLabOffhandExtraEulerDeg(s.eulerDeg);
+    setLabOffhandGripPosM(s.grip);
+  }, [labPlayerOffhandGlb]);
 
   const monsterPath = getMonsterGltfPathForReference(monsterType, "idle");
 
@@ -305,9 +414,14 @@ export function Monster3dContactPairLab() {
         draculaMonsterAttackAim,
         playerHurtClipSource,
         labPlayerWeaponGlb ?? "",
+        labPlayerOffhandGlb ?? "",
         labWeaponHand,
         labBladeTwistPreset,
         labExtraEulerDeg.join(","),
+        labGripPosM.join(","),
+        labOffhandBladeTwistPreset,
+        labOffhandExtraEulerDeg.join(","),
+        labOffhandGripPosM.join(","),
       ].join("|"),
     [
       monsterType,
@@ -326,9 +440,14 @@ export function Monster3dContactPairLab() {
       draculaMonsterAttackAim,
       playerHurtClipSource,
       labPlayerWeaponGlb,
+      labPlayerOffhandGlb,
       labWeaponHand,
       labBladeTwistPreset,
       labExtraEulerDeg,
+      labGripPosM,
+      labOffhandBladeTwistPreset,
+      labOffhandExtraEulerDeg,
+      labOffhandGripPosM,
     ]
   );
 
@@ -342,6 +461,20 @@ export function Monster3dContactPairLab() {
   );
 
   const labArmourGripPositionLocal = useMemo((): readonly [number, number, number] => [...labGripPosM], [labGripPosM]);
+
+  const labOffhandExtraEulerRad = useMemo(
+    (): readonly [number, number, number] => [
+      (labOffhandExtraEulerDeg[0] * Math.PI) / 180,
+      (labOffhandExtraEulerDeg[1] * Math.PI) / 180,
+      (labOffhandExtraEulerDeg[2] * Math.PI) / 180,
+    ],
+    [labOffhandExtraEulerDeg],
+  );
+
+  const labOffhandGripPositionLocal = useMemo(
+    (): readonly [number, number, number] => [...labOffhandGripPosM],
+    [labOffhandGripPosM],
+  );
 
   const labDraculaHurtStrikeZone: StrikeTarget | undefined =
     monsterType === "V" && monsterState === "hurt" && draculaHurtAim !== "hp" ? draculaHurtAim : undefined;
@@ -386,6 +519,19 @@ export const WEAPON_ATTACH_BLADE_TWIST_RAD = ${twist};
 `;
     void navigator.clipboard?.writeText(text);
   }, [labGripPosM, labArmourExtraEulerRad, labBladeTwistRad]);
+
+  const copyShieldAttachSnippet = useCallback(() => {
+    if (!labPlayerOffhandGlb) return;
+    const [gx, gy, gz] = labOffhandGripPosM;
+    const [ex, ey, ez] = labOffhandExtraEulerRad;
+    const twist = labOffhandBladeTwistRad;
+    const text = `// Add / update in WEAPON_ATTACH_POSE_BY_URL for ${labPlayerOffhandGlb}
+gripPositionLocal: [${gx}, ${gy}, ${gz}],
+extraEulerRad: [${ex}, ${ey}, ${ez}],
+bladeTwistRad: ${twist},
+`;
+    void navigator.clipboard?.writeText(text);
+  }, [labPlayerOffhandGlb, labOffhandGripPosM, labOffhandExtraEulerRad, labOffhandBladeTwistRad]);
 
   const startScenario = useCallback(
     (pr: Preset) => {
@@ -501,13 +647,29 @@ export const WEAPON_ATTACH_BLADE_TWIST_RAD = ${twist};
             style={selectStyle}
           >
             <option value="">None</option>
-            {PLAYER_ARMOUR_GLB_OPTIONS.map((o) => (
+            {PLAYER_WEAPON_GLB_OPTIONS.map((o) => (
               <option key={o.path} value={o.path}>
                 {o.emoji} {o.label}
               </option>
             ))}
           </select>
         </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <span style={{ color: "#9ee8ff", fontWeight: 600 }}>Shield</span>
+          <select
+            value={labPlayerOffhandGlb ?? ""}
+            onChange={(e) => setLabPlayerOffhandGlb(e.target.value === "" ? null : e.target.value)}
+            style={selectStyle}
+          >
+            <option value="">None</option>
+            {PLAYER_OFFHAND_ARMOUR_GLB_OPTIONS.map((o) => (
+              <option key={o.path} value={o.path}>
+                {o.emoji} {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span style={{ color: "#7ec8ff", fontWeight: 600, width: "100%", marginTop: 4 }}>Weapon attach</span>
         <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ color: "#9ee8ff" }}>Hand</span>
           <select
@@ -566,7 +728,7 @@ export const WEAPON_ATTACH_BLADE_TWIST_RAD = ${twist};
           color: "#c8d8e8",
         }}
       >
-        <span style={{ color: "#9ee8ff", fontWeight: 600 }}>Grip (m, hand bone)</span>
+        <span style={{ color: "#9ee8ff", fontWeight: 600 }}>Weapon grip (m)</span>
         {(["X", "Y", "Z"] as const).map((axis, i) => (
           <label key={`g-${axis}`} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: "0.68rem" }}>
             <span style={{ color: "#8ab0c8" }}>{axis}</span>
@@ -606,9 +768,118 @@ export const WEAPON_ATTACH_BLADE_TWIST_RAD = ${twist};
           Idle + wide
         </button>
         <button type="button" onClick={copyWeaponAttachSnippet} style={{ ...btnStyle, textAlign: "center" }}>
-          Copy config
+          Copy weapon
         </button>
       </div>
+
+      {labPlayerOffhandGlb ? (
+        <>
+          <div
+            style={{
+              width: "100%",
+              maxWidth: viewportW,
+              margin: "0 auto 12px",
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 10,
+              fontSize: "0.8rem",
+              color: "#c8d8e8",
+            }}
+          >
+            <span style={{ color: "#a8e8c8", fontWeight: 600, width: "100%" }}>
+              Shield attach (off-hand — <strong style={{ color: "#cfe" }}>left hand bone</strong>, fixed)
+            </span>
+            <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ color: "#9ee8ff" }}>Twist</span>
+              <select
+                value={labOffhandBladeTwistPreset}
+                onChange={(e) => setLabOffhandBladeTwistPreset(e.target.value as LabBladeTwistPreset)}
+                style={selectStyle}
+              >
+                <option value="0">0°</option>
+                <option value="90">90°</option>
+                <option value="180">180°</option>
+                <option value="270">270°</option>
+              </select>
+            </label>
+            <span style={{ color: "#9ee8ff" }}>Euler°</span>
+            {(["X", "Y", "Z"] as const).map((axis, i) => (
+              <label key={`sh-${axis}`} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                {axis}
+                <input
+                  type="number"
+                  step={5}
+                  value={labOffhandExtraEulerDeg[i]}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setLabOffhandExtraEulerDeg((prev) => {
+                      const next: [number, number, number] = [...prev];
+                      next[i] = Number.isFinite(v) ? v : 0;
+                      return next;
+                    });
+                  }}
+                  style={{ ...selectStyle, width: 64 }}
+                />
+              </label>
+            ))}
+          </div>
+          <div
+            style={{
+              width: "100%",
+              maxWidth: viewportW,
+              margin: "0 auto 12px",
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 10,
+              fontSize: "0.78rem",
+              color: "#c8d8e8",
+            }}
+          >
+            <span style={{ color: "#a8e8c8", fontWeight: 600 }}>Shield grip (m)</span>
+            {(["X", "Y", "Z"] as const).map((axis, i) => (
+              <label key={`sg-${axis}`} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: "0.68rem" }}>
+                <span style={{ color: "#8ab0a8" }}>{axis}</span>
+                <input
+                  type="number"
+                  step={0.001}
+                  value={labOffhandGripPosM[i]}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setLabOffhandGripPosM((prev) => {
+                      const next: [number, number, number] = [...prev];
+                      next[i] = Number.isFinite(v) ? v : 0;
+                      return next;
+                    });
+                  }}
+                  style={{ ...selectStyle, width: 76 }}
+                />
+                <input
+                  type="range"
+                  min={-0.5}
+                  max={0.5}
+                  step={0.002}
+                  value={Math.min(0.5, Math.max(-0.5, labOffhandGripPosM[i]))}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setLabOffhandGripPosM((prev) => {
+                      const next: [number, number, number] = [...prev];
+                      next[i] = v;
+                      return next;
+                    });
+                  }}
+                  style={{ width: 88 }}
+                />
+              </label>
+            ))}
+            <button type="button" onClick={copyShieldAttachSnippet} style={{ ...btnStyle, textAlign: "center" }}>
+              Copy shield
+            </button>
+          </div>
+        </>
+      ) : null}
+
       {labPlayerWeaponGlb && weaponFileOk === false ? (
         <div
           style={{
@@ -623,7 +894,24 @@ export const WEAPON_ATTACH_BLADE_TWIST_RAD = ${twist};
             color: "#ffc8c0",
           }}
         >
-          Missing: <code style={{ color: "#fff" }}>{labPlayerWeaponGlb}</code>
+          Missing weapon: <code style={{ color: "#fff" }}>{labPlayerWeaponGlb}</code>
+        </div>
+      ) : null}
+      {labPlayerOffhandGlb && offhandFileOk === false ? (
+        <div
+          style={{
+            width: "100%",
+            maxWidth: viewportW,
+            margin: "0 auto 10px",
+            padding: "8px 10px",
+            borderRadius: 8,
+            background: "rgba(180, 50, 50, 0.2)",
+            border: "1px solid rgba(255,120,100,0.45)",
+            fontSize: "0.76rem",
+            color: "#ffc8c0",
+          }}
+        >
+          Missing shield: <code style={{ color: "#fff" }}>{labPlayerOffhandGlb}</code>
         </div>
       ) : null}
 
@@ -646,6 +934,10 @@ export const WEAPON_ATTACH_BLADE_TWIST_RAD = ${twist};
           armourBladeTwistRad={labBladeTwistRad}
           armourExtraEulerRad={labArmourExtraEulerRad}
           armourGripPositionLocal={labArmourGripPositionLocal}
+          armourOffhandGltfPath={labPlayerOffhandGlb}
+          armourOffhandBladeTwistRad={labOffhandBladeTwistRad}
+          armourOffhandExtraEulerRad={labOffhandExtraEulerRad}
+          armourOffhandGripPositionLocal={labOffhandGripPositionLocal}
           monsterVisualState={monsterState}
           playerVisualState={playerState}
           monsterType={monsterType}
@@ -657,6 +949,7 @@ export const WEAPON_ATTACH_BLADE_TWIST_RAD = ${twist};
           playerFatalJumpKill={fatalJump && playerState === "hurt"}
           playerHurtAnimContext={playerHurtAnimContext}
           playerHurtClipStartTimeSec={meshyCombat3dClipLeads.meshyPlayerHurtLeadInSec}
+          playerHurtHandoffCrossfadeSec={meshyCombat3dClipLeads.meshyPlayerHurtHandoffCrossfadeSec}
           playerAttackClipLeadInSec={meshyCombat3dClipLeads.meshyPlayerAttackLeadInSec}
           playerLocomotionToAttackCrossfadeSec={meshyCombat3dClipLeads.meshyPlayerHuntToAttackCrossfadeSec}
           monsterLocomotionToAttackCrossfadeSec={meshyCombat3dClipLeads.meshyMonsterHuntToAttackCrossfadeSec}

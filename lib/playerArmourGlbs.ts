@@ -1,10 +1,11 @@
 /**
- * Player weapon / armour GLB paths (`public/models/armour/*.glb`).
- * Single list for combat UI, maze 3D, and dev labs (`/monster-3d-animations`).
+ * Player weapon / shield GLB paths (`public/models/armour/*.glb`).
+ * Weapons (main hand) and armour (off-hand shields) are separate pickers in the start menu and combine in 3D.
  */
 export const ARMOUR_GLB_PREFIX = "/models/armour/";
 
-export const PLAYER_ARMOUR_GLB_OPTIONS = [
+/** Main-hand weapons — swords, axes, hammers, relics (right hand by default). */
+export const PLAYER_WEAPON_GLB_OPTIONS = [
   { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Celestial_Blade_0329003028_texture.glb`, label: "Celestial Blade", emoji: "🗡️" },
   { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Silver_Blade_0329003051_texture.glb`, label: "Silver Blade", emoji: "⚔️" },
   { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_an_old_rusty_axe_0329003102_texture.glb`, label: "Old Rusty Axe", emoji: "🪓" },
@@ -17,16 +18,44 @@ export const PLAYER_ARMOUR_GLB_OPTIONS = [
   { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Dragon_Fury_Axe_0403170000_texture.glb`, label: "Dragon Fury Axe", emoji: "🪓" },
   { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Eternal_Frostblade_0403174010_texture.glb`, label: "Eternal Frostblade", emoji: "❄️" },
   { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Zweihandhammer_Doppe_0403170009_texture.glb`, label: "Zweihandhammer", emoji: "🔨" },
-  { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Azure_Dragon_Shield_0403173852_texture.glb`, label: "Azure Dragon Shield", emoji: "🐉" },
-  { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Nordic_Shield_Design__0403170042_texture.glb`, label: "Nordic Shield", emoji: "🛡️" },
-  { path: `${ARMOUR_GLB_PREFIX}Meshy_AI_shield_0403170046_texture.glb`, label: "Warden Shield", emoji: "🛡️" },
+] as const;
+
+/** Off-hand shields (left hand). */
+export const PLAYER_OFFHAND_ARMOUR_GLB_OPTIONS = [
+  {
+    path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Azure_Dragon_Shield_0403173852_texture.glb`,
+    label: "Azure Dragon Shield",
+    emoji: "🐉",
+    attachHand: "left" as const,
+  },
+  {
+    path: `${ARMOUR_GLB_PREFIX}Meshy_AI_Nordic_Shield_Design__0403170042_texture.glb`,
+    label: "Nordic Shield",
+    emoji: "🛡️",
+    attachHand: "left" as const,
+  },
+  {
+    path: `${ARMOUR_GLB_PREFIX}Meshy_AI_shield_0403170046_texture.glb`,
+    label: "Warden Shield",
+    emoji: "🛡️",
+    attachHand: "left" as const,
+  },
+] as const;
+
+/** Full roster — scale map, attach resolution, dev lab pickers. */
+export const PLAYER_ARMOUR_GLB_OPTIONS = [
+  ...PLAYER_WEAPON_GLB_OPTIONS,
+  ...PLAYER_OFFHAND_ARMOUR_GLB_OPTIONS,
 ] as const;
 
 export type PlayerArmourGlbOption = (typeof PLAYER_ARMOUR_GLB_OPTIONS)[number];
 
-/** Persisted / UI sentinel when no weapon GLB is equipped */
+/** Every roster path — preload in 3D maze / combat. */
+export const PLAYER_ARMOUR_GLB_PATHS: readonly string[] = PLAYER_ARMOUR_GLB_OPTIONS.map((o) => o.path);
+
+/** Persisted / UI sentinel when no GLB is equipped in a slot */
 export const NO_PLAYER_ARMOUR_GLB = "" as const;
 
-/** Default weapon for `/monster-3d-animations` face-off lab (first list entry). */
+/** Default weapon for `/monster-3d-animations` face-off lab (first weapon entry). */
 export const DEFAULT_LAB_PLAYER_WEAPON_GLB: string | null =
-  PLAYER_ARMOUR_GLB_OPTIONS[0]?.path ?? null;
+  PLAYER_WEAPON_GLB_OPTIONS[0]?.path ?? null;
