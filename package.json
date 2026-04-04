@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "node node_modules/next/dist/bin/next dev",
     "validate-scenarios": "npx tsx scripts/validate-scenarios.ts",
-    "build": "next build",
+    "build": "node -e \"try { require('fs').unlinkSync('tsconfig.tsbuildinfo'); } catch (_) {}\" && next build",
+    "build:clean": "node -e \"const fs=require('fs'); for (const p of ['.next','tsconfig.tsbuildinfo']) { try { fs.rmSync(p,{recursive:true,force:true}); } catch (_) {} }\" && next build",
     "build:itch": "node -e \"const fs=require('fs');for (const p of ['.next','node_modules/.cache','out']) { try { fs.rmSync(p,{recursive:true,force:true}); } catch (_) {} }\" && ITCH_EXPORT=1 next build",
     "build:crazygames-lite": "node -e \"const fs=require('fs');for (const p of ['.next','node_modules/.cache']) { try { fs.rmSync(p,{recursive:true,force:true}); } catch (_) {} }\" && CRAZYGAMES_LITE=1 ITCH_EXPORT=1 next build",
     "package:itch": "bash scripts/package-itch.sh",
