@@ -1982,7 +1982,7 @@ function FloorStains({
 }: {
   grid: string[][]; mapWidth: number; mapHeight: number;
 }) {
-  const stainTextures = useTexture(MAZE_ISO_STAIN_TEXTURE_URLS);
+  const stainTextures = useTexture([...MAZE_ISO_STAIN_TEXTURE_URLS]) as THREE.Texture[];
 
   const stainsByTex = useMemo(() => {
     const buckets: FloorStainInstance[][] = stainTextures.map(() => []);
