@@ -20,6 +20,8 @@ import type { MonsterType } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
 import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
 import {
+  approachPhaseSeparationHalf,
+  COMBAT_STRIKE_PICK_SEPARATION_HALF,
   rowMonsterHitsPlayer,
   rowPlayerHitsMonster,
   skeletonFaceOffExtraSeparationHalf,
@@ -49,13 +51,11 @@ import { WebGlContextLossGuard } from "@/components/WebGlContextLossGuard";
  * keep baked root motion. Spell/jump clips (Jumping_Punch, spins) travel forward in authoring space —
  * if this half-gap is too large, the swing peaks short of the defender; too small, overshoot / interpenetrate.
  * Tuned against merged player + monster GLBs in the face-off box.
+ * Idle / strike-pick halves: `COMBAT_IDLE_SEPARATION_HALF` + `COMBAT_STRIKE_PICK_SEPARATION_HALF` in `lib/combat3dContact`.
  */
-const COMBAT_IDLE_SEPARATION_HALF = 1.38;
-/** Same half used during strike-pick / dice roll — kept for **all** resolved-hit face-offs so jump/skill clips align with contact (variant-tiny halves read as long-range hits). */
-const COMBAT_STRIKE_PICK_SEPARATION_HALF = 0.92;
 /**
- * Standing attacker vs **knockdown** defender — tighter than `COMBAT_STRIKE_PICK_SEPARATION_HALF` so the blow reads on the
- * downed figure (merged rigs are `Center`‑ed; 0.92 leaves too much air for knockdown clips).
+ * Standing attacker vs **knockdown** defender — tighter than strike-pick staging so the blow reads on the
+ * downed figure (merged rigs are `Center`‑ed).
  */
 const COMBAT_ATTACK_VS_KNOCKDOWN_HALF = 0.42;
 function combatContactHalfXForVariant(variant: "spell" | "skill" | "light" | undefined): number {
@@ -102,7 +102,7 @@ export function combatFaceOffPositions(args: {
   /**
    * Old logic only used tight spacing when `isContactExchange` (both sides in hit/attack/knockdown/angry).
    * While the attacker plays `attack`, the defender is often still calm `idle`/`hunt` — we stayed on idle
-   * lerp (~1.38→0.92) so jump punches never read as reaching. Any `attack` must pull into contact range.
+   * lerp (idle → strike-pick half in `combat3dContact`) so jump punches never read as reaching. Any `attack` must pull into contact range.
    *
    * **Light / quick jabs:** the player `attack` clip often ends before the monster `hurt` clip. Then the player is
    * already `idle` while the defender is still `hurt` — `isContactExchange` becomes false and we fell through to the
@@ -122,10 +122,7 @@ export function combatFaceOffPositions(args: {
     monsterVisualState === "attack" ||
     inPostHitPose;
   if (!useStrikeContactSpacing) {
-    const idle = COMBAT_IDLE_SEPARATION_HALF;
-    const t = Math.max(0, Math.min(1, rollingApproachBlend));
-    const close = COMBAT_STRIKE_PICK_SEPARATION_HALF;
-    const h = idle * (1 - t) + close * t + sk;
+    const h = approachPhaseSeparationHalf(rollingApproachBlend) + sk;
     return { playerPosX: -h, monsterPosX: h };
   }
 
@@ -172,7 +169,7 @@ export function combatFaceOffPositions(args: {
 
   /**
    * Monster `attack` vs non-attacking player (hunt / hurt / idle / …): use `MONSTER_HITS_PLAYER` halves — same as
-   * `resolveCombat3dFaceOffSeparationHalf`. The old path kept **spell** at 0.92 and **skill** at 0.68 (e.g. skeleton
+   * `resolveCombat3dFaceOffSeparationHalf`. The old path kept **spell** at wide staging and **skill** at 0.68 (e.g. skeleton
    * strikes read long-range and out of sync with the table-tuned clip leads).
    */
   if (mAtk && !pAtk) {
@@ -182,7 +179,7 @@ export function combatFaceOffPositions(args: {
 
   /**
    * Player `attack` vs calm monster (`hunt` / `idle` / …): must use `rowPlayerHitsMonster` (defender pose → **hurt** column),
-   * same as `resolveCombat3dFaceOffSeparationHalf`. Defaulting to 0.92 here left skill jump clips (tight table half 0.42 +
+   * same as `resolveCombat3dFaceOffSeparationHalf`. Defaulting to wide staging here left skill jump clips (tight table half 0.42 +
    * `attackerLeadInSec` 0) starting with huge air — root motion read as the player jumping **past** the defender.
    */
   if (pAtk && !mAtk) {
@@ -2186,13 +2183,18 @@ export function CombatScene3D({
   const monsterHitRootRef = useRef<THREE.Group | null>(null);
   const isMergedMeshy =
     monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "G" || monsterType === "S" || monsterType === "L";
+  /**
+   * Modal / lab compact canvas: lift fighters + blood FX together so the viewport shows full figures, not just crowns
+   * (orbit pivot and camera rise by the same delta so framing stays coherent).
+   */
+  const battleSceneGroundY = compactCombatViewport ? 0.26 : 0;
   const cameraZ = compactCombatViewport ? 3.28 : 5.35;
-  const cameraY = compactCombatViewport ? 0.92 : 1.0;
+  const cameraY = compactCombatViewport ? 0.92 + battleSceneGroundY : 1.0;
   const fov = compactCombatViewport ? 50 : 40;
   const meshyCameraBases = { baseZ: cameraZ, baseY: cameraY, baseFov: fov };
   const orbitMinD = orbitMinDistance ?? (compactCombatViewport ? 1.12 : 2);
   const orbitMaxD = orbitMaxDistance ?? (compactCombatViewport ? 5.8 : 10);
-  const orbitTargetY = compactCombatViewport ? 0.56 : 0.8;
+  const orbitTargetY = compactCombatViewport ? 0.56 + battleSceneGroundY : 0.8;
   const resolvedArmourAttachHand = armourAttachHand ?? resolveWeaponAttachHand(armourGltfPath ?? null);
 
   const isContactExchange =
@@ -2342,6 +2344,7 @@ export function CombatScene3D({
           <ambientLight intensity={0.38} />
           <directionalLight position={[3.2, 5.5, 2.8]} intensity={1.05} />
           <directionalLight position={[-2.5, 2.5, 4]} intensity={0.35} />
+          <group position={[0, battleSceneGroundY, 0]}>
           {faceOffAnimationSyncKey != null && faceOffAnimationSyncKey !== "" ? (
             <CombatFaceOffPairedSubjects
               faceOffAnimationSyncKey={faceOffAnimationSyncKey}
@@ -2454,6 +2457,7 @@ export function CombatScene3D({
               onPick={onStrikeTargetPick}
             />
           ) : null}
+          </group>
         </Suspense>
       </Canvas>
       </div>

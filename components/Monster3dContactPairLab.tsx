@@ -5,7 +5,7 @@ import type { MonsterType } from "@/lib/labyrinth";
 import { getMonsterName } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
 import { CombatScene3D, combatFaceOffPositions } from "@/components/MonsterModel3D";
-import { resolveCombat3dClipLeads } from "@/lib/combat3dContact";
+import { COMBAT_FACEOFF_APPROACH_DURATION_MS, resolveCombat3dClipLeads } from "@/lib/combat3dContact";
 import {
   draculaAttackVariantFromStrikeTarget,
   getMonsterGltfPathForReference,
@@ -220,7 +220,7 @@ export function Monster3dContactPairLab() {
   const [monsterVariant, setMonsterVariant] = useState<(typeof VARIANTS)[number]>("spell");
   /** When on, matches combat strike-pick UI (crosshair, orbit off). Default off so the lab canvas can orbit + zoom. */
   const [strikePick, setStrikePick] = useState(false);
-  /** Default 1 = same strike-pick half as in-game merged 3D between rolls (`combat3dRollingApproachBlend`). */
+  /** Default 1 = same full approach as in-game merged 3D between rolls (`combat3dApproachBlend` when not rolling). */
   const [approach, setApproach] = useState(1);
   const [hurtHp, setHurtHp] = useState(LAB_PLAYER_WIN_MONSTER_HURT_HP);
   const [hurtMax, setHurtMax] = useState(9);
@@ -575,7 +575,7 @@ bladeTwistRad: ${twist},
     if (seqPhase !== "hunt" || !pendingScenarioRef.current) return;
     const session = seqSessionRef.current;
     const pr = pendingScenarioRef.current;
-    const durationMs = 2200;
+    const durationMs = COMBAT_FACEOFF_APPROACH_DURATION_MS;
     const t0 = performance.now();
     let raf = 0;
     const step = (now: number) => {

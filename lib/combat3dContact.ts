@@ -185,9 +185,17 @@ export const MUTUAL_ATTACK_INNER_HALF: Record<Combat3dStrikeTier, number> = {
   light: 0.38,
 };
 
-const COMBAT_IDLE_SEPARATION_HALF = 1.38;
-const COMBAT_STRIKE_PICK_SEPARATION_HALF = 0.92;
+/** Wide half when approach blend = 0 — merged rigs read as across the room. */
+export const COMBAT_IDLE_SEPARATION_HALF = 1.38;
+/**
+ * Staging half when approach blend = 1 (between rolls, after roll) — mirrors `Monster3dContactPairLab` “full approach”
+ * row; tighter than legacy 0.92 so hunt/idle reads nearer the contact lab without using hit-exchange rows.
+ */
+export const COMBAT_STRIKE_PICK_SEPARATION_HALF = 0.72;
 const MUTUAL_ATTACK_HALF_FLOOR = 0.38;
+
+/** Hunt-phase walk-in duration for merged 3D — same timing/smoothstep as `Monster3dContactPairLab` connected sequence. */
+export const COMBAT_FACEOFF_APPROACH_DURATION_MS = 2200;
 
 /** Half-distance during idle→strike walk-in (same lerp as `!useStrikeContactSpacing` in `resolveCombat3dFaceOffSeparationHalf`). */
 export function approachPhaseSeparationHalf(rollingApproachBlend: number): number {

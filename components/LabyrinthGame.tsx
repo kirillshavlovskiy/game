@@ -97,7 +97,10 @@ import {
   PLAYER_OFFHAND_ARMOUR_GLB_OPTIONS as OFFHAND_ARMOUR_OPTIONS,
   PLAYER_WEAPON_GLB_OPTIONS as WEAPON_OPTIONS,
 } from "@/lib/playerArmourGlbs";
-import { resolveCombat3dClipLeads } from "@/lib/combat3dContact";
+import {
+  COMBAT_FACEOFF_APPROACH_DURATION_MS,
+  resolveCombat3dClipLeads,
+} from "@/lib/combat3dContact";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import MazeIsoView, {
   type CatapultTrajectoryPreviewFn,
@@ -3256,15 +3259,50 @@ export default function LabyrinthGame() {
   const combatStrikePick3dDuringRoll =
     combatMonsterStrike3d && rolling && !combatArtifactRerollPrompt;
   /**
-   * Merged 3D face-off: `combatFaceOffPositions` lerps idle half (1.38) → strike-pick half (0.92) by this value.
-   * If this is only `1` while `rolling`, between rolls the blend is 0 — fighters sit at museum-wide spacing and the
-   * player rig no longer matches combat strike staging once the monster GLB is on screen. Keep full strike-pick
-   * separation for the whole active fight (still 0 after result / when reroll UI blocks the scene).
+   * Merged 3D face-off approach blend (same semantics as `Monster3dContactPairLab` `approach`):
+   * - Between rolls: 1 → full strike-pick staging (`COMBAT_STRIKE_PICK_SEPARATION_HALF` in `combat3dContact`).
+   * - While the strike die rolls: 0 → 1 smoothstep over `COMBAT_FACEOFF_APPROACH_DURATION_MS` (hunt walk-in).
+   * - After fight / reroll UI: 0. Passed to `resolveCombat3dClipLeads` for jump lead scaling during exchanges.
    */
-  const combat3dRollingApproachBlend =
-    combatMonsterStrike3d && combatState != null && combatResult == null && !combatArtifactRerollPrompt
-      ? 1
-      : 0;
+  const combat3dApproachEligible =
+    combatMonsterStrike3d && combatState != null && combatResult == null && !combatArtifactRerollPrompt;
+  const [combat3dApproachBlend, setCombat3dApproachBlend] = useState(1);
+  const combat3dApproachSessionRef = useRef(0);
+  const combat3dApproachRafRef = useRef(0);
+
+  useEffect(() => {
+    combat3dApproachSessionRef.current += 1;
+    const session = combat3dApproachSessionRef.current;
+    cancelAnimationFrame(combat3dApproachRafRef.current);
+
+    if (!combat3dApproachEligible) {
+      setCombat3dApproachBlend(0);
+      return;
+    }
+    if (!rolling) {
+      setCombat3dApproachBlend(1);
+      return;
+    }
+
+    setCombat3dApproachBlend(0);
+    const t0 = performance.now();
+    const durationMs = COMBAT_FACEOFF_APPROACH_DURATION_MS;
+    const tick = (now: number) => {
+      if (combat3dApproachSessionRef.current !== session) return;
+      const linear = Math.min(1, (now - t0) / durationMs);
+      const u = linear * linear * (3 - 2 * linear);
+      setCombat3dApproachBlend(u);
+      if (u < 1) {
+        combat3dApproachRafRef.current = requestAnimationFrame(tick);
+      }
+    };
+    combat3dApproachRafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      combat3dApproachSessionRef.current += 1;
+      cancelAnimationFrame(combat3dApproachRafRef.current);
+    };
+  }, [combat3dApproachEligible, rolling]);
   /** Head-body-legs row only when not using 3D tap-to-aim (no duplicate controls). */
   const combatStrikePickButtonsDuringRoll =
     combatState != null &&
@@ -10190,7 +10228,7 @@ export default function LabyrinthGame() {
                 draculaAttackVariant: monsterDraculaVariantForCombat3d,
                 playerAttackVariant: playerAttackVariantForClipLeads,
                 playerFatalJumpKill: playerFatalJumpKill3d,
-                rollingApproachBlend: combat3dRollingApproachBlend,
+                rollingApproachBlend: combat3dApproachBlend,
               });
               const playerAttackClipLeadInSecFor3d = combat3dClipLeads.meshyPlayerAttackLeadInSec;
               /** Per-tier hunt→attack overlap — `PLAYER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER` via `resolveCombat3dClipLeads`. */
@@ -10816,7 +10854,7 @@ export default function LabyrinthGame() {
                           strikePickActive={combatStrikePick3dDuringRoll}
                           onStrikeTargetPick={handleStrikeTargetPick}
                           onOneShotAnimationFinished={combat3dOneShotFinished}
-                          rollingApproachBlend={combat3dRollingApproachBlend}
+                          rollingApproachBlend={combat3dApproachBlend}
                           faceOffAnimationSyncKey={combat3dFaceOffSyncKey}
                           orbitMinDistance={0.48}
                           orbitMaxDistance={11}
@@ -11651,7 +11689,7 @@ export default function LabyrinthGame() {
                             strikePickActive={combatStrikePick3dDuringRoll}
                             onStrikeTargetPick={handleStrikeTargetPick}
                             onOneShotAnimationFinished={combat3dOneShotFinished}
-                            rollingApproachBlend={combat3dRollingApproachBlend}
+                            rollingApproachBlend={combat3dApproachBlend}
                             faceOffAnimationSyncKey={combat3dFaceOffSyncKey}
                             orbitMinDistance={0.48}
                             orbitMaxDistance={11}
