@@ -2154,6 +2154,13 @@ function CameraController({
     mapRotationLog("isoBearingSyncKey", { clearedLastEmittedBearing: true, isoBearingSyncKey });
   }, [isoBearingSyncKey]);
 
+  /* Re-wiring the parent callback (e.g. grid ↔ 3D) leaves `lastEmittedBearingDegRef` on the last angle. If the
+   * camera did not move, the next frame’s bearing matches the ref → no emit → `isoCameraBearingDeg` stays null and
+   * the mini-map falls back to cardinal `playerFacing` only (maze looks “static” while the view orbits). */
+  useEffect(() => {
+    if (onIsoCameraBearingDeg) lastEmittedBearingDegRef.current = null;
+  }, [onIsoCameraBearingDeg]);
+
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera) {
       let baseFov = THREE.MathUtils.clamp(92 - zoom * 16, 58, 95);

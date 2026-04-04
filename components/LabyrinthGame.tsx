@@ -200,6 +200,90 @@ import {
 import { drawEvent, applyEvent } from "@/lib/eventDeck";
 import { applyDraculaTeleport, applyDraculaAttack } from "@/lib/draculaAI";
 
+/** Log each fresh maze session — grep console for `[NEW_GAME]`. Set `false` to silence. */
+const NEW_GAME_LOG = true;
+
+function newGameLog(event: string, details: Record<string, unknown>): void {
+  if (!NEW_GAME_LOG) return;
+  console.log("[NEW_GAME]", event, details);
+}
+
+/** Cheap fingerprint so two reports can tell if the same grid was loaded (not cryptographically strong). */
+function mazeGridFingerprint(lab: Labyrinth): string {
+  let h = 0;
+  const ym = Math.min(lab.height, 48);
+  const xm = Math.min(lab.width, 48);
+  for (let y = 0; y < ym; y++) {
+    const row = lab.grid[y];
+    if (!row) continue;
+    for (let x = 0; x < xm; x++) {
+      const c = row[x]?.charCodeAt(0) ?? 0;
+      h = (Math.imul(31, h) + c) | 0;
+    }
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/** Serializable snapshot of a `Labyrinth` right after generate/load — for bug traces. */
+function buildMazeSessionLogPayload(lab: Labyrinth, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  let wallCells = 0;
+  for (let y = 0; y < lab.height; y++) {
+    const row = lab.grid[y];
+    if (!row) continue;
+    for (let x = 0; x < lab.width; x++) {
+      if (row[x] === "#") wallCells++;
+    }
+  }
+  const pathishCells = lab.width * lab.height - wallCells;
+  return {
+    ts: new Date().toISOString(),
+    env:
+      typeof process !== "undefined" && process.env?.NODE_ENV === "production" ? "production" : "development",
+    multiplayerUiEnabled: MULTIPLAYER_ENABLED,
+    gridFingerprint: mazeGridFingerprint(lab),
+    maze: {
+      width: lab.width,
+      height: lab.height,
+      goal: { x: lab.goalX, y: lab.goalY },
+      wallCells,
+      pathishCells,
+      round: lab.round,
+      currentRound: lab.currentRound,
+      numPlayers: lab.numPlayers,
+      monsterDensity: lab.monsterDensity,
+      firstMonsterType: lab.firstMonsterType,
+      extraPaths: lab.extraPaths,
+    },
+    monsters: lab.monsters.map((m, i) => ({
+      i,
+      type: m.type,
+      pos: { x: m.x, y: m.y },
+      hp: m.hp,
+      patrolWaypointCount: m.patrolArea?.length ?? 0,
+      ...(m.type === "V"
+        ? {
+            draculaState: m.draculaState,
+            targetPlayerIndex: m.targetPlayerIndex,
+          }
+        : {}),
+    })),
+    players: lab.players.map((p, i) => ({
+      i,
+      pos: { x: p.x, y: p.y },
+      hp: p.hp,
+      shield: p.shield,
+      jumps: p.jumps,
+      artifacts: p.artifacts,
+    })),
+    eliminatedSeatIndexes: [...lab.eliminatedPlayers],
+    webCells: lab.webPositions?.length ?? 0,
+    hiddenCells: lab.hiddenCells?.size ?? 0,
+    fogZoneCells: lab.fogZones?.size ?? 0,
+    visitedCellCount: lab.visitedCells?.size ?? 0,
+    ...extra,
+  };
+}
+
 /** Deep-enough clone for Dracula scheduled actions — keeps round/counters in sync with other lab updates. */
 function cloneLabSnapshotForDracula(prev: Labyrinth): Labyrinth {
   const next = new Labyrinth(prev.width, prev.height, 0, prev.numPlayers, prev.monsterDensity, prev.firstMonsterType);
@@ -2977,6 +3061,8 @@ export default function LabyrinthGame() {
   const [playerMoves, setPlayerMoves] = useState<number[]>(() => [0]);
   const [diceResult, setDiceResult] = useState<number | null>(null);
   const [winner, setWinner] = useState<number | null>(null);
+  /** When `winner === -1`, drives the loss line in the game-over modal (Dracula vs generic). */
+  const [gameOverReason, setGameOverReason] = useState<"monsters" | "dracula">("monsters");
   const [error, setError] = useState("");
   const [mazeSize, setMazeSize] = useState(25);
   const [difficulty, setDifficulty] = useState(2);
@@ -3226,6 +3312,15 @@ export default function LabyrinthGame() {
   /** Delayed next-player transition (doMove / teleport / advance effect) — cleared on new game and new move */
   const turnChangePauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const winnerRef = useRef(winner);
+  /** After Dracula’s attack resolves in `setLab`, effect applies `setWinner` / turn pass (avoid side effects inside updater). */
+  const pendingDraculaEliminationRef = useRef<{ allDead: boolean; nextP?: number } | null>(null);
+  /** Map-phase Dracula bite: flushed on `lab` commit → toast + HP readout (avoid `setState` inside `setLab` updater). */
+  const pendingMazeDraculaBiteRef = useRef<{ hpAfter: number; lethal: boolean } | null>(null);
+  const [mazeDraculaBiteBanner, setMazeDraculaBiteBanner] = useState<{
+    seq: number;
+    hpAfter: number;
+    lethal: boolean;
+  } | null>(null);
   const combatStateRef = useRef(combatState);
   const combatResultRef = useRef(combatResult);
   const combatSurpriseRef = useRef<MonsterSurpriseState>("hunt");
@@ -3754,18 +3849,18 @@ export default function LabyrinthGame() {
                   d.hp = Math.min(getMonsterMaxHp("V"), (d.hp ?? getMonsterMaxHp("V")) + 1);
                 }
                 setDraculaAttacked(targetIdx);
+                pendingMazeDraculaBiteRef.current = { hpAfter: p.hp, lethal: p.hp <= 0 };
                 if (p.hp <= 0) {
-                  const [sx, sy] = next2.getSpawnForPlayer(targetIdx);
-                  p.x = sx;
-                  p.y = sy;
-                  p.hp = DEFAULT_PLAYER_HP;
-                  const hasStored = STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(p, k) > 0);
-                  if (hasStored) {
-                    decrementOneStoredArtifactSlot(p);
-                  } else if (p.artifacts > 0) {
-                    p.artifacts--;
-                    const ac = p.artifactsCollected ?? [];
-                    if (ac.length > 0) p.artifactsCollected = ac.slice(0, -1);
+                  // Lethal: eliminate (no silent respawn). Solo → game over overlay; MP → pass turn if anyone left.
+                  next2.eliminatedPlayers.add(targetIdx);
+                  if (next2.eliminatedPlayers.size >= next2.numPlayers) {
+                    pendingDraculaEliminationRef.current = { allDead: true };
+                  } else {
+                    let nextP = (targetIdx + 1) % next2.numPlayers;
+                    while (next2.eliminatedPlayers.has(nextP) && nextP !== targetIdx) {
+                      nextP = (nextP + 1) % next2.numPlayers;
+                    }
+                    pendingDraculaEliminationRef.current = { allDead: false, nextP };
                   }
                 }
               }
@@ -4192,12 +4287,22 @@ export default function LabyrinthGame() {
     return mazeSize;
   }, [mazeSize]);
 
-  const newGame = useCallback(() => {
+  const newGame = useCallback((opts?: { initSource?: string }) => {
+    const initSource = opts?.initSource ?? "procedural";
     const n = MULTIPLAYER_ENABLED ? Math.min(Math.max(1, numPlayers), 9) : 1;
     const size = getDimensions();
     const extraPaths = Math.max(4, n * 2);
     const l = new Labyrinth(size, size, extraPaths, n, difficulty, firstMonsterType);
     l.generate();
+    newGameLog("session_start", buildMazeSessionLogPayload(l, {
+      initSource,
+      generator: "procedural",
+      requestedMazeSize: size,
+      configuredExtraPaths: extraPaths,
+      configuredNumPlayers: n,
+      configuredDifficulty: difficulty,
+      configuredFirstMonsterType: firstMonsterType,
+    }));
     if (teleportTimerRef.current) {
       clearTimeout(teleportTimerRef.current);
       teleportTimerRef.current = null;
@@ -4221,6 +4326,7 @@ export default function LabyrinthGame() {
     setPlayerMoves(Array(n).fill(0));
     setDiceResult(null);
     setWinner(null);
+    setGameOverReason("monsters");
     setError("");
     setBonusAdded(null);
     setDiceBonusApplied(null);
@@ -4238,6 +4344,8 @@ export default function LabyrinthGame() {
     setTorchGained(null);
     setCellsRevealed(null);
     setDraculaAttacked(null);
+    setMazeDraculaBiteBanner(null);
+    pendingMazeDraculaBiteRef.current = null;
     setTeleportAnimation(null);
     setJumpAnimation(null);
     setTeleportPicker(null);
@@ -4299,7 +4407,7 @@ export default function LabyrinthGame() {
           setError(
             "AI maze needs a server (not included in the itch.io build). Using random maze."
           );
-          newGame();
+          newGame({ initSource: "ai_fallback_no_json_response" });
           return;
         }
         throw new Error("Invalid response");
@@ -4313,6 +4421,15 @@ export default function LabyrinthGame() {
       const h = data.height ?? size;
       const l = new Labyrinth(w, h, 0, n, difficulty, firstMonsterType);
       if (data.grid && l.loadGrid(data.grid)) {
+        newGameLog("session_start", buildMazeSessionLogPayload(l, {
+          initSource: "ai_api_grid",
+          generator: "api_generate_maze",
+          requestedMazeSize: size,
+          apiGridWidth: w,
+          apiGridHeight: h,
+          apiGridRowCount: data.grid.length,
+          requestedNumPaths: numPaths,
+        }));
         if (teleportTimerRef.current) {
           clearTimeout(teleportTimerRef.current);
           teleportTimerRef.current = null;
@@ -4336,6 +4453,7 @@ export default function LabyrinthGame() {
         setPlayerTurns(Array(n).fill(0));
         setPlayerMoves(Array(n).fill(0));
         setWinner(null);
+        setGameOverReason("monsters");
         setError("");
         setBonusAdded(null);
     setDiceBonusApplied(null);
@@ -4350,6 +4468,8 @@ export default function LabyrinthGame() {
         setHiddenGemTeleport(null);
         setTorchGained(null);
         setCellsRevealed(null);
+        setMazeDraculaBiteBanner(null);
+        pendingMazeDraculaBiteRef.current = null;
         setTeleportAnimation(null);
         setCatapultMode(false);
         setCatapultPicker(null);
@@ -4365,13 +4485,13 @@ export default function LabyrinthGame() {
         setDefeatedMonsterOnCell(null);
       } else {
         setError("Invalid maze from AI, using random maze.");
-        newGame();
+        newGame({ initSource: "ai_fallback_invalid_grid" });
       }
     } catch (e) {
       setError(
         "Failed to reach API: " + (e instanceof Error ? e.message : "network error")
       );
-      newGame();
+      newGame({ initSource: "ai_fallback_fetch_error" });
     }
   }, [getDimensions, numPlayers, newGame, difficulty, firstMonsterType]);
 
@@ -5850,6 +5970,50 @@ export default function LabyrinthGame() {
     triggerRoundEndRef.current = triggerRoundEnd;
   }, [triggerRoundEnd]);
 
+  useEffect(() => {
+    const bite = pendingMazeDraculaBiteRef.current;
+    if (bite && lab) {
+      pendingMazeDraculaBiteRef.current = null;
+      setMazeDraculaBiteBanner({ seq: Date.now(), hpAfter: bite.hpAfter, lethal: bite.lethal });
+    }
+  }, [lab]);
+
+  useEffect(() => {
+    if (!mazeDraculaBiteBanner) return;
+    const t = setTimeout(() => setMazeDraculaBiteBanner(null), 3200);
+    return () => clearTimeout(t);
+  }, [mazeDraculaBiteBanner]);
+
+  useEffect(() => {
+    const pending = pendingDraculaEliminationRef.current;
+    if (!pending || !lab) return;
+    if (winnerRef.current !== null) {
+      pendingDraculaEliminationRef.current = null;
+      return;
+    }
+    pendingDraculaEliminationRef.current = null;
+    if (pending.allDead) {
+      setGameOverReason("dracula");
+      setWinner(-1);
+      return;
+    }
+    if (pending.nextP !== undefined) {
+      currentPlayerRef.current = pending.nextP;
+      setCurrentPlayer(pending.nextP);
+      showMovementDiceOrInfinite({
+        movesLeftRef,
+        setMovesLeft,
+        setDiceResult,
+        setShowDiceModal,
+        setRolling,
+      });
+      const living = [...Array(lab.numPlayers).keys()].filter((i) => !lab.eliminatedPlayers.has(i));
+      const firstLiving = living.length > 0 ? Math.min(...living) : -1;
+      const roundComplete = living.length <= 1 || pending.nextP === firstLiving;
+      if (roundComplete) setTimeout(() => triggerRoundEndRef.current(), 0);
+    }
+  }, [lab, setCurrentPlayer, setMovesLeft, setDiceResult, setShowDiceModal, setRolling]);
+
   const endTurn = useCallback(() => {
     if (winner !== null || !lab) return;
     if (combatStateRef.current) return;
@@ -6294,7 +6458,10 @@ export default function LabyrinthGame() {
                 setHarmTaken(true);
                 if (p.hp <= 0) {
                   next.eliminatedPlayers.add(currentPlayer);
-                  if (next.eliminatedPlayers.size >= next.numPlayers) setWinner(-1);
+                  if (next.eliminatedPlayers.size >= next.numPlayers) {
+                    setGameOverReason("monsters");
+                    setWinner(-1);
+                  }
                   let nextP = (currentPlayer + 1) % lab.numPlayers;
                   while (next.eliminatedPlayers.has(nextP) && nextP !== currentPlayer) {
                     nextP = (nextP + 1) % lab.numPlayers;
@@ -6930,7 +7097,7 @@ export default function LabyrinthGame() {
       if (isKeyboardEventFromEditableField(e.target)) return;
       if (gamePausedRef.current) return;
       if (e.key === "r" || e.key === "R") {
-        newGame();
+        newGame({ initSource: "keyboard_R" });
         e.preventDefault();
         return;
       }
@@ -8242,7 +8409,7 @@ export default function LabyrinthGame() {
               type="button"
               className="start-menu-cta"
               onClick={() => {
-                newGame();
+                newGame({ initSource: "start_menu_play" });
                 setGameStarted(true);
               }}
               style={{
@@ -8372,6 +8539,10 @@ export default function LabyrinthGame() {
   /** Mobile flat 3D: viewport-sized canvas behind UI (immersive full-screen uses its own layer). */
   const mobileIsoEdgeToEdge =
     isMobile && mazeMapView === "iso" && lab && !isoImmersiveUi && !combatOverlayVisible;
+
+  /** Phone landscape 2D: zoom + moves live in the fixed top HUD so they are not duplicated under a lower z-index sticky row. */
+  const mobileLandscapeGridChromeInFixedHud =
+    isMobile && isLandscapeCompact && mazeMapView === "grid" && !isoImmersiveUi && !!lab;
 
   /** 3D: drop padded `maze-wrap` / inner card chrome; WebGL fills the play shell (mobile edge, immersive, desktop windowed). */
   const mazeIsoFillViewport =
@@ -8929,6 +9100,28 @@ export default function LabyrinthGame() {
                     {totalMoves}
                   </div>
                   <div style={{ borderTop: `1px solid ${START_MENU_BORDER_MUTE}`, paddingTop: 8 }}>
+                    <div style={{ ...headerDropdownMutedStyle, fontSize: "0.72rem", marginBottom: 6 }}>HP</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {lab.players.map((p, i) => (
+                        <div
+                          key={`hp-${i}`}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#aaa"),
+                            textDecoration: lab.eliminatedPlayers.has(i) ? "line-through" : undefined,
+                          }}
+                        >
+                          <span style={{ fontWeight: 600 }}>{playerNames[i] ?? `P${i + 1}`}</span>
+                          <span style={{ color: playerHpAccentColor(p?.hp ?? DEFAULT_PLAYER_HP), fontWeight: 700 }}>
+                            {p?.hp ?? DEFAULT_PLAYER_HP}/{DEFAULT_PLAYER_HP}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ borderTop: `1px solid ${START_MENU_BORDER_MUTE}`, paddingTop: 8 }}>
                     <div style={{ ...headerDropdownMutedStyle, fontSize: "0.72rem", marginBottom: 6 }}>Diamonds</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       {lab.players.map((p, i) => (
@@ -9055,10 +9248,10 @@ export default function LabyrinthGame() {
           type="button"
           onClick={() => setMazeMapView("grid")}
           style={mazeViewToggleButtonStyle(mazeMapView === "grid")}
-          title="Top-down grid (stays full-screen)"
+          title="Top-down 2D map (stays full-screen)"
           aria-pressed={mazeMapView === "grid"}
         >
-          Grid
+          2D
         </button>
         <button
           type="button"
@@ -9137,6 +9330,21 @@ export default function LabyrinthGame() {
         </span>
         <span style={headerStatDivider}>|</span>
         <span style={headerStatItemStyle}>Tot {totalMoves}</span>
+        {cp && !lab.eliminatedPlayers.has(currentPlayer) ? (
+          <>
+            <span style={headerStatDivider}>|</span>
+            <span
+              style={{
+                ...headerStatItemStyle,
+                color: playerHpAccentColor(cp.hp ?? DEFAULT_PLAYER_HP),
+                fontWeight: 700,
+              }}
+              title="Health — Dracula and traps can reduce HP"
+            >
+              HP {cp.hp ?? DEFAULT_PLAYER_HP}/{DEFAULT_PLAYER_HP}
+            </span>
+          </>
+        ) : null}
         <span style={headerStatDivider}>|</span>
         <span style={headerStatItemStyle}>
           {lab.players.map((p, i) => (
@@ -9227,6 +9435,10 @@ export default function LabyrinthGame() {
               <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, flexShrink: 0 }}>
                 {landscapeFsBar && cp ? (
                   <span style={{ fontSize: "0.72rem", color: "#c4c4d4", whiteSpace: "nowrap" }}>
+                    <span style={{ color: playerHpAccentColor(cp.hp ?? DEFAULT_PLAYER_HP), fontWeight: 700 }}>
+                      HP {cp.hp ?? DEFAULT_PLAYER_HP}/{DEFAULT_PLAYER_HP}
+                    </span>
+                    <span style={{ margin: "0 6px", color: "#555" }}>·</span>
                     Moves {movesLeft}
                     <span style={{ margin: "0 6px", color: "#555" }}>·</span>
                     Jumps {cp.jumps ?? 0}
@@ -9240,6 +9452,10 @@ export default function LabyrinthGame() {
               {statsCluster}
               {isMobile && cp && (
                 <div style={{ fontSize: "0.62rem", color: "#9aa0b0", marginTop: -4 }}>
+                  <span style={{ color: playerHpAccentColor(cp.hp ?? DEFAULT_PLAYER_HP), fontWeight: 700 }}>
+                    HP {cp.hp ?? DEFAULT_PLAYER_HP}/{DEFAULT_PLAYER_HP}
+                  </span>
+                  {" · "}
                   Moves left {movesLeft} · Jumps {cp?.jumps ?? 0}
                 </div>
               )}
@@ -9270,6 +9486,50 @@ export default function LabyrinthGame() {
         ...(combatOverlayVisible ? { overflow: "visible" as const } : {}),
       }}
     >
+      {lab && mazeDraculaBiteBanner && !combatOverlayVisible && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            left: "50%",
+            transform: "translateX(-50%)",
+            top: "max(68px, calc(env(safe-area-inset-top, 0px) + 52px))",
+            zIndex: 10075,
+            maxWidth: "min(92vw, 420px)",
+            pointerEvents: "none",
+            padding: "10px 16px",
+            borderRadius: 10,
+            border: "1px solid rgba(255, 80, 80, 0.55)",
+            background: "linear-gradient(165deg, rgba(38, 14, 18, 0.97) 0%, rgba(14, 8, 12, 0.98) 100%)",
+            boxShadow: "0 12px 40px rgba(0,0,0,0.55), 0 0 24px rgba(180, 30, 40, 0.25)",
+            color: "#f0d8dc",
+            fontSize: "0.92rem",
+            fontWeight: 700,
+            textAlign: "center",
+            lineHeight: 1.45,
+          }}
+        >
+          {mazeDraculaBiteBanner.lethal ? (
+            <>
+              <span aria-hidden style={{ marginRight: 6 }}>
+                🧛
+              </span>
+              Dracula struck you down — <span style={{ color: "#ff6666" }}>0</span>/{DEFAULT_PLAYER_HP} HP
+            </>
+          ) : (
+            <>
+              <span aria-hidden style={{ marginRight: 6 }}>
+                🧛
+              </span>
+              Dracula bit you — <span style={{ color: "#ff8888" }}>−1 HP</span>
+              <span style={{ display: "block", marginTop: 6, fontSize: "0.82rem", fontWeight: 600, color: "#c8b8bc" }}>
+                Now at {mazeDraculaBiteBanner.hpAfter}/{DEFAULT_PLAYER_HP} HP
+              </span>
+            </>
+          )}
+        </div>
+      )}
       {!landscapeCompactPlayHud &&
         !(isoImmersiveUi && isMobile) &&
         !(isoImmersiveUi && !isMobile && lab && !combatState && !teleportPicker && !pendingCombatOffer) && (
@@ -9329,6 +9589,21 @@ export default function LabyrinthGame() {
           <span style={headerStatItemStyle}>Round: {(lab.round ?? 0) + 1}/{MAX_ROUNDS}</span>
           <span style={headerStatDivider}>|</span>
           <span style={headerStatItemStyle}>Total: {totalMoves}</span>
+          {cp && !lab.eliminatedPlayers.has(currentPlayer) ? (
+            <>
+              <span style={headerStatDivider}>|</span>
+              <span
+                style={{
+                  ...headerStatItemStyle,
+                  color: playerHpAccentColor(cp.hp ?? DEFAULT_PLAYER_HP),
+                  fontWeight: 700,
+                }}
+                title="Health — Dracula and traps can reduce HP"
+              >
+                HP {cp.hp ?? DEFAULT_PLAYER_HP}/{DEFAULT_PLAYER_HP}
+              </span>
+            </>
+          ) : null}
           <span style={headerStatDivider}>|</span>
           <span style={headerStatItemStyle}>
             {lab.players.map((p, i) => (
@@ -9535,47 +9810,97 @@ export default function LabyrinthGame() {
                 display: "flex",
                 flexWrap: "wrap",
                 alignItems: "center",
-                gap: 6,
+                gap: 8,
                 pointerEvents: "auto",
+                width: "100%",
+                justifyContent:
+                  mobileLandscapeGridChromeInFixedHud || !isMobile ? "space-between" : "flex-end",
               }}
             >
-              {!isMobile ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                {mobileLandscapeGridChromeInFixedHud ? (
+                  <>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <button
+                        type="button"
+                        onClick={() => setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, z - MAZE_ZOOM_STEP))}
+                        style={mazeZoomButtonStyle}
+                        title="Zoom out"
+                      >
+                        −
+                      </button>
+                      <span
+                        style={{ fontSize: "0.8rem", color: "#888", minWidth: 36, textAlign: "center" }}
+                      >
+                        {Math.round((mazeZoom / MAZE_ZOOM_BASELINE) * 100)}%
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setMazeZoom((z) => Math.min(MAZE_ZOOM_MAX, z + MAZE_ZOOM_STEP))}
+                        style={mazeZoomButtonStyle}
+                        title="Zoom in"
+                      >
+                        +
+                      </button>
+                    </div>
+                    {cp ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          flexShrink: 0,
+                          fontSize: "0.72rem",
+                          color: "#c4c4d4",
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        <span title="Moves remaining this turn">Moves {movesLeft}</span>
+                        <span title="Jump charges">Jumps {cp?.jumps ?? 0}</span>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
+                {!isMobile ? (
+                  <button
+                    type="button"
+                    onClick={() => void enterPlayFullscreen()}
+                    style={{
+                      ...mazeViewToggleButtonStyle(false),
+                      minWidth: 40,
+                      padding: "0 8px",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                    title="Enter full-screen play"
+                    aria-label="Enter full-screen play"
+                  >
+                    <FullscreenEnterIcon />
+                  </button>
+                ) : null}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                 <button
                   type="button"
-                  onClick={() => void enterPlayFullscreen()}
-                  style={{
-                    ...mazeViewToggleButtonStyle(false),
-                    minWidth: 40,
-                    padding: "0 8px",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                  title="Enter full-screen play"
-                  aria-label="Enter full-screen play"
+                  onClick={() => setMazeMapView("grid")}
+                  style={mazeViewToggleButtonStyle(mazeMapView === "grid")}
+                  title="Top-down 2D map"
+                  aria-pressed={mazeMapView === "grid"}
                 >
-                  <FullscreenEnterIcon />
+                  2D
                 </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => setMazeMapView("grid")}
-                style={mazeViewToggleButtonStyle(mazeMapView === "grid")}
-                title="Top-down grid map"
-                aria-pressed={mazeMapView === "grid"}
-              >
-                Grid
-              </button>
-              <button
-                type="button"
-                onClick={onIsoViewButtonClick}
-                style={mazeViewToggleButtonStyle(mazeMapView === "iso")}
-                title="3D — full screen where supported"
-                aria-pressed={mazeMapView === "iso"}
-              >
-                3D
-              </button>
-              {renderHeaderMenuBlock()}
+                <button
+                  type="button"
+                  onClick={onIsoViewButtonClick}
+                  style={mazeViewToggleButtonStyle(mazeMapView === "iso")}
+                  title="3D — full screen where supported"
+                  aria-pressed={mazeMapView === "iso"}
+                >
+                  3D
+                </button>
+                {renderHeaderMenuBlock()}
+              </div>
             </div>
           ) : null}
         </div>
@@ -12160,7 +12485,7 @@ export default function LabyrinthGame() {
             <div style={modalRowStyle}>
               <button
                 onClick={() => {
-                  newGame();
+                  newGame({ initSource: "settings_random_maze" });
                   setSettingsOpen(false);
                 }}
                 style={buttonStyle}
@@ -12239,7 +12564,9 @@ export default function LabyrinthGame() {
             : {}),
           ...(isLandscapeCompact && lab && !isoImmersiveUi && !mobileIsoEdgeToEdge
             ? {
-                paddingTop: "calc(max(4px, env(safe-area-inset-top, 0px)) + 48px)",
+                paddingTop: mobileLandscapeGridChromeInFixedHud
+                  ? "calc(max(4px, env(safe-area-inset-top, 0px)) + 56px)"
+                  : "calc(max(4px, env(safe-area-inset-top, 0px)) + 48px)",
               }
             : {}),
           ...(isMobile &&
@@ -12279,7 +12606,8 @@ export default function LabyrinthGame() {
         )}
         {(!isLandscapeCompact || lab) &&
           !isoImmersiveUi &&
-          !(showUnifiedDockInDesktopIso && !isMobile) && (
+          !(showUnifiedDockInDesktopIso && !isMobile) &&
+          !mobileLandscapeGridChromeInFixedHud && (
         <div
           style={{
             ...mazeZoomControlsStyle,
@@ -12350,10 +12678,10 @@ export default function LabyrinthGame() {
                 type="button"
                 onClick={() => setMazeMapView("grid")}
                 style={mazeViewToggleButtonStyle(mazeMapView === "grid")}
-                title="Top-down grid map (play here)"
+                title="Top-down 2D map (play here)"
                 aria-pressed={mazeMapView === "grid"}
               >
-                Grid
+                2D
               </button>
               <button
                 type="button"
@@ -12621,10 +12949,10 @@ export default function LabyrinthGame() {
                             type="button"
                             onClick={() => setMazeMapView("grid")}
                             style={mazeViewToggleButtonStyle(false)}
-                            title="Top-down grid map (play here)"
+                            title="Top-down 2D map (play here)"
                             aria-pressed={false}
                           >
-                            Grid
+                            2D
                           </button>
                           <button
                             type="button"
@@ -15764,8 +16092,25 @@ export default function LabyrinthGame() {
             <p style={{ ...gameOverResultStyle, color: winner >= 0 ? "#00ff88" : "#ff6666" }}>
               {winner >= 0
                 ? `${playerNames[winner] ?? `Player ${winner + 1}`} wins!`
-                : "Monsters win!"}
+                : gameOverReason === "dracula"
+                  ? "Dracula has slain you — the labyrinth claims another soul."
+                  : "Monsters win!"}
             </p>
+            {winner !== null && winner < 0 ? (
+              <p
+                style={{
+                  margin: "0 0 1.25rem 0",
+                  fontSize: "0.95rem",
+                  textAlign: "center",
+                  color: "#8e9aaa",
+                  lineHeight: 1.5,
+                }}
+              >
+                {gameOverReason === "dracula"
+                  ? "There is no respawn from Dracula's attack. Use Restart Game to begin a fresh maze."
+                  : "Use Restart Game to try again."}
+              </p>
+            ) : null}
             <div style={gameOverStatsStyle}>
               {lab.players.map((p, i) => (
                 <div key={i} style={{ ...gameOverStatRowStyle, color: lab.eliminatedPlayers.has(i) ? "#666" : (PLAYER_COLORS[i] ?? "#888") }}>
@@ -15777,7 +16122,11 @@ export default function LabyrinthGame() {
       </div>
               ))}
             </div>
-            <button onClick={newGame} style={gameOverRestartButtonStyle}>
+            <button
+              type="button"
+              onClick={() => newGame({ initSource: "game_over_restart" })}
+              style={gameOverRestartButtonStyle}
+            >
               Restart Game
             </button>
           </div>
