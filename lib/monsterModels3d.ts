@@ -1679,18 +1679,6 @@ export function resolveWalkFightBackClipName(
   return null;
 }
 
-/**
- * Optional clip priority per GLB file slug. Merged Dracula uses `MESHY_MERGED_CLIP_PRIORITY.V` + attack variant helper.
- */
-export const MONSTER_CLIP_PRIORITY_BY_GLB_SLUG: Record<
-  string,
-  Partial<Record<Monster3DSpriteState, readonly string[]>>
-> = {
-  "dracula-dead": {
-    defeated: ["Armature|Dead|baselayer", "Dead", "dead", "Death", "death", "Armature|Shot_and_Fall_Forward|baselayer", "Dying", "dying"],
-  },
-};
-
 const MESHY_MERGED_CLIP_PRIORITY: Partial<
   Record<MonsterType, Partial<Record<Monster3DSpriteState, readonly string[]>>>
 > = {
@@ -1939,7 +1927,6 @@ export function getPreferredClipNamesForState(
   draculaHurtHp?: { hp: number; maxHp: number } | null,
   draculaHurtStrikeZone?: StrikeTarget | null,
 ): string[] {
-  const fromSlug = glbSlug ? MONSTER_CLIP_PRIORITY_BY_GLB_SLUG[glbSlug]?.[state] : undefined;
   const meshy = monsterType != null ? MESHY_MERGED_CLIP_PRIORITY[monsterType]?.[state] : undefined;
   const base = baseClipNamesForState(state);
   const merged: string[] = [];
@@ -1961,7 +1948,6 @@ export function getPreferredClipNamesForState(
   const isLavaMerged = monsterType === "L" && glbSlug === "lava";
   const isClownMerged = monsterType === "O" && glbSlug === "clown";
   const strikeVariant = draculaAttackVariant ?? "skill";
-  push(fromSlug);
   if (isDraculaMerged && state === "attack") {
     push(draculaMergedAttackClipPriority(draculaAttackVariant ?? "skill"));
   } else if (isDraculaMerged && state === "knockdown") {

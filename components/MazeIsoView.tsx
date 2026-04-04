@@ -436,6 +436,8 @@ function SlingshotTrajectoryArc({
 /** Wall blocks fill the full cell — adjacent walls form solid continuous walls. */
 const WALL_SIZE = CS;
 const WALL_HEIGHT = 3.25;
+/** Rotating pickup GLBs (artifacts, bomb, catapult, trap): max bbox extent in world units (was 0.54 — too small after low-poly remeshes). */
+const MAZE_ROTATING_PICKUP_MAX_DIM = CS * 0.34;
 /** Spider web GLB: scale to span corridor (one cell) and wall height. */
 const SPIDER_WEB_TUNNEL_WIDTH = CS * 1.06;
 const SPIDER_WEB_TUNNEL_HEIGHT = WALL_HEIGHT * 0.98;
@@ -1684,7 +1686,7 @@ function RotatingArtifactGlbPickup({ x, y, url }: { x: number; y: number; url: s
     const box = new THREE.Box3().setFromObject(clone);
     const size = box.getSize(new THREE.Vector3());
     const maxD = Math.max(size.x, size.y, size.z, 1e-4);
-    const u = 0.54 / maxD;
+    const u = MAZE_ROTATING_PICKUP_MAX_DIM / maxD;
     clone.scale.setScalar(u);
     clone.updateMatrixWorld(true);
     const b2 = new THREE.Box3().setFromObject(clone);

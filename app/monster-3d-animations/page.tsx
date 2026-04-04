@@ -371,9 +371,8 @@ export default function Monster3dAnimationsReferencePage() {
                   <td style={{ padding: "10px 12px", fontFamily: "ui-monospace, monospace", verticalAlign: "top" }}>
                     {t === "V" ? (
                       <span style={{ color: "#ddb8c4" }}>
-                        <code style={{ color: "#c4e8ff" }}>/models/monsters/dracula.glb</code> (merged Meshy clips). Optional
-                        segment exports under <code style={{ color: "#c4e8ff" }}>dracula-*.glb</code> for Blender/pipeline only
-                        — not loaded by the game.
+                        <code style={{ color: "#c4e8ff" }}>/models/monsters/dracula.glb</code> — single merged Meshy rig (segment
+                        GLBs stay in Blender / version control history only; not shipped).
                       </span>
                     ) : t === "K" ? (
                       <span style={{ color: "#ddb8c4" }}>

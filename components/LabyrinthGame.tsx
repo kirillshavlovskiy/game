@@ -161,6 +161,7 @@ import {
   type StoredArtifactKind,
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
+import { MULTIPLAYER_ENABLED } from "@/lib/gameEnv";
 import { ARTIFACT_KIND_VISUAL_GLB } from "@/lib/storedArtifactGlbs";
 import { MAZE_WORLD_FEATURE_BOMB_GLB, mazeWorldFeatureGlbUrl } from "@/lib/mazeIsoWorldPickups";
 import {
@@ -2969,15 +2970,15 @@ export default function LabyrinthGame() {
   const [currentPlayer, setCurrentPlayer] = useState(0);
   const [movesLeft, setMovesLeft] = useState(0);
   const [totalMoves, setTotalMoves] = useState(0);
-  const [playerTurns, setPlayerTurns] = useState<number[]>(() => [0, 0, 0]);
-  const [playerMoves, setPlayerMoves] = useState<number[]>(() => [0, 0, 0]);
+  const [playerTurns, setPlayerTurns] = useState<number[]>(() => [0]);
+  const [playerMoves, setPlayerMoves] = useState<number[]>(() => [0]);
   const [diceResult, setDiceResult] = useState<number | null>(null);
   const [winner, setWinner] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [mazeSize, setMazeSize] = useState(25);
   const [difficulty, setDifficulty] = useState(2);
   const [firstMonsterType, setFirstMonsterType] = useState<import("@/lib/labyrinth").MonsterType>("V");
-  const [numPlayers, setNumPlayers] = useState(3);
+  const [numPlayers, setNumPlayers] = useState(1);
   const [rolling, setRolling] = useState(false);
   const [bonusAdded, setBonusAdded] = useState<number | null>(null);
   const [jumpAdded, setJumpAdded] = useState<number | null>(null);
@@ -3200,7 +3201,7 @@ export default function LabyrinthGame() {
   const headerMenuRef = useRef<HTMLDivElement>(null);
   const [showDiceModal, setShowDiceModal] = useState(false);
   const [playerNames, setPlayerNames] = useState<string[]>(() =>
-    Array.from({ length: 3 }, (_, i) => `Player ${i + 1}`)
+    Array.from({ length: 1 }, (_, i) => `Player ${i + 1}`)
   );
   const [playerAvatars, setPlayerAvatars] = useState<string[]>(() =>
     Array.from({ length: 10 }, (_, i) =>
@@ -3944,8 +3945,13 @@ export default function LabyrinthGame() {
   }, [currentPlayer, winner, showDiceModal]);
 
   useEffect(() => {
+    const maxP = MULTIPLAYER_ENABLED ? 10 : 1;
+    const n = Math.min(Math.max(1, numPlayers), maxP);
+    if (n !== numPlayers) {
+      setNumPlayers(n);
+      return;
+    }
     setPlayerNames((prev) => {
-      const n = Math.min(Math.max(1, numPlayers), 10);
       if (prev.length === n) return prev;
       if (prev.length < n) {
         return [
@@ -3955,7 +3961,6 @@ export default function LabyrinthGame() {
       }
       return prev.slice(0, n);
     });
-    const n = Math.min(Math.max(1, numPlayers), 10);
     setPlayerTurns((prev) => (prev.length === n ? prev : [...prev.slice(0, n), ...Array(Math.max(0, n - prev.length)).fill(0)]));
     setPlayerMoves((prev) => (prev.length === n ? prev : [...prev.slice(0, n), ...Array(Math.max(0, n - prev.length)).fill(0)]));
   }, [numPlayers]);
@@ -4149,7 +4154,7 @@ export default function LabyrinthGame() {
   }, [mazeSize]);
 
   const newGame = useCallback(() => {
-    const n = Math.min(Math.max(1, numPlayers), 9);
+    const n = MULTIPLAYER_ENABLED ? Math.min(Math.max(1, numPlayers), 9) : 1;
     const size = getDimensions();
     const extraPaths = Math.max(4, n * 2);
     const l = new Labyrinth(size, size, extraPaths, n, difficulty, firstMonsterType);
@@ -4229,7 +4234,7 @@ export default function LabyrinthGame() {
   }, [getDimensions, numPlayers, difficulty, firstMonsterType]);
 
   const generateWithAI = useCallback(async () => {
-    const n = Math.min(Math.max(1, numPlayers), 9);
+    const n = MULTIPLAYER_ENABLED ? Math.min(Math.max(1, numPlayers), 9) : 1;
     const numPaths = n * 2;
     setError("Generating maze...");
     try {
@@ -7777,17 +7782,19 @@ export default function LabyrinthGame() {
                 ))}
               </select>
             </div>
-            <div style={startModalRowBase}>
-              <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>Number of players</label>
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={numPlayers}
-                onChange={(e) => setNumPlayers(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
-                style={{ ...startModalInputStyle, ...(isMobile ? { width: "100%", maxWidth: 120, minHeight: 44 } : {}) }}
-              />
-            </div>
+            {MULTIPLAYER_ENABLED ? (
+              <div style={startModalRowBase}>
+                <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>Number of players</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={numPlayers}
+                  onChange={(e) => setNumPlayers(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
+                  style={{ ...startModalInputStyle, ...(isMobile ? { width: "100%", maxWidth: 120, minHeight: 44 } : {}) }}
+                />
+              </div>
+            ) : null}
             <div
               style={{
                 ...modalRowStyle,
@@ -10450,6 +10457,36 @@ export default function LabyrinthGame() {
                 }
                 return undefined;
               })();
+              /**
+               * Same paired-mixer gate as `Monster3dContactPairLab` (`faceOffAnimationSyncKey`): without it, player/monster
+               * GLBs that load at different times start clips one frame apart and contact timing diverges from the lab.
+               * Omit `rollingApproachBlend` — it lerps every frame; world X still updates via `combatFaceOffPositions`.
+               */
+              const combat3dFaceOffSyncKey =
+                isMonster3DEnabled() && monsterGltfPath && headerMt
+                  ? [
+                      combatState != null
+                        ? `live-${combatState.sessionId}-${combatState.monsterIndex}`
+                        : `post-${String(combatResult?.monsterType ?? "?")}-${headerPi}`,
+                      headerMt,
+                      String(headerPi),
+                      gltfVisualState,
+                      playerGltfVisualState,
+                      monsterDraculaVariantForCombat3d ?? "na",
+                      playerAttackVariantForClipLeads ?? "na",
+                      combatStrikePick3dDuringRoll ? "sp1" : "sp0",
+                      draculaHurtHpFor3d
+                        ? `${draculaHurtHpFor3d.hp}/${draculaHurtHpFor3d.maxHp}`
+                        : "hurtHpX",
+                      playerFatalJumpKill3d ? "fj1" : "fj0",
+                      combatFooterSnapshot?.strikePortrait ?? "noFooter",
+                      combatFooterSnapshot?.playerRoll != null ? String(combatFooterSnapshot.playerRoll) : "",
+                      combatFooterSnapshot?.strikeTargetPick ?? "",
+                      String(playerAttackClipCycleIndexFor3d),
+                      combatWeaponPath ?? "",
+                      combatOffhandArmourPath ?? "",
+                    ].join("|")
+                  : undefined;
               /** Landscape: skills/artifacts in the center column; roll + retreat under HP bars (pre–e26e59e4 layout). */
               const renderLandscapeFaceoffSkillsPanel = (): React.ReactNode => {
                 if (!lab || !combatState) return null;
@@ -10780,6 +10817,9 @@ export default function LabyrinthGame() {
                           onStrikeTargetPick={handleStrikeTargetPick}
                           onOneShotAnimationFinished={combat3dOneShotFinished}
                           rollingApproachBlend={combat3dRollingApproachBlend}
+                          faceOffAnimationSyncKey={combat3dFaceOffSyncKey}
+                          orbitMinDistance={0.48}
+                          orbitMaxDistance={11}
                           width={COMBAT_MODAL_WIDTH_LANDSCAPE_PX}
                           height={combatScene3dHeightFaceoff}
                           fallback={
@@ -11612,6 +11652,9 @@ export default function LabyrinthGame() {
                             onStrikeTargetPick={handleStrikeTargetPick}
                             onOneShotAnimationFinished={combat3dOneShotFinished}
                             rollingApproachBlend={combat3dRollingApproachBlend}
+                            faceOffAnimationSyncKey={combat3dFaceOffSyncKey}
+                            orbitMinDistance={0.48}
+                            orbitMaxDistance={11}
                             width={COMBAT_MODAL_WIDTH}
                             height={combatMonster3dHeight}
                             fallback={
@@ -11958,17 +12001,19 @@ export default function LabyrinthGame() {
                 ))}
               </select>
             </div>
-            <div style={modalRowStyle}>
-              <label>Players:</label>
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={numPlayers}
-                onChange={(e) => setNumPlayers(Number(e.target.value) || 1)}
-                style={inputStyle}
-              />
-            </div>
+            {MULTIPLAYER_ENABLED ? (
+              <div style={modalRowStyle}>
+                <label>Players:</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={numPlayers}
+                  onChange={(e) => setNumPlayers(Number(e.target.value) || 1)}
+                  style={inputStyle}
+                />
+              </div>
+            ) : null}
             <div style={{ ...modalRowStyle, flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
               <label>Player names & avatars (horror hunters + emoji):</label>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>

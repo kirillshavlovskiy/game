@@ -14,7 +14,9 @@
     "clean": "rm -rf .next node_modules package-lock.json && npm install",
     "start": "next start",
     "lint": "next lint",
-    "textures:maze": "python3 scripts/generate-maze-textures.py"
+    "textures:maze": "python3 scripts/generate-maze-textures.py",
+    "optimize:prop-glbs": "bash scripts/optimize-prop-glbs.sh",
+    "optimize:merged-glbs": "bash scripts/optimize-merged-glbs.sh"
   },
   "dependencies": {
     "@3d-dice/dice-box-threejs": "^0.0.12",
@@ -28,6 +30,7 @@
     "three": "^0.170.0"
   },
   "devDependencies": {
+    "@gltf-transform/cli": "^4.3.0",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
