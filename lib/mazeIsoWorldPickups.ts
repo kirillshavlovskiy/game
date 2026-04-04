@@ -11,7 +11,7 @@ export const MAZE_WORLD_FEATURE_SIEGE_CAT_GLB = `${MAZE_P}siege-cat.glb`;
 export const MAZE_WORLD_FEATURE_BOMB_GLB = `${MAZE_P}bomb.glb`;
 export const MAZE_WORLD_FEATURE_SPIKED_TRAP_GLB = `${MAZE_P}spiked-trap.glb`;
 
-/** 3D spider web props on `lab.webPositions` (iso maze). */
+/** 3D spider web props on `lab.webPositions` (iso maze). Source: Meshy AI `Meshy_AI_generate_3d_model_of__0404080446_texture.glb` → `spider-web-mesh.glb` in this folder. */
 export const MAZE_SPIDER_WEB_MESH_GLB = `${MAZE_P}spider-web-mesh.glb`;
 
 export const MAZE_WORLD_FEATURE_GLB_URLS = [
