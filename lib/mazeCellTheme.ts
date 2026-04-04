@@ -2,13 +2,38 @@ import type { CSSProperties } from "react";
 import { isWalkable, PLAYER_COLORS } from "./labyrinth";
 
 /**
- * Document-relative `public/` URLs (`./textures/...`). Root-absolute `/textures/...` breaks on
- * portal hosts (Crazy Games, itch.io): the browser resolves against the site root, not the game folder.
+ * `public/` texture URLs for maze 2D + 3D.
+ * - Default (`NEXT_PUBLIC_MAZE_TEXTURE_PREFIX` `/`): `/textures/...` — reliable for `useTexture` / localhost / Vercel.
+ * - Itch static export (`ITCH_EXPORT=1`): `./textures/...` — resolves beside `index.html` in the zip.
  */
-function mazeAssetPath(relativeFromPublic: string): string {
+export function mazeAssetPath(relativeFromPublic: string): string {
   const p = relativeFromPublic.replace(/^\//, "");
-  return `./${p}`;
+  const pref = process.env.NEXT_PUBLIC_MAZE_TEXTURE_PREFIX ?? "/";
+  if (pref === "./") return `./${p}`;
+  return `/${p}`;
 }
+
+/** Corridor fog sprite — same prefix rules as floor/wall (`MazeIsoView`). */
+export const MAZE_CORRIDOR_FOG_TEXTURE_URL = mazeAssetPath("textures/maze/Effects/corridor_fog_tile.png");
+
+const MAZE_ISO_STAIN_FILENAMES = [
+  "Horror_Stain_01-256x256.png",
+  "Horror_Stain_02-256x256.png",
+  "Horror_Stain_03-256x256.png",
+  "Horror_Stain_04-256x256.png",
+  "Horror_Stain_05-256x256.png",
+  "Horror_Stain_06-256x256.png",
+  "Horror_Stain_08-256x256.png",
+  "Horror_Stain_09-256x256.png",
+  "Horror_Stain_10-256x256.png",
+  "Horror_Stain_13-256x256.png",
+  "Horror_Stain_14-256x256.png",
+] as const;
+
+/** ISO floor decals — filenames aligned with on-disk `public/textures/maze/Stains/`. */
+export const MAZE_ISO_STAIN_TEXTURE_URLS: readonly string[] = MAZE_ISO_STAIN_FILENAMES.map((f) =>
+  mazeAssetPath(`textures/maze/Stains/${f}`),
+);
 
 /** `true` only in Crazy Games lite production build (`CRAZYGAMES_LITE=1` → `next.config.js` inlines `NEXT_PUBLIC_CRAZYGAMES_LITE`). */
 export const MAZE_LITE_TEXTURES = process.env.NEXT_PUBLIC_CRAZYGAMES_LITE === "1";

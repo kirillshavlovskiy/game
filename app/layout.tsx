@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import "@fontsource/creepster";
 import { CrazyGamesSdk } from "@/components/CrazyGamesSdk";
-import { MAZE_LITE_TEXTURES } from "@/lib/mazeCellTheme";
+import { MAZE_FLOOR_TEXTURE, MAZE_LITE_TEXTURES, MAZE_NOISE_TEXTURE, MAZE_WALL_TEXTURE } from "@/lib/mazeCellTheme";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -27,9 +27,9 @@ export const viewport: Viewport = {
 /** Inline so `url()` resolves from the HTML document (portal subpaths). Linked CSS would resolve from `/_next/static/`. */
 const MAZE_TEXTURE_CSS_VARS_FULL = `
 :root {
-  --maze-wall-tex: url("./textures/maze/Stone/Horror_Stone_02-256x256.png");
-  --maze-floor-tex: url("./textures/maze/Brick/Horror_Brick_07-256x256.png");
-  --maze-noise-tex: url("./textures/maze/noise_grain.png");
+  --maze-wall-tex: url(${JSON.stringify(MAZE_WALL_TEXTURE)});
+  --maze-floor-tex: url(${JSON.stringify(MAZE_FLOOR_TEXTURE)});
+  --maze-noise-tex: url(${JSON.stringify(MAZE_NOISE_TEXTURE)});
 }
 `;
 

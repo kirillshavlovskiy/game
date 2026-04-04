@@ -17,7 +17,12 @@ import type { ReactNode, Ref } from "react";
 import { Canvas, useThree, useFrame, ThreeEvent } from "@react-three/fiber";
 import { OrbitControls, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
-import { MAZE_FLOOR_TEXTURE, MAZE_ISO_WALL_SIDE_TEXTURE } from "@/lib/mazeCellTheme";
+import {
+  MAZE_CORRIDOR_FOG_TEXTURE_URL,
+  MAZE_FLOOR_TEXTURE,
+  MAZE_ISO_STAIN_TEXTURE_URLS,
+  MAZE_ISO_WALL_SIDE_TEXTURE,
+} from "@/lib/mazeCellTheme";
 import {
   WALL,
   type DraculaState,
@@ -1312,15 +1317,13 @@ function GothicWallOrnaments({
   );
 }
 
-const MAZE_CORRIDOR_FOG_TEXTURE = "/textures/maze/Effects/corridor_fog_tile.png";
-
-void useTexture.preload(MAZE_CORRIDOR_FOG_TEXTURE);
+void useTexture.preload(MAZE_CORRIDOR_FOG_TEXTURE_URL);
 void useTexture.preload(MAZE_FLOOR_TEXTURE);
 void useTexture.preload(MAZE_ISO_WALL_SIDE_TEXTURE);
 
 /** Exponential depth fog — distance haze (stronger = thicker air). */
 const ATMOSPHERIC_FOG_COLOR = 0x030408;
-const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0096;
+const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0076;
 /** Every path cell gets at least this mist strength; game fog zones blend toward full opacity. */
 const CORRIDOR_BASE_MIST = 0.44;
 /** Per-cell fog wobble so neighbouring tiles read at visibly different densities. */
@@ -1425,7 +1428,7 @@ function CorridorFogVolumes({
   mapHeight: number;
   fogIntensityMap?: Map<string, number>;
 }) {
-  const fogTex = useTexture(MAZE_CORRIDOR_FOG_TEXTURE);
+  const fogTex = useTexture(MAZE_CORRIDOR_FOG_TEXTURE_URL);
   useEffect(() => {
     fogTex.wrapS = fogTex.wrapT = THREE.RepeatWrapping;
     fogTex.repeat.set(2.2, 2.2);
@@ -1915,20 +1918,7 @@ function MazeSetPieces({
 /* ------------------------------------------------------------------ */
 /*  Blood/mud stain decals on walkable floor tiles                     */
 /* ------------------------------------------------------------------ */
-const STAIN_PATHS = [
-  "/textures/maze/Stains/Horror_Stain_01-256x256.png",
-  "/textures/maze/Stains/Horror_Stain_02-256x256.png",
-  "/textures/maze/Stains/Horror_Stain_03-256x256.png",
-  "/textures/maze/Stains/Horror_Stain_04-256x256.png",
-  "/textures/maze/Stains/Horror_Stain_05-256x256.png",
-  "/textures/maze/Stains/Horror_Stain_06-256x256.png",
-  "/textures/maze/Stains/Horror_Stain_08-256x256.png",
-  "/textures/maze/Stains/Horror_Stain_09-256x256.png",
-  "/textures/maze/Stains/Horror_Stain_10-256x256.png",
-  "/textures/maze/Stains/Horror_Stain_13-256x256.png",
-  "/textures/maze/Stains/Horror_Stain_14-256x256.png",
-];
-for (const _st of STAIN_PATHS) void useTexture.preload(_st);
+for (const _st of MAZE_ISO_STAIN_TEXTURE_URLS) void useTexture.preload(_st);
 /** Deterministic hash for per-cell stain placement. */
 function cellHash(x: number, y: number, salt: number) {
   return ((x * 374761393 + y * 668265263 + salt * 1440865359) >>> 0) % 1000;
@@ -1991,7 +1981,7 @@ function FloorStains({
 }: {
   grid: string[][]; mapWidth: number; mapHeight: number;
 }) {
-  const stainTextures = useTexture(STAIN_PATHS);
+  const stainTextures = useTexture(MAZE_ISO_STAIN_TEXTURE_URLS);
 
   const stainsByTex = useMemo(() => {
     const buckets: FloorStainInstance[][] = stainTextures.map(() => []);
@@ -3366,10 +3356,10 @@ function MazeScene({
     <>
       <MazeAtmosphericFog />
       {/* Near-black fill so torch / player pools read as islands; key light paints hard shadow shapes. */}
-      <ambientLight intensity={0.0045} color="#1a1d28" />
+      <ambientLight intensity={0.016} color="#1a1d28" />
       <directionalLight
         position={[18, 26, 10]}
-        intensity={0.1}
+        intensity={0.14}
         color="#c8d2e2"
         castShadow
         shadow-mapSize-width={1024}
@@ -3382,7 +3372,7 @@ function MazeScene({
         shadow-camera-bottom={-shadowRange}
         shadow-bias={-0.00022}
       />
-      <directionalLight position={[-12, 12, -12]} intensity={0.028} color="#7a88a8" />
+      <directionalLight position={[-12, 12, -12]} intensity={0.042} color="#7a88a8" />
 
       <FloorTiles grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} onCellClick={onCellClick} />
       <CorridorFogVolumes grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
