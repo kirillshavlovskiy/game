@@ -1,5 +1,6 @@
 import type { MonsterType } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
+import { publicAssetPath } from "@/lib/publicAssetPath";
 
 /** Mirrors combat portrait states used with `getMonsterSprite` in LabyrinthGame. */
 export type Monster3DSpriteState =
@@ -29,7 +30,7 @@ export const MONSTER_3D_VISUAL_STATES: readonly Monster3DSpriteState[] = [
 ];
 
 /** Single merged rig (Meshy exports baked in Blender) — combat + preview swap clips only (smooth mixer cross-fades). */
-const DRACULA_MERGED_GLB = "/models/monsters/dracula.glb";
+const DRACULA_MERGED_GLB = publicAssetPath("models/monsters/dracula.glb");
 
 /**
  * Exact `animations[].name` values in merged `dracula.glb` (verify with a GLB JSON dump if re-exporting):
@@ -502,14 +503,14 @@ export function spiderMergedAttackClipPriority(variant: "spell" | "skill" | "lig
  * Reaping_Swing, running, Triple_Combo_Attack, walking_man, falling_down.
  * ──────────────────────────────────────────────────────────────────── */
 
-export const PLAYER_3D_GLB = "/models/player/wasteland-drifter.glb";
+export const PLAYER_3D_GLB = publicAssetPath("models/player/wasteland-drifter.glb");
 
 /** All available 3D player character models — mapped by portrait path for selection. */
 export const PLAYER_3D_GLBS: Record<string, string> = {
-  "/heroes/hero-wear-1.png": "/models/player/wasteland-drifter.glb",
-  "/heroes/hero-wear-2.png": "/models/player/wasteland-drifter.glb",
-  "/heroes/hero-wear-3.png": "/models/player/wasteland-drifter.glb",
-  "/heroes/hero-wear-4.png": "/models/player/wasteland-drifter.glb",
+  [publicAssetPath("heroes/hero-wear-1.png")]: publicAssetPath("models/player/wasteland-drifter.glb"),
+  [publicAssetPath("heroes/hero-wear-2.png")]: publicAssetPath("models/player/wasteland-drifter.glb"),
+  [publicAssetPath("heroes/hero-wear-3.png")]: publicAssetPath("models/player/wasteland-drifter.glb"),
+  [publicAssetPath("heroes/hero-wear-4.png")]: publicAssetPath("models/player/wasteland-drifter.glb"),
 };
 
 /** Resolve the player 3D GLB path from the selected avatar portrait. Falls back to wasteland-drifter. */
@@ -1556,7 +1557,7 @@ export function isMonster3DEnabled(): boolean {
 function resolveMonsterGltfUrl(type: MonsterType): string {
   if (type === "V") return DRACULA_MERGED_GLB;
   const slug = MONSTER_3D_GLB_SLUG_BY_TYPE[type];
-  return `/models/monsters/${slug}.glb`;
+  return publicAssetPath(`models/monsters/${slug}.glb`);
 }
 
 /**

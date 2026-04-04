@@ -182,6 +182,7 @@ import {
   pathFogVisualIntensity,
   wallStyleWithOptionalSconce,
 } from "@/lib/mazeCellTheme";
+import { publicAssetPath } from "@/lib/publicAssetPath";
 import { applyMazeSimplexNoiseToElement } from "@/lib/mazeProceduralNoise";
 import {
   resolveCombat,
@@ -2433,8 +2434,8 @@ function SpiderWebCell() {
 
 /** Avatar options for player selection (emoji) */
 const PLAYER_AVATARS = ["🧙", "🧛", "🧟", "🦸", "🧚", "🦊", "🐉", "🦉", "🐺", "🦋"] as const;
-/** Horror-maze hunter portraits (`/heroes/*.png`) — wear-only variants, no weapons or ammo */
-const HERO_PORTRAIT_PREFIX = "/heroes/";
+/** Horror-maze hunter portraits (`public/heroes/*.png`) — wear-only variants, no weapons or ammo */
+const HERO_PORTRAIT_PREFIX = publicAssetPath("heroes/");
 const HORROR_HERO_PORTRAITS = [
   { path: `${HERO_PORTRAIT_PREFIX}hero-wear-1.png`, title: "Horror hero — leather & belts (no weapons)" },
   { path: `${HERO_PORTRAIT_PREFIX}hero-wear-2.png`, title: "Horror hero — hooded rags (no weapons)" },
@@ -2443,7 +2444,19 @@ const HORROR_HERO_PORTRAITS = [
 ] as const;
 
 function isHeroPortraitPath(value: string): boolean {
-  return value.startsWith(HERO_PORTRAIT_PREFIX);
+  return (
+    value.startsWith(HERO_PORTRAIT_PREFIX) ||
+    value.startsWith("/heroes/") ||
+    value.startsWith("./heroes/")
+  );
+}
+
+/** Normalize stored portrait URLs so itch subpath builds still resolve (e.g. legacy `/heroes/…`). */
+function heroPortraitImgSrc(value: string): string {
+  if (!isHeroPortraitPath(value)) return value;
+  const i = value.indexOf("heroes/");
+  const file = i >= 0 ? value.slice(i + "heroes/".length) : value;
+  return publicAssetPath(`heroes/${file}`);
 }
 
 function PlayerAvatarFace(props: {
@@ -2456,7 +2469,7 @@ function PlayerAvatarFace(props: {
   if (isHeroPortraitPath(value)) {
     return (
       <img
-        src={value}
+        src={heroPortraitImgSrc(value)}
         alt=""
         draggable={false}
         style={{

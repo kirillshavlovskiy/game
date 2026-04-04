@@ -2,7 +2,9 @@
  * Player weapon / shield GLB paths (`public/models/armour/*.glb`).
  * Weapons (main hand) and armour (off-hand shields) are separate pickers in the start menu and combine in 3D.
  */
-export const ARMOUR_GLB_PREFIX = "/models/armour/";
+import { publicAssetPath } from "./publicAssetPath";
+
+export const ARMOUR_GLB_PREFIX = publicAssetPath("models/armour/");
 
 /** Main-hand weapons — swords, axes, hammers, relics (right hand by default). */
 export const PLAYER_WEAPON_GLB_OPTIONS = [

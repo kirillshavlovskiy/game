@@ -49,6 +49,7 @@ import {
   mapRotationLog,
   mapRotationLogSnapshot,
 } from "@/lib/mapRotationDebug";
+import { publicAssetPath } from "@/lib/publicAssetPath";
 import { resolveWeaponAttachHand } from "@/lib/weaponAttachConfig";
 import { BoneAttachedWeapon, WeaponLoadErrorBoundary } from "@/components/MonsterModel3D";
 import { WebGlContextLossGuard } from "@/components/WebGlContextLossGuard";
@@ -2737,13 +2738,13 @@ function SlingshotSourceHint({ cellX, cellY }: { cellX: number; cellY: number })
 /*  3D Monsters ? billboard sprites that always face the camera        */
 /* ------------------------------------------------------------------ */
 const MONSTER_SPRITE_MAP: Record<string, string> = {
-  V: "/monsters/dracula/idle.png",
-  Z: "/monsters/zombie/idle.png",
-  S: "/monsters/spider/idle.png",
-  G: "/monsters/ghost/idle.png",
-  K: "/monsters/skeleton/idle.png",
-  L: "/monsters/lava/neutral.png",
-  O: "/monsters/clown/idle.png",
+  V: publicAssetPath("monsters/dracula/idle.png"),
+  Z: publicAssetPath("monsters/zombie/idle.png"),
+  S: publicAssetPath("monsters/spider/idle.png"),
+  G: publicAssetPath("monsters/ghost/idle.png"),
+  K: publicAssetPath("monsters/skeleton/idle.png"),
+  L: publicAssetPath("monsters/lava/neutral.png"),
+  O: publicAssetPath("monsters/clown/idle.png"),
 };
 for (const _sp of Object.values(MONSTER_SPRITE_MAP)) void useTexture.preload(_sp);
 

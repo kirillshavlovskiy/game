@@ -3,8 +3,9 @@
  * Stored artifacts use `ARTIFACT_KIND_VISUAL_GLB` + `MazeArtifactPickups`.
  */
 import { CATAPULT, isBombCell, isTrapCell } from "./labyrinth";
+import { publicAssetPath } from "./publicAssetPath";
 
-const MAZE_P = "/models/maze-collectibles/";
+const MAZE_P = publicAssetPath("models/maze-collectibles/");
 
 export const MAZE_WORLD_FEATURE_SIEGE_CAT_GLB = `${MAZE_P}siege-cat.glb`;
 /** Used to hide the bomb prop after the active player picks it up (grid cell stays `B`). */

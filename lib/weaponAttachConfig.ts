@@ -3,6 +3,7 @@
  * Edit these to retune grip hand and sword aim without hunting through components.
  */
 import { PLAYER_ARMOUR_GLB_OPTIONS, PLAYER_OFFHAND_ARMOUR_GLB_OPTIONS } from "./playerArmourGlbs";
+import { publicAssetPath } from "./publicAssetPath";
 
 export type WeaponAttachHand = "left" | "right";
 
@@ -74,9 +75,9 @@ const WEAPON_ATTACH_TARGET_WORLD_LEN_BY_URL: Readonly<Record<string, number>> = 
     PLAYER_ARMOUR_GLB_OPTIONS.map((o) => [o.path, WEAPON_ATTACH_ROSTER_TARGET_WORLD_LEN]),
   ) as Readonly<Record<string, number>>),
   /** Roman Gladius — short mesh at roster scale; bump longest-edge target vs `WEAPON_ATTACH_ROSTER_TARGET_WORLD_LEN`. */
-  "/models/armour/Meshy_AI_Decorative_Roman_Glad_0329003212_texture.glb": 0.8,
+  [publicAssetPath("models/armour/Meshy_AI_Decorative_Roman_Glad_0329003212_texture.glb")]: 0.8,
   /** Eternal Frostblade — reads small at roster scale; nudge longest-edge target up. */
-  "/models/armour/Meshy_AI_Eternal_Frostblade_0403174010_texture.glb": 0.78,
+  [publicAssetPath("models/armour/Meshy_AI_Eternal_Frostblade_0403174010_texture.glb")]: 0.78,
 };
 
 export function resolveWeaponAttachTargetWorldLen(weaponGltfUrl: string): number {
@@ -100,75 +101,75 @@ const PLAYER_OFFHAND_SHIELD_ROSTER_POSE: WeaponAttachPosePartial = {
 /** Per-weapon grip + Euler + twist when a mesh needs different numbers than the global defaults. */
 const WEAPON_ATTACH_POSE_BY_URL: Readonly<Record<string, WeaponAttachPosePartial>> = {
   /** Silver Blade — straight / upfront read vs Celestial-sized global defaults */
-  "/models/armour/Meshy_AI_Silver_Blade_0329003051_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_Silver_Blade_0329003051_texture.glb")]: {
     gripPositionLocal: [0.433, 0.241, -0.004],
     extraEulerRad: [(-25 * Math.PI) / 180, (-5 * Math.PI) / 180, (200 * Math.PI) / 180],
     bladeTwistRad: 0,
   },
   /** Old Rusty Axe — tuned straight / grip read */
-  "/models/armour/Meshy_AI_an_old_rusty_axe_0329003102_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_an_old_rusty_axe_0329003102_texture.glb")]: {
     gripPositionLocal: [-0.086, -0.03, -0.06],
     extraEulerRad: [-2.1816615649929116, -0.2617993877991494, -0.5235987755982988],
     bladeTwistRad: 0,
   },
   /** Frostblade Dagger */
-  "/models/armour/Meshy_AI_Frostblade_Dagger_0329003123_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_Frostblade_Dagger_0329003123_texture.glb")]: {
     gripPositionLocal: [0.412, 0.085, -0.143],
     extraEulerRad: [-0.4363323129985824, 0.3665191429188092, -1.3962634015954636],
     bladeTwistRad: 0,
   },
   /** Eternal Frostblade — attach fix; 180° blade twist (π rad); scale in `WEAPON_ATTACH_TARGET_WORLD_LEN_BY_URL` */
-  "/models/armour/Meshy_AI_Eternal_Frostblade_0403174010_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_Eternal_Frostblade_0403174010_texture.glb")]: {
     gripPositionLocal: [-0.007, 0.075, 0.034],
     extraEulerRad: [0.08726646259971647, 0.4363323129985824, 1.3962634015954636],
     bladeTwistRad: Math.PI,
   },
   /** Roman Gladius (Decorative) */
-  "/models/armour/Meshy_AI_Decorative_Roman_Glad_0329003212_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_Decorative_Roman_Glad_0329003212_texture.glb")]: {
     gripPositionLocal: [0.5, -0.03, -0.212],
     extraEulerRad: [1.3089969389957472, -0.08726646259971647, 2.6179938779914944],
     bladeTwistRad: 0,
   },
   /** Elfic Blade (Luminous) — grip/Euler fix */
-  "/models/armour/Meshy_AI_Luminous_Elfic_Blade_0329003430_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_Luminous_Elfic_Blade_0329003430_texture.glb")]: {
     gripPositionLocal: [-0.044, 0.06, 0.038],
     extraEulerRad: [0.4363323129985824, 0.3490658503988659, 1.5707963267948966],
     bladeTwistRad: 0,
   },
   /** Stormbreaker Axe — 180° blade twist (π rad) */
-  "/models/armour/Meshy_AI_Stormbreaker_Axe_0329003533_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_Stormbreaker_Axe_0329003533_texture.glb")]: {
     gripPositionLocal: [0.302, 0.192, -0.25],
     extraEulerRad: [-0.4363323129985824, 0.7853981633974483, 1.5707963267948966],
     bladeTwistRad: Math.PI,
   },
   /** Reaper's Edge — 180° blade twist (π rad) */
-  "/models/armour/Meshy_AI_Reaper_s_Edge_0329003602_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_Reaper_s_Edge_0329003602_texture.glb")]: {
     gripPositionLocal: [0.274, 0.08, -0.266],
     extraEulerRad: [-0.4363323129985824, 0.7853981633974483, 1.5707963267948966],
     bladeTwistRad: Math.PI,
   },
   /** Dragon Fury Axe — 180° blade twist (π rad) */
-  "/models/armour/Meshy_AI_Dragon_Fury_Axe_0403170000_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_Dragon_Fury_Axe_0403170000_texture.glb")]: {
     gripPositionLocal: [0.419, 0.093, 0.044],
     extraEulerRad: [-0.7853981633974483, 0, 1.4835298641951802],
     bladeTwistRad: Math.PI,
   },
   /** Zweihandhammer — grip/Euler fix, 180° blade twist (π rad) */
-  "/models/armour/Meshy_AI_Zweihandhammer_Doppe_0403170009_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_Zweihandhammer_Doppe_0403170009_texture.glb")]: {
     gripPositionLocal: [-0.073, 0.065, 0.035],
     extraEulerRad: [-0.17453292519943295, 0, 1.4835298641951802],
     bladeTwistRad: Math.PI,
   },
   /** Azure Dragon Shield — off-hand roster */
-  "/models/armour/Meshy_AI_Azure_Dragon_Shield_0403173852_texture.glb": { ...PLAYER_OFFHAND_SHIELD_ROSTER_POSE },
+  [publicAssetPath("models/armour/Meshy_AI_Azure_Dragon_Shield_0403173852_texture.glb")]: { ...PLAYER_OFFHAND_SHIELD_ROSTER_POSE },
   /** Nordic Shield — per-mesh grip / Euler */
-  "/models/armour/Meshy_AI_Nordic_Shield_Design__0403170042_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_Nordic_Shield_Design__0403170042_texture.glb")]: {
     gripPositionLocal: [0.002, 0.332, -0.01],
     extraEulerRad: [3.3161255787892263, 0.4363323129985824, 1.4835298641951802],
     bladeTwistRad: 0,
   },
   /** Warden Shield — per-mesh grip / Euler */
-  "/models/armour/Meshy_AI_shield_0403170046_texture.glb": {
+  [publicAssetPath("models/armour/Meshy_AI_shield_0403170046_texture.glb")]: {
     gripPositionLocal: [-0.208, 0.044, -0.14],
     extraEulerRad: [3.4033920413889422, 0.4363323129985824, 1.5707963267948966],
     bladeTwistRad: 0,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useImperativeHandle, forwardRef, type CSSProperties } from "react";
+import { publicAssetPath } from "@/lib/publicAssetPath";
 
 export interface Dice3DRef {
   roll: () => Promise<number>;
@@ -24,7 +25,7 @@ export interface Dice3DProps {
 
 /** Base URL for `public/dice-roller/` (works on itch subpaths via relative resolution). */
 function getDiceRollerAssetBase(): string {
-  if (typeof window === "undefined") return "/dice-roller/";
+  if (typeof window === "undefined") return publicAssetPath("dice-roller/");
   return new URL("./dice-roller/", window.location.href).href;
 }
 

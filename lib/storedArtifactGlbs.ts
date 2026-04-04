@@ -4,9 +4,10 @@
  * Prefix must match `ARMOUR_GLB_PREFIX` in `playerArmourGlbs.ts` (avoid import cycle).
  */
 import type { StoredArtifactKind } from "./labyrinth";
+import { publicAssetPath } from "./publicAssetPath";
 
-const P = "/models/armour/";
-const MAZE_P = "/models/maze-collectibles/";
+const P = publicAssetPath("models/armour/");
+const MAZE_P = publicAssetPath("models/maze-collectibles/");
 
 export const COLLECTIBLE_ARTIFACT_GLB_BY_KIND = {
   dragonFuryAxe: `${P}Meshy_AI_Dragon_Fury_Axe_0403170000_texture.glb`,

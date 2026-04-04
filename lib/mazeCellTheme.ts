@@ -1,13 +1,13 @@
 import type { CSSProperties } from "react";
 import { isWalkable, PLAYER_COLORS } from "./labyrinth";
+import { publicAssetPath } from "./publicAssetPath";
 
 /**
- * `public/` URLs as site-root paths (`/textures/...`). Matches `layout.tsx` CSS vars — avoids Next resolving
- * `./textures/...` relative to `/_next/static/css/` (broken). Subpath deploys: configure `basePath` or an env URL prefix.
+ * `public/` asset URLs. Root `/textures/...` for Vercel/dev; `./textures/...` when
+ * `NEXT_PUBLIC_RELATIVE_PUBLIC_ASSETS=1` (itch.io HTML5). Matches `layout.tsx` inline CSS `url()`.
  */
 export function mazeAssetPath(relativeFromPublic: string): string {
-  const p = relativeFromPublic.replace(/^\//, "");
-  return `/${p}`;
+  return publicAssetPath(relativeFromPublic);
 }
 
 /** Corridor fog sprite — same prefix rules as floor/wall (`MazeIsoView`). */

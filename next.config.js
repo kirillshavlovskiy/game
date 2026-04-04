@@ -12,6 +12,8 @@ const nextConfig = {
   eslint: { ignoreDuringBuilds: true },
   env: {
     NEXT_PUBLIC_CRAZYGAMES_LITE: crazygamesMazeLiteBuild ? "1" : "0",
+    /** `./` public URLs for itch.io / HTML5 subpath hosting (see `lib/publicAssetPath.ts`). */
+    NEXT_PUBLIC_RELATIVE_PUBLIC_ASSETS: itchExport ? "1" : "0",
   },
   /** Set ITCH_EXPORT=1 for static HTML in `out/` (itch.io / Crazy Games HTML5). Omit for Vercel / API routes. */
   ...(itchExport
