@@ -436,6 +436,9 @@ function SlingshotTrajectoryArc({
 /** Wall blocks fill the full cell — adjacent walls form solid continuous walls. */
 const WALL_SIZE = CS;
 const WALL_HEIGHT = 3.25;
+/** Spider web GLB: scale to span corridor (one cell) and wall height. */
+const SPIDER_WEB_TUNNEL_WIDTH = CS * 1.06;
+const SPIDER_WEB_TUNNEL_HEIGHT = WALL_HEIGHT * 0.98;
 const WALL_TOP_COLOR = "#3a3a4c";
 const ROTATE_TIMEOUT_MS = 3000;
 /** Minimap / imperative orbit: block auto-follow briefly after each apply so it does not fight finger drag (rotateMode state can lag one frame). */
@@ -1491,7 +1494,7 @@ function SpiderWebMazeMeshInstances({
 
   const cells = useMemo(() => {
     const seen = new Set<string>();
-    const out: Array<{ cx: number; cy: number; yaw: number }> = [];
+    const out: Array<{ cx: number; cy: number }> = [];
     for (const pair of spiderWebCells) {
       const wx = pair[0];
       const wy = pair[1];
@@ -1501,7 +1504,7 @@ function SpiderWebMazeMeshInstances({
       if (!walkableCell(wx, wy)) continue;
       const fog = fogIntensityMap?.get(`${wx},${wy}`) ?? 0;
       if (fog > 0.2) continue;
-      out.push({ cx: wx, cy: wy, yaw: cellNoise(wx, wy, 601) * Math.PI * 2 });
+      out.push({ cx: wx, cy: wy });
     }
     return out;
   }, [fogIntensityMap, grid, mapHeight, mapWidth, spiderWebCells]);
@@ -1509,16 +1512,15 @@ function SpiderWebMazeMeshInstances({
   return (
     <>
       {cells.map((c) => (
-        <SpiderWebMazeMesh key={`sweb-${c.cx}-${c.cy}`} cellX={c.cx} cellY={c.cy} yaw={c.yaw} />
+        <SpiderWebMazeMesh key={`sweb-${c.cx}-${c.cy}`} cellX={c.cx} cellY={c.cy} />
       ))}
     </>
   );
 }
 
-function SpiderWebMazeMesh({ cellX, cellY, yaw }: { cellX: number; cellY: number; yaw: number }) {
+function SpiderWebMazeMesh({ cellX, cellY }: { cellX: number; cellY: number }) {
   const { scene } = useGLTF(MAZE_SPIDER_WEB_MESH_GLB);
   const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
-  const spinRef = useRef<THREE.Group>(null);
   useEffect(() => {
     clone.traverse((o) => {
       if (o instanceof THREE.Mesh) {
@@ -1529,25 +1531,29 @@ function SpiderWebMazeMesh({ cellX, cellY, yaw }: { cellX: number; cellY: number
   }, [clone]);
   useLayoutEffect(() => {
     clone.scale.setScalar(1);
+    clone.position.set(0, 0, 0);
+    clone.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(clone);
     const size = box.getSize(new THREE.Vector3());
-    const maxD = Math.max(size.x, size.y, size.z, 1e-4);
-    const u = (CS * 0.92) / maxD;
-    clone.scale.setScalar(u);
+    const horizSpan = Math.max(size.x, size.z);
+    let vertSpan = size.y;
+    if (vertSpan < horizSpan * 0.18) {
+      vertSpan = Math.max(horizSpan, 1e-4);
+    }
+    const s = Math.max(
+      SPIDER_WEB_TUNNEL_WIDTH / Math.max(horizSpan, 1e-4),
+      SPIDER_WEB_TUNNEL_HEIGHT / Math.max(vertSpan, 1e-4),
+    );
+    clone.scale.setScalar(s);
     clone.updateMatrixWorld(true);
     const b2 = new THREE.Box3().setFromObject(clone);
     clone.position.set(0, -b2.min.y + 0.03, 0);
   }, [clone]);
-  useFrame((_, dt) => {
-    if (spinRef.current) spinRef.current.rotation.y += dt * 0.12;
-  });
   const px = cellX * CS + CS * 0.5;
   const pz = cellY * CS + CS * 0.5;
   return (
-    <group position={[px, FLOOR_Y + 0.02, pz]} rotation={[0, yaw, 0]}>
-      <group ref={spinRef}>
-        <primitive object={clone} />
-      </group>
+    <group position={[px, FLOOR_Y + 0.02, pz]}>
+      <primitive object={clone} />
     </group>
   );
 }
