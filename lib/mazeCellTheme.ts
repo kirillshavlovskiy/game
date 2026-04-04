@@ -2,14 +2,11 @@ import type { CSSProperties } from "react";
 import { isWalkable, PLAYER_COLORS } from "./labyrinth";
 
 /**
- * `public/` texture URLs for maze 2D + 3D.
- * - Default (`NEXT_PUBLIC_MAZE_TEXTURE_PREFIX` `/`): `/textures/...` — reliable for `useTexture` / localhost / Vercel.
- * - Itch static export (`ITCH_EXPORT=1`): `./textures/...` — resolves beside `index.html` in the zip.
+ * `public/` URLs as site-root paths (`/textures/...`). Matches `layout.tsx` CSS vars — avoids Next resolving
+ * `./textures/...` relative to `/_next/static/css/` (broken). Subpath deploys: configure `basePath` or an env URL prefix.
  */
 export function mazeAssetPath(relativeFromPublic: string): string {
   const p = relativeFromPublic.replace(/^\//, "");
-  const pref = process.env.NEXT_PUBLIC_MAZE_TEXTURE_PREFIX ?? "/";
-  if (pref === "./") return `./${p}`;
   return `/${p}`;
 }
 
@@ -42,7 +39,8 @@ export const MAZE_LITE_TEXTURES = process.env.NEXT_PUBLIC_CRAZYGAMES_LITE === "1
 export const MAZE_FLOOR_TEXTURE = mazeAssetPath("textures/maze/Brick/Horror_Brick_07-256x256.png");
 /** Secondary layer: previous main slab stone (`08`) for depth, `darken`-blended over `07`. */
 export const MAZE_FLOOR_MUD_TEXTURE = mazeAssetPath("textures/maze/Brick/Horror_Brick_08-256x256.png");
-export const MAZE_NOISE_TEXTURE = mazeAssetPath("textures/maze/noise_grain.png");
+/** Fine grain overlay — procedural asset is `scripts/generate-maze-textures.py` → `noise_grain.png`. Until generated, reuse floor brick so CSS/preload avoid 404s. */
+export const MAZE_NOISE_TEXTURE = mazeAssetPath("textures/maze/Brick/Horror_Brick_07-256x256.png");
 
 /** Corridor floor decals (transparent / white-backed); picked per cell via `cellRng`. */
 export const MAZE_STAIN_TEXTURE_PATHS = [

@@ -24,7 +24,11 @@ export const viewport: Viewport = {
   themeColor: "#0a0a0f",
 };
 
-/** Inline so `url()` resolves from the HTML document (portal subpaths). Linked CSS would resolve from `/_next/static/`. */
+/**
+ * Root-relative `/textures/...` via `mazeCellTheme` URLs — required so `url()` works when Next bundles CSS under `/_next/static/css/`.
+ * `./textures/...` would resolve relative to that CSS URL (404). For static export under a subpath only, set `basePath` / `assetPrefix`
+ * or drive URLs from env in `mazeCellTheme`.
+ */
 const MAZE_TEXTURE_CSS_VARS_FULL = `
 :root {
   --maze-wall-tex: url(${JSON.stringify(MAZE_WALL_TEXTURE)});
@@ -52,6 +56,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
+        <meta name="mobile-web-app-capable" content="yes" />
         <style dangerouslySetInnerHTML={{ __html: MAZE_TEXTURE_CSS_VARS }} />
         {/**
          * Official URL — CrazyGames requires this for automatic SDK updates (see portal checklist).

@@ -554,6 +554,13 @@ export class Labyrinth {
     return Array.from({ length: this.numPlayers }, () => [0, 0]);
   }
 
+  /** Maze start cell for a seat — use for defeat respawn so it stays aligned if spawns ever differ from (0,0). */
+  getSpawnForPlayer(playerIndex: number): [number, number] {
+    const spawns = this._getCornerSpawns();
+    const s = spawns[playerIndex];
+    return [s?.[0] ?? 0, s?.[1] ?? 0];
+  }
+
   get playerX(): number {
     return this.players[0]?.x ?? 0;
   }

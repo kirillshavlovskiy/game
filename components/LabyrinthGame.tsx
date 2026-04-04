@@ -619,7 +619,7 @@ const COMBAT_BONUS_LOOT_PICK_MIN_HEIGHT_PX = COMBAT_BONUS_LOOT_ICON_PX + 36;
 /** Bottom panel: roll/run, defeat banner, win summary, or bonus loot. */
 const COMBAT_MODAL_RESULT_SLOT_PX = 0;
 const FOG_GRANULARITY = 1; // 1 = per-cell (performant); 8 = fine-grained but heavy DOM
-const FOG_CLEARANCE_RADIUS = 2; // Cells within this distance of player/visited get fog cleared
+const FOG_CLEARANCE_RADIUS = 4; // Manhattan cells: larger halo so iso fog/torches read ahead of the tile you stand on
 /** Fixed layout slot for bomb/artifact icons — chip/button size stays tied to this, not to visual scale */
 const BOTTOM_DOCK_INVENTORY_ICON_SLOT_PX = 42;
 /** Larger drawn art inside the slot (CSS transform; does not expand the chip container) */
@@ -3755,8 +3755,9 @@ export default function LabyrinthGame() {
                 }
                 setDraculaAttacked(targetIdx);
                 if (p.hp <= 0) {
-                  p.x = 0;
-                  p.y = 0;
+                  const [sx, sy] = next2.getSpawnForPlayer(targetIdx);
+                  p.x = sx;
+                  p.y = sy;
                   p.hp = DEFAULT_PLAYER_HP;
                   const hasStored = STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(p, k) > 0);
                   if (hasStored) {
@@ -5007,9 +5008,10 @@ export default function LabyrinthGame() {
               const defeatMonsterMaxHp = getMonsterMaxHp(combat.monsterType);
               const defeatMonsterHp = m ? Math.min(defeatMonsterMaxHp, Math.max(0, m.hp ?? defeatMonsterMaxHp)) : defeatMonsterMaxHp;
               const defeatPlayerHp = p.hp;
-              // Respawn at start, lose 1 artifact (instead of elimination)
-              p.x = 0;
-              p.y = 0;
+              // Respawn at maze start for this seat, lose 1 artifact (instead of elimination)
+              const [sx, sy] = next.getSpawnForPlayer(pi);
+              p.x = sx;
+              p.y = sy;
               p.hp = DEFAULT_PLAYER_HP;
               const hasStored = STORED_ARTIFACT_ORDER.some((k) => storedArtifactCount(p, k) > 0);
               if (hasStored) {
@@ -10677,9 +10679,9 @@ export default function LabyrinthGame() {
                 <div
                   style={{
                     width: "100%",
-                    flex: isLandscapeCompact || combatActiveFitViewport ? 1 : undefined,
-                    flexShrink: isLandscapeCompact || combatActiveFitViewport ? 1 : 0,
-                    minHeight: isLandscapeCompact || combatActiveFitViewport ? 0 : undefined,
+                    ...(isLandscapeCompact || combatActiveFitViewport
+                      ? { flex: "1 1 0%", minHeight: 0 }
+                      : { flexShrink: 0 }),
                     textAlign: "center",
                     paddingTop: isLandscapeCompact ? 0 : mobileCompactActiveCombat ? 0 : 2,
                     overflow: combatActiveFitViewport ? "hidden" : "visible",

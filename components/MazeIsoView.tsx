@@ -1221,7 +1221,8 @@ function WallTorches({
     <>
       {torches.map((t, i) => {
         const fog = fogIntensityMap?.get(`${t.cellX},${t.cellY}`) ?? 0;
-        if (fog > 0.02) return null;
+        /* Align with ornaments / set-pieces (~0.14): 0.02 hid torches on almost any fogged cell — only "current tile" read lit. */
+        if (fog > 0.14) return null;
         const near = Math.hypot(t.cellX - playerX, t.cellY - playerY) <= 6.5;
         return <WallTorch key={i} torch={t} active={near} />;
       })}
@@ -1323,9 +1324,9 @@ void useTexture.preload(MAZE_ISO_WALL_SIDE_TEXTURE);
 
 /** Exponential depth fog — distance haze (stronger = thicker air). */
 const ATMOSPHERIC_FOG_COLOR = 0x030408;
-const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0076;
+const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0072;
 /** Every path cell gets at least this mist strength; game fog zones blend toward full opacity. */
-const CORRIDOR_BASE_MIST = 0.44;
+const CORRIDOR_BASE_MIST = 0.32;
 /** Per-cell fog wobble so neighbouring tiles read at visibly different densities. */
 const CORRIDOR_FOG_LOCAL_JITTER = 0.26;
 
@@ -3356,7 +3357,7 @@ function MazeScene({
     <>
       <MazeAtmosphericFog />
       {/* Near-black fill so torch / player pools read as islands; key light paints hard shadow shapes. */}
-      <ambientLight intensity={0.016} color="#1a1d28" />
+      <ambientLight intensity={0.008} color="#1a1d28" />
       <directionalLight
         position={[18, 26, 10]}
         intensity={0.14}
