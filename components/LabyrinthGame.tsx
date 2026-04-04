@@ -164,6 +164,7 @@ import {
   DEFAULT_PLAYER_HP,
 } from "@/lib/labyrinth";
 import { ARTIFACT_KIND_VISUAL_GLB } from "@/lib/storedArtifactGlbs";
+import { MAZE_WORLD_FEATURE_BOMB_GLB, mazeWorldFeatureGlbUrl } from "@/lib/mazeIsoWorldPickups";
 import {
   adjacentWallFogFromIntensityMap,
   basePathStyle,
@@ -2668,7 +2669,19 @@ function monsterHasAdjacentEscapeCell(lab: Labyrinth, monsterIndex: number): boo
 }
 
 function getMonsterIcon(type: MonsterType): string {
-  return type === "V" ? "🧛" : type === "Z" ? "🧟" : type === "G" ? "👻" : type === "K" ? "💀" : type === "L" ? "🔥" : "🕷";
+  return type === "V"
+    ? "🧛"
+    : type === "Z"
+      ? "🧟"
+      : type === "G"
+        ? "👻"
+        : type === "K"
+          ? "💀"
+          : type === "L"
+            ? "🔥"
+            : type === "O"
+              ? "🤡"
+              : "🕷";
 }
 
 /** Monster combat state: idle = player initiated (easiest), hunt = neutral, attack/angry = monster aggressive (worst) */
@@ -2769,6 +2782,15 @@ function getMonsterSprite(type: MonsterType, state: MonsterSpriteState): string 
     if (state === "defeated") return "monsters/spider/defeated.png";
     return "monsters/spider/idle.png";
   }
+  if (type === "O") {
+    if (state === "neutral" || state === "idle") return "monsters/clown/idle.png";
+    if (state === "hunt") return "monsters/clown/hunt.png";
+    if (state === "attack" || state === "angry" || state === "rolling") return "monsters/clown/attack.png";
+    if (state === "hurt" || state === "knockdown") return "monsters/clown/hurt.png";
+    if (state === "recover") return "monsters/clown/recover.png";
+    if (state === "defeated") return "monsters/clown/defeated.png";
+    return "monsters/clown/idle.png";
+  }
   return null;
 }
 
@@ -2797,6 +2819,7 @@ const MONSTER_IDLE_PATHS: Partial<Record<MonsterType, string>> = {
   G: "monsters/ghost/idle.png",
   K: "monsters/skeleton/idle.png",
   S: "monsters/spider/idle.png",
+  O: "monsters/clown/idle.png",
 };
 function getMonsterIdleSprite(type: MonsterType): string | null {
   return MONSTER_IDLE_PATHS[type] ?? null;
@@ -3619,6 +3642,24 @@ export default function LabyrinthGame() {
     }
     return out;
   }, [lab, fogIntensityMap]);
+
+  const mazeIsoWorldFeaturePickups = useMemo(() => {
+    if (!lab) return [];
+    const out: { x: number; y: number; url: string }[] = [];
+    for (let y = 0; y < lab.height; y++) {
+      for (let x = 0; x < lab.width; x++) {
+        if (lab.hiddenCells.has(`${x},${y}`)) continue;
+        const cell = lab.grid[y]?.[x] ?? "";
+        const url = mazeWorldFeatureGlbUrl(cell);
+        if (!url) continue;
+        const fog = fogIntensityMap.get(`${x},${y}`) ?? 0;
+        if (fog > 0.1) continue;
+        if (url === MAZE_WORLD_FEATURE_BOMB_GLB && lab.hasCollectedBombFrom(currentPlayer, x, y)) continue;
+        out.push({ x, y, url });
+      }
+    }
+    return out;
+  }, [lab, fogIntensityMap, currentPlayer]);
 
   const scheduleDraculaAction = useCallback((mi: number, action: "teleport" | "attack", delayMs: number) => {
     setTimeout(() => {
@@ -7641,9 +7682,21 @@ export default function LabyrinthGame() {
                 onChange={(e) => setFirstMonsterType(e.target.value as import("@/lib/labyrinth").MonsterType)}
                 style={{ ...startModalSelectStyle, ...(isMobile ? { width: "100%", minHeight: 44 } : {}) }}
               >
-                {(["V", "K", "Z", "S", "G", "L"] as const).map((t) => (
+                {(["V", "K", "Z", "S", "G", "L", "O"] as const).map((t) => (
                   <option key={t} value={t}>
-                    {t === "V" ? "🧛 Dracula" : t === "K" ? "💀 Skeleton" : t === "Z" ? "🧟 Zombie" : t === "S" ? "🕷 Spider" : t === "G" ? "👻 Ghost" : "🔥 Lava Elemental"}
+                    {t === "V"
+                      ? "🧛 Dracula"
+                      : t === "K"
+                        ? "💀 Skeleton"
+                        : t === "Z"
+                          ? "🧟 Zombie"
+                          : t === "S"
+                            ? "🕷 Spider"
+                            : t === "G"
+                              ? "👻 Ghost"
+                              : t === "O"
+                                ? "🤡 Dread Clown"
+                                : "🔥 Lava Elemental"}
                   </option>
                 ))}
               </select>
@@ -9711,7 +9764,8 @@ export default function LabyrinthGame() {
                         headerMt === "Z" ||
                         headerMt === "G" ||
                         headerMt === "S" ||
-                        headerMt === "L") &&
+                        headerMt === "L" ||
+                        headerMt === "O") &&
                       isMonster3DEnabled()
                     ) {
                       return "rolling";
@@ -9731,7 +9785,8 @@ export default function LabyrinthGame() {
                           headerMt === "Z" ||
                           headerMt === "G" ||
                           headerMt === "S" ||
-                          headerMt === "L") &&
+                          headerMt === "L" ||
+                          headerMt === "O") &&
                         isMonster3DEnabled() &&
                         (combatDraculaStrikeSegment === "spell" || combatDraculaStrikeSegment === "skill")
                       ) {
@@ -9788,7 +9843,8 @@ export default function LabyrinthGame() {
                   headerMt === "Z" ||
                   headerMt === "G" ||
                   headerMt === "S" ||
-                  headerMt === "L") &&
+                  headerMt === "L" ||
+                  headerMt === "O") &&
                 isMonster3DEnabled() &&
                 inActiveFight &&
                 !rolling &&
@@ -9802,7 +9858,7 @@ export default function LabyrinthGame() {
               const gltfVisualState: MonsterSpriteState =
                 inActiveFight &&
                 isMonster3DEnabled() &&
-                (headerMt === "G" || headerMt === "L") &&
+                (headerMt === "G" || headerMt === "L" || headerMt === "O") &&
                 (gltfVisualStateBase === "hunt" || gltfVisualStateBase === "neutral")
                   ? "idle"
                   : gltfVisualStateBase;
@@ -9838,7 +9894,8 @@ export default function LabyrinthGame() {
                         headerMt === "Z" ||
                         headerMt === "G" ||
                         headerMt === "S" ||
-                        headerMt === "L") &&
+                        headerMt === "L" ||
+                        headerMt === "O") &&
                       isMonster3DEnabled() &&
                       inActiveFight &&
                       combatRecoveryPhase === "hurt" &&
@@ -9899,7 +9956,13 @@ export default function LabyrinthGame() {
                 !!combatFooterSnapshot?.playerFatalJumpKill && playerGltfVisualState === "hurt";
               const isDracula3dCombatPortrait =
                 !!monsterGltfPath &&
-                (headerMt === "V" || headerMt === "K" || headerMt === "Z" || headerMt === "G" || headerMt === "S" || headerMt === "L");
+                (headerMt === "V" ||
+                  headerMt === "K" ||
+                  headerMt === "Z" ||
+                  headerMt === "G" ||
+                  headerMt === "S" ||
+                  headerMt === "L" ||
+                  headerMt === "O");
               /** Player `skill` win uses `knockdown` pose but clip priority would prefer forward fall; treat as `spell` so backward shot-fall matches M spell strike. */
               const monsterDraculaVariantForCombat3d =
                 isDracula3dCombatPortrait &&
@@ -10167,7 +10230,8 @@ export default function LabyrinthGame() {
                   headerMt === "Z" ||
                   headerMt === "G" ||
                   headerMt === "S" ||
-                  headerMt === "L";
+                  headerMt === "L" ||
+                  headerMt === "O";
                 if (!merged3dHurt || gltfVisualState !== "hurt") return undefined;
                 if (draculaHurt3dLocked != null && draculaHurt3dLocked.maxHp >= 1) {
                   return {
@@ -11666,9 +11730,21 @@ export default function LabyrinthGame() {
                 onChange={(e) => setFirstMonsterType(e.target.value as import("@/lib/labyrinth").MonsterType)}
                 style={selectStyle}
               >
-                {(["V", "K", "Z", "S", "G", "L"] as const).map((t) => (
+                {(["V", "K", "Z", "S", "G", "L", "O"] as const).map((t) => (
                   <option key={t} value={t}>
-                    {t === "V" ? "🧛 Dracula" : t === "K" ? "💀 Skeleton" : t === "Z" ? "🧟 Zombie" : t === "S" ? "🕷 Spider" : t === "G" ? "👻 Ghost" : "🔥 Lava Elemental"}
+                    {t === "V"
+                      ? "🧛 Dracula"
+                      : t === "K"
+                        ? "💀 Skeleton"
+                        : t === "Z"
+                          ? "🧟 Zombie"
+                          : t === "S"
+                            ? "🕷 Spider"
+                            : t === "G"
+                              ? "👻 Ghost"
+                              : t === "O"
+                                ? "🤡 Dread Clown"
+                                : "🔥 Lava Elemental"}
                   </option>
                 ))}
               </select>
@@ -12147,6 +12223,7 @@ export default function LabyrinthGame() {
             fogIntensityMap={fogIntensityMap}
                 spiderWebCells={lab.webPositions ?? []}
                 artifactPickups={mazeIsoArtifactPickups}
+                worldFeaturePickups={mazeIsoWorldFeaturePickups}
                 combatActive={mazeMapView === "iso" && !!combatState}
                 combatRolling={rolling}
                 combatRollFace={isoCombatRollFace}

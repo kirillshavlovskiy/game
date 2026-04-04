@@ -215,7 +215,7 @@ export const metadata = {
   robots: { index: false, follow: false },
 };
 
-const MONSTER_TYPES_ORDER: MonsterType[] = ["V", "Z", "S", "G", "K", "L"];
+const MONSTER_TYPES_ORDER: MonsterType[] = ["V", "Z", "S", "G", "K", "L", "O"];
 
 const STATE_NOTES: Record<Monster3DSpriteState, string> = {
   idle: "Calm portrait (e.g. player-initiated fight, or monster HP above ~⅓).",

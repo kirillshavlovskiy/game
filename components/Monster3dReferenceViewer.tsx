@@ -8,7 +8,7 @@ import { getMonsterName } from "@/lib/labyrinth";
 import { MONSTER_3D_GLB_SLUG_BY_TYPE, MONSTER_3D_VISUAL_STATES, type Monster3DSpriteState } from "@/lib/monsterModels3d";
 import { Monster3dGltfSceneContent } from "@/components/MonsterModel3D";
 
-const TYPES: MonsterType[] = ["V", "Z", "S", "G", "K", "L"];
+const TYPES: MonsterType[] = ["V", "Z", "S", "G", "K", "L", "O"];
 
 function SpinningTorus() {
   const ref = useRef<THREE.Mesh>(null);

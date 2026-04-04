@@ -108,7 +108,7 @@ function exactProb(
   return sum;
 }
 
-const types: MonsterType[] = ["S", "G", "Z", "K", "L", "V"];
+const types: MonsterType[] = ["S", "G", "Z", "K", "L", "V", "O"];
 
 console.log(
   "P(no player HP loss on first roll) — uniform surprise, d6, attackBonus 0, no power dice, no shield absorb\n"

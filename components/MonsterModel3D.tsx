@@ -1397,7 +1397,9 @@ export function MonsterModel3D({
   const isSpider = monsterType === "S";
   const isLava = monsterType === "L";
   const isGhost = monsterType === "G";
-  const mergedMeshyCombat = isDracula || isSkeleton || isZombie || isGhost || isSpider || isLava;
+  const isClown = monsterType === "O";
+  const mergedMeshyCombat =
+    isDracula || isSkeleton || isZombie || isGhost || isSpider || isLava || isClown;
   const cameraZBase = referenceViewerStyle ? (tightFraming ? 2.2 : 2.85) : tightFraming ? 2.12 : 2.82;
   const cameraYBase = referenceViewerStyle ? (tightFraming ? 0.95 : 1.05) : tightFraming ? 0.98 : 1.06;
   const mergedMeshyCameraZExtra = mergedMeshyCombat ? 0.62 : 0;

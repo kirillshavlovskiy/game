@@ -6,6 +6,7 @@
 import type { StoredArtifactKind } from "./labyrinth";
 
 const P = "/models/armour/";
+const MAZE_P = "/models/maze-collectibles/";
 
 export const COLLECTIBLE_ARTIFACT_GLB_BY_KIND = {
   dragonFuryAxe: `${P}Meshy_AI_Dragon_Fury_Axe_0403170000_texture.glb`,
@@ -24,6 +25,9 @@ export const ARTIFACT_KIND_VISUAL_GLB: Partial<Record<StoredArtifactKind, string
   azureDragonShield: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.azureDragonShield,
   nordicShield: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.nordicShield,
   wardShield: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.wardShield,
+  holyCross: `${MAZE_P}holy-cross.glb`,
+  torch: `${MAZE_P}torch.glb`,
+  teleport: `${MAZE_P}teleport-ring.glb`,
 };
 
 export const COLLECTIBLE_ARTIFACT_GLB_URLS: readonly string[] = Object.values(COLLECTIBLE_ARTIFACT_GLB_BY_KIND);

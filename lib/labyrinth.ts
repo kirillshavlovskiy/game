@@ -292,7 +292,7 @@ export function getDefaultStarterArtifacts(playerIndex: number): {
   }
 }
 
-export type MonsterType = "V" | "Z" | "S" | "G" | "K" | "L"; // Vampire/Dracula, Zombie, Spider, Ghost, Skeleton, Lava Elemental
+export type MonsterType = "V" | "Z" | "S" | "G" | "K" | "L" | "O"; // … Lava Elemental, O = Dread Clown (merged Meshy)
 
 export type DraculaState =
   | "idle"
@@ -339,19 +339,31 @@ export interface Monster {
 }
 
 export function isMonsterType(type: string): type is MonsterType {
-  return type === "V" || type === "Z" || type === "S" || type === "G" || type === "K" || type === "L";
+  return type === "V" || type === "Z" || type === "S" || type === "G" || type === "K" || type === "L" || type === "O";
 }
 
 export function getMonsterName(type: MonsterType): string {
-  return type === "V" ? "Dracula" : type === "Z" ? "Zombie" : type === "S" ? "Spider" : type === "G" ? "Ghost" : type === "L" ? "Lava Elemental" : "Skeleton";
+  return type === "V"
+    ? "Dracula"
+    : type === "Z"
+      ? "Zombie"
+      : type === "S"
+        ? "Spider"
+        : type === "G"
+          ? "Ghost"
+          : type === "L"
+            ? "Lava Elemental"
+            : type === "O"
+              ? "Dread Clown"
+              : "Skeleton";
 }
 
 export function getMonsterDefense(type: MonsterType): number {
-  return type === "V" ? 5 : type === "Z" || type === "K" ? 4 : type === "L" ? 6 : 3; // Spider, Ghost = 3; Lava = 6 (+ surprise mod in combat)
+  return type === "V" ? 5 : type === "Z" || type === "K" || type === "O" ? 4 : type === "L" ? 6 : 3; // Spider, Ghost = 3; Lava = 6 (+ surprise mod in combat)
 }
 
 export function getMonsterDamage(type: MonsterType): number {
-  return type === "Z" || type === "L" ? 2 : 1; // Zombie, Lava = 2; Dracula, Ghost, Skeleton, Spider = 1
+  return type === "Z" || type === "L" || type === "O" ? 2 : 1; // Zombie, Lava, Dread Clown = 2; others = 1
 }
 
 /** Max HP for most monsters. Each clean hit −1 HP unless rule says otherwise. */
@@ -862,7 +874,7 @@ export class Labyrinth {
   }
 
   private _addMonsters(excludeCells: [number, number][]): void {
-    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K"]; // rotation for procedurally placed monsters (start neighbor Dracula is unshifted in generate/loadGrid)
+    const types: MonsterType[] = ["V", "L", "Z", "S", "G", "K", "O"]; // rotation for procedurally placed monsters (start neighbor uses firstMonsterType)
     const intersections: [number, number][] = [];
     const minNeighbors = this.width * this.height <= 400 ? 2 : 3;
     for (let y = 1; y < this.height - 1; y++) {
@@ -896,7 +908,7 @@ export class Labyrinth {
         const patrolArea = this._getPatrolArea(x, y, 28);
         if (patrolArea.length >= 2) {
           chosen.push([x, y]);
-          const mType = types[(this.monsters.length) % 6];
+          const mType = types[(this.monsters.length) % types.length];
           const m: Monster = {
             x, y,
             type: mType,

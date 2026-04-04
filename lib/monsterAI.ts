@@ -8,6 +8,7 @@ const MONSTER_DEFENSE: Record<MonsterType, number> = {
   K: 4,
   S: 3,
   L: 4,
+  O: 4,
 };
 
 export function getMonsterVisionRadius(m: Monster): number {

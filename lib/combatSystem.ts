@@ -111,11 +111,11 @@ export function getSurpriseDefenseModifier(state: MonsterSurpriseState): number 
 }
 
 export function getMonsterDefense(type: MonsterType): number {
-  return type === "V" || type === "K" ? 5 : type === "Z" || type === "S" ? 4 : type === "L" ? 6 : 3;
+  return type === "V" || type === "K" ? 5 : type === "Z" || type === "S" || type === "O" ? 4 : type === "L" ? 6 : 3;
 }
 
 function getMonsterDamage(type: MonsterType): number {
-  return type === "Z" || type === "L" ? 2 : 1;
+  return type === "Z" || type === "L" || type === "O" ? 2 : 1;
 }
 
 export function getMonsterReward(monsterType: MonsterType): MonsterReward {
@@ -126,6 +126,7 @@ export function getMonsterReward(monsterType: MonsterType): MonsterReward {
     case "K": return { type: "shield", amount: 1 };
     case "V": return { type: "attackBonus", amount: 1 };
     case "L": return { type: "movement", amount: 1 };
+    case "O": return { type: "jump", amount: 1 };
     default: return { type: "jump", amount: 1 };
   }
 }
@@ -150,6 +151,8 @@ export function getMonsterHint(type: MonsterType, hasShield?: boolean): string {
       return "🕷 Spider: Defense (4). Dice 6 = instant win! Die 1–3 = spider attacks you (heavy/medium/light). Die 4 = spider takes a hit. Miss: you take 1 HP unless shield blocks.";
     case "L":
       return "🔥 Lava Elemental: High defense (6). Dice 6 = instant win! Miss: glancing chip on it by die; you take 2 HP (+Attack/Angry) unless shield blocks.";
+    case "O":
+      return "🤡 Dread Clown: Defense (4), hits for 2 HP like a zombie. Dice 6 = instant win! Miss: glancing chip by die; you take 2 HP (+Attack/Angry) unless shield blocks.";
     default:
       return "Dice 6 = instant win! Same roll: monster damage and your damage net out (e.g. −2 vs −2 = no HP change). Miss: glancing + counter — net applies. 3D: aim on the monster while the dice roll (or whiff for heavy damage). Dice artifact: optional second strike after the first roll.";
   }

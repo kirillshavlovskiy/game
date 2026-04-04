@@ -1091,6 +1091,114 @@ export function zombieMergedAttackClipPriority(variant: "spell" | "skill" | "lig
 }
 
 /* ────────────────────────────────────────────────────────────────────
+ * DREAD CLOWN MERGED CONFIG  (Meshy biped — merged `clown.glb`, idle = Big_Heart_Gesture, hunt = Unsteady_Walk)
+ * ──────────────────────────────────────────────────────────────────── */
+
+const CLOWN_IDLE_CLIPS = ["Big_Heart_Gesture"] as const;
+
+const CLOWN_HUNT_PORTRAIT_CLIPS = ["Unsteady_Walk", "Running", "Walking", "Big_Heart_Gesture"] as const;
+
+const CLOWN_ANGRY_CLIPS = [
+  "Angry_To_Tantrum_Sit",
+  "Angry_Ground_Stomp",
+  "Axe_Spin_Attack",
+  "Running",
+  "Skill_01",
+] as const;
+
+const CLOWN_ATTACK_SPELL_PRIORITY = ["Axe_Spin_Attack", "Skill_01", "Skill_03"] as const;
+
+const CLOWN_ATTACK_SKILL_PRIORITY = ["Skill_01", "Skill_03", "Axe_Spin_Attack"] as const;
+
+const CLOWN_ATTACK_LIGHT_PRIORITY = ["Skill_03", "Angry_Ground_Stomp", "Skill_01"] as const;
+
+const CLOWN_ATTACK_FALLBACK_TAIL = ["Angry_Ground_Stomp", "Skill_01"] as const;
+
+const CLOWN_CLIP_ALIASES_BY_CANONICAL: Record<string, readonly string[]> = {
+  Big_Heart_Gesture: ["Armature|Big_Heart_Gesture|baselayer"],
+  Unsteady_Walk: ["Armature|Unsteady_Walk|baselayer"],
+  Walking: ["Armature|walking_man|baselayer", "walking_man"],
+  Running: ["Armature|running|baselayer", "running"],
+  Dead: ["Armature|Dead|baselayer"],
+  Axe_Spin_Attack: ["Armature|Axe_Spin_Attack|baselayer"],
+  Skill_01: ["Armature|Skill_01|baselayer"],
+  Skill_03: ["Armature|Skill_03|baselayer"],
+  Angry_Ground_Stomp: ["Armature|Angry_Ground_Stomp|baselayer"],
+  Angry_To_Tantrum_Sit: ["Armature|Angry_To_Tantrum_Sit|baselayer"],
+  Alert_Quick_Turn_Right: ["Armature|Alert_Quick_Turn_Right|baselayer"],
+  Arise: ["Armature|Arise|baselayer"],
+  Backflip_and_Rise: ["Armature|Backflip_and_Rise|baselayer"],
+  Face_Punch_Reaction_2: ["Armature|Face_Punch_Reaction_2|baselayer"],
+  Hit_Reaction_to_Waist: ["Armature|Hit_Reaction_to_Waist|baselayer"],
+  Shield_Push_Left: ["Armature|Shield_Push_Left|baselayer"],
+  falling_down: ["Armature|falling_down|baselayer"],
+  Shot_and_Slow_Fall_Backward: ["Armature|Shot_and_Slow_Fall_Backward|baselayer"],
+  Shot_and_Fall_Backward: ["Armature|Shot_and_Fall_Backward|baselayer"],
+  Shot_and_Fall_Forward: ["Armature|Shot_and_Fall_Forward|baselayer"],
+  Walk_Fight_Back: ["Armature|Walk_Fight_Back|baselayer"],
+  Walk_Fight_Back_1: ["Armature|Walk_Fight_Back_1|baselayer"],
+  Walk_Fight_Back_2: ["Armature|Walk_Fight_Back_2|baselayer"],
+  Walk_Fight_Back_3: ["Armature|Walk_Fight_Back_3|baselayer"],
+  Cautious_Crouch_Walk_Backward: ["Armature|Cautious_Crouch_Walk_Backward|baselayer"],
+};
+
+function expandClownClipTryList(shortNames: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const n of shortNames) {
+    if (!seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+    const aliases = CLOWN_CLIP_ALIASES_BY_CANONICAL[n];
+    if (aliases) {
+      for (const a of aliases) {
+        if (!seen.has(a)) {
+          seen.add(a);
+          out.push(a);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export function clownHurtClipPriority(intensity: DraculaHurtIntensity): string[] {
+  let flat: string[];
+  switch (intensity) {
+    case "light":
+      flat = flattenClipGroups([HIT_REACTION_TO_WAIST, FACE_PUNCH_REACTION_2]);
+      break;
+    case "medium":
+      flat = flattenClipGroups([FACE_PUNCH_REACTION_2, HIT_REACTION_TO_WAIST]);
+      break;
+    case "heavy":
+    default:
+      flat = flattenClipGroups([FACE_PUNCH_REACTION_2, HIT_REACTION_TO_WAIST]);
+      break;
+  }
+  return expandClownClipTryList(flat);
+}
+
+export function clownMergedAttackClipPriority(variant: "spell" | "skill" | "light" = "spell"): string[] {
+  const ordered =
+    variant === "spell"
+      ? mergeUniqueClipOrder([...CLOWN_ATTACK_SPELL_PRIORITY], [...CLOWN_ATTACK_SKILL_PRIORITY])
+      : variant === "skill"
+        ? mergeUniqueClipOrder([...CLOWN_ATTACK_SKILL_PRIORITY], [...CLOWN_ATTACK_SPELL_PRIORITY])
+        : mergeUniqueClipOrder([...CLOWN_ATTACK_LIGHT_PRIORITY], [...CLOWN_ATTACK_SPELL_PRIORITY]);
+  return expandClownClipTryList([...ordered, ...CLOWN_ATTACK_FALLBACK_TAIL]);
+}
+
+function clownKnockdownClipPriority(variant?: "spell" | "skill" | "light"): readonly string[] {
+  return mergedMonsterKnockdownClipPriority(variant);
+}
+
+function clownDefeatedClipPriority(variant?: "spell" | "skill" | "light"): readonly string[] {
+  return mergedMonsterDefeatedClipPriority(variant);
+}
+
+/* ────────────────────────────────────────────────────────────────────
  * GHOST MERGED CONFIG  (Meshy “Ripped Bride” biped — merged `ghost.glb` from per-clip exports)
  *
  * Pack clips: Alert, Alert_Quick_Turn_Right, Arise, Axe_Spin_Attack, Block8, Charged_Spell_Cast_2,
@@ -1434,6 +1542,7 @@ export const MONSTER_3D_GLB_SLUG_BY_TYPE: Record<MonsterType, string> = {
   G: "ghost",
   K: "skeleton",
   L: "lava",
+  O: "clown",
 };
 
 export function isMonster3DEnabled(): boolean {
@@ -1506,11 +1615,12 @@ function expandMeshyWalkFightBackTryList(
   if (slug === "ghost" || monsterType === "G") return expandGhostClipTryList(t);
   if (slug === "spider" || monsterType === "S") return expandSpiderClipTryList(t);
   if (slug === "lava" || monsterType === "L") return expandLavaClipTryList(t);
+  if (slug === "clown" || monsterType === "O") return expandClownClipTryList(t);
   return [];
 }
 
 export function isMergedMeshyStrikePortraitType(mt: MonsterType | null | undefined): boolean {
-  return mt === "V" || mt === "K" || mt === "Z" || mt === "S" || mt === "G" || mt === "L";
+  return mt === "V" || mt === "K" || mt === "Z" || mt === "S" || mt === "G" || mt === "L" || mt === "O";
 }
 
 /**
@@ -1537,6 +1647,8 @@ export function mergedMeshyMonsterHitPlayerHurtClipStartTimeSec(
       return 0.08 + skillBump;
     case "L":
       return 0.14 + skillBump;
+    case "O":
+      return 0.1 + skillBump;
     default:
       return 0;
   }
@@ -1716,6 +1828,26 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
     defeated: expandSkeletonClipTryList(["Dead", "Shot_and_Fall_Forward", "Shot_and_Fall_Backward"]),
     recover: expandSkeletonClipTryList(["Cautious_Crouch_Walk_Backward", "Arise", "Stand_Up1", "Walking"]),
   },
+  /** Merged `clown.glb` — Meshy Dread Clown; idle `Big_Heart_Gesture`, hunt `Unsteady_Walk`, defeat `Dead`. */
+  O: {
+    idle: expandClownClipTryList(CLOWN_IDLE_CLIPS),
+    neutral: expandClownClipTryList(CLOWN_IDLE_CLIPS),
+    hunt: expandClownClipTryList(CLOWN_HUNT_PORTRAIT_CLIPS),
+    angry: expandClownClipTryList(CLOWN_ANGRY_CLIPS),
+    attack: expandClownClipTryList(
+      mergeUniqueClipOrder([...CLOWN_ATTACK_SPELL_PRIORITY], [...CLOWN_ATTACK_SKILL_PRIORITY]),
+    ),
+    rolling: expandClownClipTryList([
+      "Alert_Quick_Turn_Right",
+      "Angry_Ground_Stomp",
+      "Axe_Spin_Attack",
+      "Skill_01",
+    ]),
+    hurt: expandClownClipTryList(["Hit_Reaction_to_Waist", "Face_Punch_Reaction_2"]),
+    knockdown: expandClownClipTryList(["Shot_and_Fall_Backward", "falling_down"]),
+    defeated: expandClownClipTryList(["Dead", "Shot_and_Fall_Forward", "Shot_and_Fall_Backward"]),
+    recover: expandClownClipTryList(["Cautious_Crouch_Walk_Backward", "Arise", "Walking"]),
+  },
 };
 
 /**
@@ -1827,6 +1959,7 @@ export function getPreferredClipNamesForState(
   const isGhostMerged = monsterType === "G" && glbSlug === "ghost";
   const isSpiderMerged = monsterType === "S" && glbSlug === "spider";
   const isLavaMerged = monsterType === "L" && glbSlug === "lava";
+  const isClownMerged = monsterType === "O" && glbSlug === "clown";
   const strikeVariant = draculaAttackVariant ?? "skill";
   push(fromSlug);
   if (isDraculaMerged && state === "attack") {
@@ -1870,6 +2003,16 @@ export function getPreferredClipNamesForState(
     push(expandZombieClipTryList(ZOMBIE_ANGRY_CLIPS));
   } else if (isZombieMerged && state === "hurt" && draculaHurtHp && draculaHurtHp.maxHp >= 1) {
     push(zombieHurtClipPriority(draculaHurtIntensityFromHp(draculaHurtHp.hp, draculaHurtHp.maxHp)));
+  } else if (isClownMerged && state === "attack") {
+    push(clownMergedAttackClipPriority(draculaAttackVariant ?? "spell"));
+  } else if (isClownMerged && state === "knockdown") {
+    push(expandClownClipTryList([...clownKnockdownClipPriority(strikeVariant)]));
+  } else if (isClownMerged && state === "defeated") {
+    push(expandClownClipTryList([...clownDefeatedClipPriority(strikeVariant)]));
+  } else if (isClownMerged && state === "angry") {
+    push(expandClownClipTryList(CLOWN_ANGRY_CLIPS));
+  } else if (isClownMerged && state === "hurt" && draculaHurtHp && draculaHurtHp.maxHp >= 1) {
+    push(clownHurtClipPriority(draculaHurtIntensityFromHp(draculaHurtHp.hp, draculaHurtHp.maxHp)));
   } else if (isGhostMerged && state === "attack") {
     push(ghostMergedAttackClipPriority(draculaAttackVariant ?? "spell"));
   } else if (isGhostMerged && state === "knockdown") {
@@ -1904,7 +2047,13 @@ export function getPreferredClipNamesForState(
     if (
       state === "recover" &&
       draculaAttackVariant === "skill" &&
-      (isDraculaMerged || isSkeletonMerged || isZombieMerged || isGhostMerged || isSpiderMerged || isLavaMerged)
+      (isDraculaMerged ||
+        isSkeletonMerged ||
+        isZombieMerged ||
+        isGhostMerged ||
+        isSpiderMerged ||
+        isLavaMerged ||
+        isClownMerged)
     ) {
       if (isDraculaMerged) push(expandDraculaClipTryList(["Arise", "Stand_Up1"]));
       else if (isSkeletonMerged) push(expandSkeletonClipTryList(["Arise", "Stand_Up1"]));
@@ -1912,10 +2061,19 @@ export function getPreferredClipNamesForState(
       else if (isGhostMerged) push(expandGhostClipTryList(["Arise", "Walking"]));
       else if (isSpiderMerged) push(expandSpiderClipTryList(["Arise", "Walking"]));
       else if (isLavaMerged) push(expandLavaClipTryList(["Arise", "Stand_Up1"]));
+      else if (isClownMerged) push(expandClownClipTryList(["Arise", "Stand_Up1"]));
     }
     push(meshy);
   }
-  if (!isDraculaMerged && !isSkeletonMerged && !isZombieMerged && !isGhostMerged && !isSpiderMerged && !isLavaMerged) {
+  if (
+    !isDraculaMerged &&
+    !isSkeletonMerged &&
+    !isZombieMerged &&
+    !isGhostMerged &&
+    !isSpiderMerged &&
+    !isLavaMerged &&
+    !isClownMerged
+  ) {
     push(base);
   }
   return merged;
@@ -2107,6 +2265,55 @@ function zombieIdleSafeLastResort(animationNames: readonly string[]): string | n
 function zombieAbsoluteLastResort(state: Monster3DSpriteState, animationNames: readonly string[]): string | null {
   if (state === "idle" || state === "neutral") {
     const safe = zombieIdleSafeLastResort(animationNames);
+    if (safe) return safe;
+  }
+  return animationNames[0] ?? null;
+}
+
+function clownMergedCanonicalFallback(
+  state: Monster3DSpriteState,
+  animationNames: readonly string[],
+  attackVariant: "spell" | "skill" | "light" = "skill",
+): string | null {
+  const tries: Partial<Record<Monster3DSpriteState, readonly string[]>> = {
+    idle: [...CLOWN_IDLE_CLIPS],
+    neutral: [...CLOWN_IDLE_CLIPS],
+    hunt: [...CLOWN_HUNT_PORTRAIT_CLIPS],
+    angry: [...CLOWN_ANGRY_CLIPS],
+    attack: [
+      ...mergeUniqueClipOrder([...CLOWN_ATTACK_SPELL_PRIORITY], [...CLOWN_ATTACK_SKILL_PRIORITY]),
+      ...CLOWN_ATTACK_FALLBACK_TAIL,
+    ],
+    rolling: ["Alert_Quick_Turn_Right", "Angry_Ground_Stomp", "Axe_Spin_Attack", "Skill_01"],
+    hurt: ["Hit_Reaction_to_Waist", "Face_Punch_Reaction_2"],
+    knockdown: [...clownKnockdownClipPriority(attackVariant)],
+    defeated: [...clownDefeatedClipPriority(attackVariant)],
+    recover: ["Cautious_Crouch_Walk_Backward", "Arise", "Walking"],
+  };
+  const list = tries[state];
+  if (!list) return null;
+  for (const n of expandClownClipTryList(list)) {
+    const hit = matchAnimationNameInsensitive(animationNames, n);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function clownIdleSafeLastResort(animationNames: readonly string[]): string | null {
+  const block =
+    /falling|fall_down|knock|death|\bdead\b|hurt|react|punch|spell|skill|scream|stand_up|charged|jumping|face_punch|waist|slap|shot|grip|throw|stagger|injured|dying|collapse|slash|hook|arise|axe|tantrum|stomp/i;
+  for (const n of animationNames) {
+    if (block.test(n)) continue;
+    if (/heart|gesture|idle/i.test(n) || /breath|rest|neutral|wait|relax/i.test(n)) return n;
+  }
+  const walk = animationNames.find((n) => /walking|walk|unsteady/i.test(n) && !block.test(n));
+  if (walk) return walk;
+  return null;
+}
+
+function clownAbsoluteLastResort(state: Monster3DSpriteState, animationNames: readonly string[]): string | null {
+  if (state === "idle" || state === "neutral") {
+    const safe = clownIdleSafeLastResort(animationNames);
     if (safe) return safe;
   }
   return animationNames[0] ?? null;
@@ -2309,6 +2516,13 @@ export function resolveMonsterAnimationClipName(
     }
   }
 
+  if (options?.glbSlug === "clown" && (state === "idle" || state === "neutral")) {
+    for (const probe of expandClownClipTryList(CLOWN_IDLE_CLIPS)) {
+      const calm = matchAnimationNameInsensitive(animationNames, probe);
+      if (calm) return calm;
+    }
+  }
+
   const preferred = getPreferredClipNamesForState(
     state,
     options?.monsterType ?? null,
@@ -2370,6 +2584,14 @@ export function resolveMonsterAnimationClipName(
     const fb = lavaMergedCanonicalFallback(state, animationNames, strikeVariantFallback);
     if (fb) return fb;
     return lavaAbsoluteLastResort(state, animationNames);
+  }
+
+  if (options?.glbSlug === "clown") {
+    const ci = firstPreferredMatchingInsensitive(preferred, animationNames);
+    if (ci) return ci;
+    const fb = clownMergedCanonicalFallback(state, animationNames, strikeVariantFallback);
+    if (fb) return fb;
+    return clownAbsoluteLastResort(state, animationNames);
   }
 
   const lowerPref = preferred.map((p) => p.toLowerCase());

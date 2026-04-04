@@ -25,6 +25,7 @@ import {
   type StoredArtifactKind,
 } from "@/lib/labyrinth";
 import { ARTIFACT_KIND_VISUAL_GLB, COLLECTIBLE_ARTIFACT_GLB_URLS } from "@/lib/storedArtifactGlbs";
+import { MAZE_SPIDER_WEB_MESH_GLB, MAZE_WORLD_FEATURE_GLB_URLS } from "@/lib/mazeIsoWorldPickups";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import {
   getMonsterGltfPathForReference,
@@ -138,6 +139,8 @@ type Props = {
   playerWeaponGltfPath?: string | null;
   /** Rotating 3D pickups for artifact cells (grid indices; hidden/fog excluded by parent). */
   artifactPickups?: Array<{ x: number; y: number; kind: StoredArtifactKind }>;
+  /** Rotating 3D props for catapult / bomb / trap cells (URLs from `mazeIsoWorldPickups`). */
+  worldFeaturePickups?: Array<{ x: number; y: number; url: string }>;
   /** Last resolved strike cue (dice + shield + portrait) — read when combat pulse fires. */
   isoCombatPlayerCue?: {
     moment: IsoCombatPlayerMoment;
@@ -670,9 +673,9 @@ function PlayerAvatar3D({
       } else if (visualState === "hunt") {
         clip = resolvePlayerHuntLocomotionClipName(names, locomotionAxis);
         loopOnce = false;
-      } else {
-        clip = resolvePlayerAnimationClipName(visualState, names);
-        loopOnce = visualState === "attack";
+    } else {
+      clip = resolvePlayerAnimationClipName(visualState, names);
+      loopOnce = visualState === "attack";
       }
     }
     for (const action of Object.values(actions)) {
@@ -1423,42 +1426,6 @@ function SpiderWebDecor({
     return out;
   }, [grid, mapHeight, mapWidth]);
 
-  const mazeWebWallDecals = useMemo(() => {
-    const out: Array<{
-      x: number;
-      y: number;
-      z: number;
-      yaw: number;
-      scale: number;
-      cellX: number;
-      cellY: number;
-    }> = [];
-    for (const pair of spiderWebCells) {
-      const wx = pair[0];
-      const wy = pair[1];
-      if (!walkable(wx, wy)) continue;
-      const fog = fogIntensityMap?.get(`${wx},${wy}`) ?? 0;
-      if (fog > 0.2) continue;
-      const pushIf = (wcx: number, wcy: number, pos: { x: number; z: number }, dirX: number, dirZ: number) => {
-        if (!isW(wcx, wcy)) return;
-        out.push({
-          x: pos.x,
-          y: WALL_HEIGHT * (0.44 + cellNoise(wx, wy, 509) * 0.2),
-          z: pos.z,
-          yaw: Math.atan2(dirX, dirZ),
-          scale: CS * (0.92 + cellNoise(wx, wy, 517) * 0.28),
-          cellX: wx,
-          cellY: wy,
-        });
-      };
-      pushIf(wx + 1, wy, { x: wx * CS + CS * 0.42, z: wy * CS }, -1, 0);
-      pushIf(wx - 1, wy, { x: wx * CS - CS * 0.42, z: wy * CS }, 1, 0);
-      pushIf(wx, wy + 1, { x: wx * CS, z: wy * CS + CS * 0.42 }, 0, -1);
-      pushIf(wx, wy - 1, { x: wx * CS, z: wy * CS - CS * 0.42 }, 0, 1);
-    }
-    return out;
-  }, [fogIntensityMap, grid, mapHeight, mapWidth, spiderWebCells]);
-
   const webMat = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
@@ -1490,14 +1457,88 @@ function SpiderWebDecor({
           </group>
         );
       })}
-      {mazeWebWallDecals.map((w, i) => (
-        <group key={`wweb-${i}`} position={[w.x, w.y, w.z]} rotation={[0, w.yaw, 0]}>
-          <mesh material={webMat} renderOrder={7}>
-            <planeGeometry args={[w.scale, w.scale * 1.08]} />
-          </mesh>
-        </group>
+    </>
+  );
+}
+
+/** Meshy spider web GLB — one instance per maze web cell (replaces flat wall decals). */
+function SpiderWebMazeMeshInstances({
+  grid,
+  mapWidth,
+  mapHeight,
+  fogIntensityMap,
+  spiderWebCells = [],
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  fogIntensityMap?: Map<string, number>;
+  spiderWebCells?: ReadonlyArray<readonly [number, number]>;
+}) {
+  const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
+  const walkableCell = (cx: number, cy: number) =>
+    cx >= 0 && cy >= 0 && cx < mapWidth && cy < mapHeight && !isW(cx, cy);
+
+  const cells = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Array<{ cx: number; cy: number; yaw: number }> = [];
+    for (const pair of spiderWebCells) {
+      const wx = pair[0];
+      const wy = pair[1];
+      const k = `${wx},${wy}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (!walkableCell(wx, wy)) continue;
+      const fog = fogIntensityMap?.get(`${wx},${wy}`) ?? 0;
+      if (fog > 0.2) continue;
+      out.push({ cx: wx, cy: wy, yaw: cellNoise(wx, wy, 601) * Math.PI * 2 });
+    }
+    return out;
+  }, [fogIntensityMap, grid, mapHeight, mapWidth, spiderWebCells]);
+
+  return (
+    <>
+      {cells.map((c) => (
+        <SpiderWebMazeMesh key={`sweb-${c.cx}-${c.cy}`} cellX={c.cx} cellY={c.cy} yaw={c.yaw} />
       ))}
     </>
+  );
+}
+
+function SpiderWebMazeMesh({ cellX, cellY, yaw }: { cellX: number; cellY: number; yaw: number }) {
+  const { scene } = useGLTF(MAZE_SPIDER_WEB_MESH_GLB);
+  const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
+  const spinRef = useRef<THREE.Group>(null);
+  useEffect(() => {
+    clone.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+      }
+    });
+  }, [clone]);
+  useLayoutEffect(() => {
+    clone.scale.setScalar(1);
+    const box = new THREE.Box3().setFromObject(clone);
+    const size = box.getSize(new THREE.Vector3());
+    const maxD = Math.max(size.x, size.y, size.z, 1e-4);
+    const u = (CS * 0.92) / maxD;
+    clone.scale.setScalar(u);
+    clone.updateMatrixWorld(true);
+    const b2 = new THREE.Box3().setFromObject(clone);
+    clone.position.set(0, -b2.min.y + 0.03, 0);
+  }, [clone]);
+  useFrame((_, dt) => {
+    if (spinRef.current) spinRef.current.rotation.y += dt * 0.12;
+  });
+  const px = cellX * CS + CS * 0.5;
+  const pz = cellY * CS + CS * 0.5;
+  return (
+    <group position={[px, FLOOR_Y + 0.02, pz]} rotation={[0, yaw, 0]}>
+      <group ref={spinRef}>
+        <primitive object={clone} />
+      </group>
+    </group>
   );
 }
 
@@ -1575,8 +1616,15 @@ function HorrorCornerRelics({
   );
 }
 
-for (const _mazeArtifactPreloadUrl of COLLECTIBLE_ARTIFACT_GLB_URLS) {
-  void useGLTF.preload(_mazeArtifactPreloadUrl);
+{
+  const _mazeIsoPickupPreload = new Set<string>([
+    ...COLLECTIBLE_ARTIFACT_GLB_URLS,
+    ...MAZE_WORLD_FEATURE_GLB_URLS,
+    ...Object.values(ARTIFACT_KIND_VISUAL_GLB).filter((u): u is string => typeof u === "string"),
+  ]);
+  for (const _u of _mazeIsoPickupPreload) {
+    void useGLTF.preload(_u);
+  }
 }
 
 function GenericRotatingArtifactOrb({ x, y }: { x: number; y: number }) {
@@ -1655,6 +1703,17 @@ function MazeArtifactPickups({
         }
         return <GenericRotatingArtifactOrb key={key} x={p.x} y={p.y} />;
       })}
+    </>
+  );
+}
+
+function MazeWorldFeaturePickups({ items }: { items: Array<{ x: number; y: number; url: string }> }) {
+  if (!items.length) return null;
+  return (
+    <>
+      {items.map((p) => (
+        <RotatingArtifactGlbPickup key={`${p.x},${p.y},${p.url}`} x={p.x} y={p.y} url={p.url} />
+      ))}
     </>
   );
 }
@@ -2624,6 +2683,7 @@ const MONSTER_SPRITE_MAP: Record<string, string> = {
   G: "/monsters/ghost/idle.png",
   K: "/monsters/skeleton/idle.png",
   L: "/monsters/lava/neutral.png",
+  O: "/monsters/clown/idle.png",
 };
 
 const DRACULA_GLB_PATH = getMonsterGltfPathForReference("V");
@@ -2634,6 +2694,7 @@ const MONSTER_GLB_SLUG: Record<MonsterType, string> = {
   G: "ghost",
   K: "skeleton",
   L: "lava",
+  O: "clown",
 };
 
 function DraculaModel3D({
@@ -3211,6 +3272,7 @@ function MazeScene({
   playerJumpPulseVersion = 0,
   spiderWebCells = [],
   artifactPickups,
+  worldFeaturePickups,
 }: Omit<Props, "visible"> & {
   rotateMode: boolean;
   resetTick: number;
@@ -3274,6 +3336,7 @@ function MazeScene({
       <HorrorCornerRelics grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
       <Suspense fallback={null}>
         <MazeArtifactPickups pickups={artifactPickups ?? []} />
+        <MazeWorldFeaturePickups items={worldFeaturePickups ?? []} />
       </Suspense>
       <WallBlocks grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
       <SpiderWebDecor
@@ -3283,6 +3346,15 @@ function MazeScene({
         fogIntensityMap={fogIntensityMap}
         spiderWebCells={spiderWebCells}
       />
+      <Suspense fallback={null}>
+        <SpiderWebMazeMeshInstances
+          grid={grid}
+          mapWidth={mapWidth}
+          mapHeight={mapHeight}
+          fogIntensityMap={fogIntensityMap}
+          spiderWebCells={spiderWebCells}
+        />
+      </Suspense>
       {miniMonsters && miniMonsters.length > 0 && (
         <Monsters3D
           monsters={miniMonsters}
@@ -3692,6 +3764,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     playerGlbPath,
     playerWeaponGltfPath = null,
     artifactPickups,
+    worldFeaturePickups,
     isoCombatPlayerCue = null,
     playerJumpPulseVersion = 0,
     spiderWebCells = [],
@@ -3899,6 +3972,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           playerGlbPath={playerGlbPath}
           playerWeaponGltfPath={playerWeaponGltfPath}
           artifactPickups={artifactPickups}
+          worldFeaturePickups={worldFeaturePickups}
           isoCombatPlayerCue={isoCombatPlayerCue}
           playerJumpPulseVersion={playerJumpPulseVersion}
           spiderWebCells={spiderWebCells}

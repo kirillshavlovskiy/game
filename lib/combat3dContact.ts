@@ -168,6 +168,7 @@ export const PLAYER_HURT_REACTION_DELTA_BY_MONSTER: Partial<
   G: 0,
   S: 0,
   L: 0,
+  O: 0,
 };
 
 /** Inner half caps when **both** are in `attack` (simultaneous exchange — use both spell/skill/light vs hurt columns). */

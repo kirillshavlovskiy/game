@@ -40,7 +40,7 @@ async function glbReachable(url: string): Promise<boolean> {
 
 const VARIANTS = ["spell", "skill", "light"] as const;
 
-const LAB_MONSTER_TYPES: MonsterType[] = ["V", "K", "Z", "S", "L", "G"];
+const LAB_MONSTER_TYPES: MonsterType[] = ["V", "K", "Z", "S", "L", "G", "O"];
 
 type Preset = {
   label: string;
