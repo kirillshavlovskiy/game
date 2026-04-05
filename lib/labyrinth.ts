@@ -858,25 +858,64 @@ export class Labyrinth {
   }
 
   /**
-   * First monster east of (0,0) — first combat after moving right; prepended as `monsters[0]`.
-   * Type is set via `firstMonsterType` constructor param (exposed in game setup UI).
+   * “Featured” first monster — prepended as `monsters[0]`; type from `firstMonsterType` (setup UI).
+   * Kept well away from all corner spawns so the opening moves are exploration, not immediate contact.
    */
   private _placeStartNeighborDracula(): void {
-    if (this.width > 1 && isWalkable(this.grid[0][1])) {
-      const patrolArea = this._getPatrolArea(1, 0, 28);
-      if (patrolArea.length >= 2) {
-        const t = this.firstMonsterType;
-        this.monsters.unshift({
-          x: 1,
-          y: 0,
-          type: t,
-          patrolArea,
-          visionRadius: 3,
-          spawnX: 1,
-          spawnY: 0,
-          hp: getMonsterMaxHp(t),
-        });
+    const t = this.firstMonsterType;
+    const spawns = this._getCornerSpawns();
+    const magicCells = this.getMagicCellPositions();
+    const nearMagic = (ax: number, ay: number) =>
+      magicCells.some(([mx, my]) => Math.abs(ax - mx) + Math.abs(ay - my) <= 3);
+    const minDistToSpawns = (x: number, y: number) =>
+      Math.min(...spawns.map(([sx, sy]) => this._manhattanDist(x, y, sx ?? 0, sy ?? 0)));
+    const occupied = new Set(this.monsters.map((m) => `${m.x},${m.y}`));
+    /** Scale with map size; clamp so tiny mazes still try for ~6+ steps from a corner. */
+    const distTarget = Math.max(
+      8,
+      Math.min(16, Math.floor(Math.min(this.width, this.height) * 0.28)),
+    );
+
+    type Scored = { x: number; y: number; d: number };
+    const scored: Scored[] = [];
+    for (let y = 0; y < this.height; y++) {
+      for (let x = 0; x < this.width; x++) {
+        if (!isWalkable(this.grid[y][x])) continue;
+        if (occupied.has(`${x},${y}`)) continue;
+        if (x === this.goalX && y === this.goalY) continue;
+        if (nearMagic(x, y)) continue;
+        scored.push({ x, y, d: minDistToSpawns(x, y) });
       }
+    }
+    if (scored.length === 0) return;
+
+    let pool = scored.filter((c) => c.d >= distTarget);
+    if (pool.length === 0) {
+      const best = Math.max(...scored.map((c) => c.d));
+      pool = scored.filter((c) => c.d === best);
+    }
+    shuffle(pool);
+
+    for (const { x, y } of pool) {
+      const patrolArea = this._getPatrolArea(x, y, 28);
+      if (patrolArea.length < 2) continue;
+      const m: Monster = {
+        x,
+        y,
+        type: t,
+        patrolArea,
+        visionRadius: 3,
+        spawnX: x,
+        spawnY: y,
+        hp: getMonsterMaxHp(t),
+      };
+      if (t === "V") {
+        m.draculaState = "idle";
+        m.draculaCooldowns = { teleport: 0, attack: 0 };
+        m.targetPlayerIndex = null;
+      }
+      this.monsters.unshift(m);
+      return;
     }
   }
 
