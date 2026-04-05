@@ -511,7 +511,9 @@ function FloorTiles({
         map={floorTex}
         roughness={0.72}
         metalness={0.04}
-        color="#6a5d56"
+        color="#82756a"
+        emissive="#1e1c1a"
+        emissiveIntensity={0.07}
       />
     </instancedMesh>
   );
@@ -905,11 +907,11 @@ function PlayerMarker({
       </mesh>
       {/* Follow light bound to player marker so nearby floor/walls stay readable while moving. */}
       <pointLight
-        position={[0, 1.15, 0]}
-        color="#7ad4b8"
-        intensity={1.45}
-        distance={CS * 4.1}
-        decay={2}
+        position={[0, 0.62, 0]}
+        color="#9ae4cc"
+        intensity={1.85}
+        distance={CS * 5.6}
+        decay={1.95}
       />
       <group ref={modelAnchorRef}>
         <Suspense
@@ -1224,7 +1226,7 @@ function WallTorches({
         const fog = fogIntensityMap?.get(`${t.cellX},${t.cellY}`) ?? 0;
         /* Align with ornaments / set-pieces (~0.14): 0.02 hid torches on almost any fogged cell — only "current tile" read lit. */
         if (fog > 0.14) return null;
-        const near = Math.hypot(t.cellX - playerX, t.cellY - playerY) <= 6.5;
+        const near = Math.hypot(t.cellX - playerX, t.cellY - playerY) <= 8.25;
         return <WallTorch key={i} torch={t} active={near} />;
       })}
     </>
@@ -1325,7 +1327,8 @@ void useTexture.preload(MAZE_ISO_WALL_SIDE_TEXTURE);
 
 /** Exponential depth fog — distance haze (stronger = thicker air). */
 const ATMOSPHERIC_FOG_COLOR = 0x030408;
-const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0072;
+/** Slightly thinner than before so walkable floor (PBR + shadows) stays readable mid-range. */
+const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0051;
 /** Every path cell gets at least this mist strength; game fog zones blend toward full opacity. */
 const CORRIDOR_BASE_MIST = 0.32;
 /** Per-cell fog wobble so neighbouring tiles read at visibly different densities. */
@@ -3364,11 +3367,12 @@ function MazeScene({
   return (
     <>
       <MazeAtmosphericFog />
-      {/* Near-black fill so torch / player pools read as islands; key light paints hard shadow shapes. */}
-      <ambientLight intensity={0.008} color="#1a1d28" />
+      {/* Base fill: was ~0.008 — floor is MeshStandard + shadowed; walls use MeshBasic tops so they stayed bright alone. */}
+      <ambientLight intensity={0.16} color="#2b3040" />
+      <hemisphereLight args={["#8a95a8", "#4a423c", 0.32]} />
       <directionalLight
         position={[18, 26, 10]}
-        intensity={0.14}
+        intensity={0.22}
         color="#c8d2e2"
         castShadow
         shadow-mapSize-width={1024}
@@ -3381,7 +3385,7 @@ function MazeScene({
         shadow-camera-bottom={-shadowRange}
         shadow-bias={-0.00022}
       />
-      <directionalLight position={[-12, 12, -12]} intensity={0.042} color="#7a88a8" />
+      <directionalLight position={[-12, 12, -12]} intensity={0.072} color="#8a96b0" />
 
       <FloorTiles grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} onCellClick={onCellClick} />
       <CorridorFogVolumes grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
