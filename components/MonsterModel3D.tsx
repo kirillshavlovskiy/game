@@ -1316,6 +1316,30 @@ function PositionedGltfSubject(
 }
 
 /**
+ * R3F only auto-updates perspective `aspect` when `camera.manual` is false (`updateCamera` in fiber). If `manual` is
+ * true or `aspect` was stale when `MeshyCombatCameraFraming` ran, the frustum no longer matches the drawing buffer —
+ * wide landscape canvases can look vertically wrong (content shoved to one band). Keep aspect locked to the WebGL
+ * backing store every frame (cheap when stable).
+ */
+function CombatPerspectiveCameraAspectSync() {
+  const { camera, gl } = useThree();
+  useFrame(() => {
+    const cam = camera;
+    if (!(cam instanceof THREE.PerspectiveCamera)) return;
+    const el = gl.domElement;
+    if (el.width <= 0 || el.height <= 0) return;
+    (cam as THREE.PerspectiveCamera & { manual?: boolean }).manual = false;
+    const next = el.width / el.height;
+    if (!Number.isFinite(next) || next <= 0) return;
+    if (Math.abs((cam.aspect || 0) - next) > 1e-7) {
+      cam.aspect = next;
+      cam.updateProjectionMatrix();
+    }
+  }, -1000);
+  return null;
+}
+
+/**
  * Fixed camera for merged Meshy rigs — stance clips stay pinned while authored
  * one-shot actions may use root motion. Camera stays completely static; no
  * per-state offsets, no movement between clips.
@@ -1335,16 +1359,23 @@ function MeshyCombatCameraFraming({
   baseFov: number;
   frameKey: string;
 }) {
-  const { camera } = useThree();
+  const { camera, gl, size } = useThree();
 
   useLayoutEffect(() => {
     if (!enabled) return;
     const cam = camera as THREE.PerspectiveCamera;
+    (cam as THREE.PerspectiveCamera & { manual?: boolean }).manual = false;
+    const el = gl.domElement;
+    if (el.width > 0 && el.height > 0) {
+      cam.aspect = el.width / el.height;
+    } else if (size.width > 0 && size.height > 0) {
+      cam.aspect = size.width / size.height;
+    }
     cam.position.set(0, baseY, baseZ);
     cam.fov = baseFov;
     cam.updateProjectionMatrix();
     invalidate();
-  }, [camera, enabled, baseZ, baseY, baseFov, frameKey]);
+  }, [camera, gl, enabled, baseZ, baseY, baseFov, frameKey, size.width, size.height]);
 
   return null;
 }
@@ -1924,6 +1955,11 @@ export interface CombatScene3DProps {
   fallback: ReactNode;
   /** Tighter default camera + orbit (used for all combat modals — desktop and mobile). */
   compactCombatViewport?: boolean;
+  /**
+   * Short wide canvas (typical phone landscape): dolly in + lift rigs and sightline so heads sit higher and fill the
+   * frame — avoids a large empty band above the models. Ignored unless `compactCombatViewport` is true.
+   */
+  compactCombatShortWide?: boolean;
   /** When true, orbit is off and taps on the monster pick head / body / legs by screen Y on the mesh bounds. */
   strikePickActive?: boolean;
   onStrikeTargetPick?: (target: StrikeTarget) => void;
@@ -2190,6 +2226,7 @@ export function CombatScene3D({
   height,
   fallback,
   compactCombatViewport = false,
+  compactCombatShortWide = false,
   strikePickActive = false,
   onStrikeTargetPick,
   rollingApproachBlend = 0,
@@ -2209,14 +2246,15 @@ export function CombatScene3D({
    * Modal / lab compact canvas: lift fighters + blood FX together so the viewport shows full figures, not just crowns
    * (orbit pivot and camera rise by the same delta so framing stays coherent).
    */
-  const battleSceneGroundY = compactCombatViewport ? 0.26 : 0;
-  const cameraZ = compactCombatViewport ? 3.28 : 5.35;
-  const cameraY = compactCombatViewport ? 0.92 + battleSceneGroundY : 1.0;
-  const fov = compactCombatViewport ? 50 : 40;
+  const shortWide = compactCombatViewport && compactCombatShortWide;
+  const battleSceneGroundY = compactCombatViewport ? (shortWide ? 0.38 : 0.26) : 0;
+  const cameraZ = compactCombatViewport ? (shortWide ? 2.52 : 3.28) : 5.35;
+  const cameraY = compactCombatViewport ? (shortWide ? 1.02 : 0.92) + battleSceneGroundY : 1.0;
+  const fov = compactCombatViewport ? (shortWide ? 44 : 50) : 40;
   const meshyCameraBases = { baseZ: cameraZ, baseY: cameraY, baseFov: fov };
-  const orbitMinD = orbitMinDistance ?? (compactCombatViewport ? 1.12 : 2);
-  const orbitMaxD = orbitMaxDistance ?? (compactCombatViewport ? 5.8 : 10);
-  const orbitTargetY = compactCombatViewport ? 0.56 + battleSceneGroundY : 0.8;
+  const orbitMinD = orbitMinDistance ?? (compactCombatViewport ? (shortWide ? 0.78 : 1.12) : 2);
+  const orbitMaxD = orbitMaxDistance ?? (compactCombatViewport ? (shortWide ? 5.2 : 5.8) : 10);
+  const orbitTargetY = compactCombatViewport ? (shortWide ? 0.74 : 0.56) + battleSceneGroundY : 0.8;
   const resolvedArmourAttachHand = armourAttachHand ?? resolveWeaponAttachHand(armourGltfPath ?? null);
 
   const isContactExchange =
@@ -2317,7 +2355,7 @@ export function CombatScene3D({
   }, [armourOffhandGltfPath]);
 
   /** Roster + optional session so Canvas / orbit reset when a new fight reuses the same GLB paths (cached rig pose + dolly). */
-  const sceneAnchorKey = `${monsterType ?? "?"}|${monsterGltfPath}|${playerGltfPath}|${armourGltfPath ?? ""}|${armourOffhandGltfPath ?? ""}|${combatSceneSessionKey ?? ""}`;
+  const sceneAnchorKey = `${monsterType ?? "?"}|${monsterGltfPath}|${playerGltfPath}|${armourGltfPath ?? ""}|${armourOffhandGltfPath ?? ""}|${combatSceneSessionKey ?? ""}|sw${shortWide ? 1 : 0}`;
   const canvasKey = `meshy-combat-${width}--${sceneAnchorKey}--wg${webglRestoreGeneration}`;
   const initialCombatCamera = useMemo(
     (): readonly [number, number, number] => [0, cameraY, cameraZ],
@@ -2345,6 +2383,7 @@ export function CombatScene3D({
       >
         <WebGlContextLossGuard onContextRestored={bumpWebglCombatCanvas} />
         <Suspense fallback={null}>
+          <CombatPerspectiveCameraAspectSync />
           <MeshyCombatCameraFraming
             enabled={isMergedMeshy}
             visualState={monsterVisualState}

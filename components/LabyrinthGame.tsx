@@ -10791,7 +10791,7 @@ export default function LabyrinthGame() {
                 ...(isLandscapeCompact
                   ? {
                       gridTemplateRows: isDracula3dCombatPortrait
-                        ? "minmax(10px, auto) minmax(0, auto) minmax(260px, min(400px, 54vh)) auto minmax(6px, auto)"
+                        ? "minmax(10px, auto) minmax(0, auto) minmax(min(240px, 52dvh), min(440px, 68dvh)) auto minmax(6px, auto)"
                         : "minmax(10px, auto) minmax(0, auto) minmax(156px, 200px) auto minmax(6px, auto)",
                       rowGap: 6,
                     }
@@ -10817,18 +10817,44 @@ export default function LabyrinthGame() {
                 : lsSpritePx;
               /** Fit 3D from short viewport edge — portrait uses tall chrome reserve; landscape uses small height − tight chrome. */
               /** Same 3D height while the die rolls as after — shrinking during `rolling` made the fight look zoomed-out and shoved upward. */
+              const combatFaceoffInnerH =
+                typeof window !== "undefined" ? window.innerHeight : 400;
+              const combatFaceoffInnerW =
+                typeof window !== "undefined" ? window.innerWidth : 900;
+              /**
+               * Mobile landscape: match `Monster3dContactPairLab` canvas aspect (640×320) so framing matches
+               * `/monster-3d-animations` combat simulation; height is capped by remaining viewport under chrome.
+               */
+              const mobileLsFaceoffCanvas =
+                isMobile &&
+                showCombatLandscapeVersus &&
+                monsterGltfPath &&
+                isLandscapeCompact
+                  ? (() => {
+                      const chromeH = 108;
+                      const w = Math.min(
+                        COMBAT_MODAL_WIDTH_LANDSCAPE_PX,
+                        Math.max(300, Math.round(combatFaceoffInnerW - 20))
+                      );
+                      const hLabAspect = Math.round(w / 2);
+                      const hMax = Math.max(
+                        200,
+                        Math.min(380, Math.round(combatFaceoffInnerH - chromeH))
+                      );
+                      return { width: w, height: Math.min(hLabAspect, hMax) };
+                    })()
+                  : null;
               const mobileFaceoff3dH =
                 isMobile &&
                 showCombatLandscapeVersus &&
                 monsterGltfPath
                   ? isLandscapeCompact
-                    ? Math.max(
+                    ? mobileLsFaceoffCanvas?.height ??
+                      Math.max(
                         118,
                         Math.min(
                           198,
-                          Math.round(
-                            (typeof window !== "undefined" ? window.innerHeight : 400) - 198
-                          )
+                          Math.round(combatFaceoffInnerH - 198)
                         )
                       )
                     : Math.max(
@@ -10857,6 +10883,8 @@ export default function LabyrinthGame() {
                   : null;
               const combatScene3dHeightFaceoff =
                 mobileFaceoff3dH ?? desktopFaceoff3dH ?? combatMonster3dHeight;
+              const combatScene3dWidthFaceoff =
+                mobileLsFaceoffCanvas?.width ?? COMBAT_MODAL_WIDTH_LANDSCAPE_PX;
               const draculaHurt3dLocked = combatFooterSnapshot?.draculaHurt3dHp;
               const draculaHurtHpFor3d = (() => {
                 const merged3dHurt =
@@ -11235,6 +11263,7 @@ export default function LabyrinthGame() {
                           draculaHurtStrikeZone={draculaHurtStrikeZoneFor3d}
                           draculaLoopAngrySkill01={draculaLossMenaceLoop3d}
                           compactCombatViewport
+                          compactCombatShortWide={isMobile && isLandscapeCompact}
                           strikePickActive={combatStrikePick3dDuringRoll}
                           onStrikeTargetPick={handleStrikeTargetPick}
                           onOneShotAnimationFinished={combat3dOneShotFinished}
@@ -11243,7 +11272,7 @@ export default function LabyrinthGame() {
                           combatSceneSessionKey={combat3dInstanceKey}
                           orbitMinDistance={0.48}
                           orbitMaxDistance={11}
-                          width={COMBAT_MODAL_WIDTH_LANDSCAPE_PX}
+                          width={combatScene3dWidthFaceoff}
                           height={combatScene3dHeightFaceoff}
                           fallback={
                             <img
@@ -11251,8 +11280,8 @@ export default function LabyrinthGame() {
                               src={combat3dFallbackImgSrc}
                               alt=""
                           style={{
-                                width: combatMonster3dWidth,
-                                height: combatMonster3dHeight,
+                                width: combatScene3dWidthFaceoff,
+                                height: combatScene3dHeightFaceoff,
                                 objectFit: "contain",
                               }}
                             />
@@ -12344,7 +12373,11 @@ export default function LabyrinthGame() {
                 </div>
               </div>
             ) : null}
-            {combatState && lab && useCombatLandscapeFaceoff && (() => {
+            {combatState &&
+            lab &&
+            useCombatLandscapeFaceoff &&
+            !(isMobile && isLandscapeCompact) &&
+            (() => {
               const [dMin, dMax] = getMonsterDamageRange(combatState.monsterType);
               return (
                 <div style={combatModalFooterDiceStyle}>
