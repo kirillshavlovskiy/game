@@ -31,7 +31,11 @@ import {
 } from "@/lib/labyrinth";
 import { PLAYER_ARMOUR_GLB_PATHS } from "@/lib/playerArmourGlbs";
 import { ARTIFACT_KIND_VISUAL_GLB, COLLECTIBLE_ARTIFACT_GLB_URLS } from "@/lib/storedArtifactGlbs";
-import { MAZE_SPIDER_WEB_MESH_GLB, MAZE_WORLD_FEATURE_GLB_URLS } from "@/lib/mazeIsoWorldPickups";
+import {
+  MAZE_SPIDER_WEB_MESH_GLB,
+  MAZE_WORLD_FEATURE_GLB_URLS,
+  MAZE_WORLD_FEATURE_MAGIC_TELEPORT_GLB,
+} from "@/lib/mazeIsoWorldPickups";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import {
   getMonsterGltfPathForReference,
@@ -444,6 +448,10 @@ const WALL_SIZE = CS;
 const WALL_HEIGHT = 3.25;
 /** Rotating pickup GLBs (artifacts, bomb, catapult, trap): max bbox extent in world units (was 0.54 — too small after low-poly remeshes). */
 const MAZE_ROTATING_PICKUP_MAX_DIM = CS * 0.34;
+/** Magic portal teleport ring: span the walkable cell (corridor) in XZ — no spin, floor-scale only. */
+const MAZE_MAGIC_TELEPORT_RING_HORIZ_SPAN = CS * 0.98;
+/** Static yaw so the ring aligns with the corridor (mesh authored axis). */
+const MAZE_MAGIC_TELEPORT_RING_YAW = Math.PI / 2;
 /** Spider web GLB: scale to span corridor (one cell) and wall height. */
 const SPIDER_WEB_TUNNEL_WIDTH = CS * 1.06;
 const SPIDER_WEB_TUNNEL_HEIGHT = WALL_HEIGHT * 0.98;
@@ -1391,8 +1399,9 @@ function CorridorFogBucketLayer({
     if (!mesh || cells.length === 0) return;
     for (let i = 0; i < cells.length; i++) {
       const c = cells[i]!;
-      const px = c.cx * CS + CS * 0.5;
-      const pz = c.cy * CS + CS * 0.5;
+      /* Floor `planeGeometry` is centered on `(cx*CS, cy*CS)` — same as player / pickups (no +0.5*CS). */
+      const px = c.cx * CS;
+      const pz = c.cy * CS;
       const y = layer === 0 ? 0.2 + c.f * 0.38 : 0.82 + c.f * 0.48;
       const rot = layer === 0 ? c.rot : c.rot + 1.7;
       const baseS = layer === 0 ? CS * 0.94 : CS * 0.78;
@@ -1559,8 +1568,8 @@ function SpiderWebMazeMesh({ cellX, cellY }: { cellX: number; cellY: number }) {
     const b2 = new THREE.Box3().setFromObject(clone);
     clone.position.set(0, -b2.min.y + 0.03, 0);
   }, [clone]);
-  const px = cellX * CS + CS * 0.5;
-  const pz = cellY * CS + CS * 0.5;
+  const px = cellX * CS;
+  const pz = cellY * CS;
   return (
     <group position={[px, FLOOR_Y + 0.02, pz]}>
       <primitive object={clone} />
@@ -1659,8 +1668,8 @@ function GenericRotatingArtifactOrb({ x, y }: { x: number; y: number }) {
   useFrame((_, dt) => {
     if (ref.current) ref.current.rotation.y += dt * 1.25;
   });
-  const px = x * CS + CS * 0.5;
-  const pz = y * CS + CS * 0.5;
+  const px = x * CS;
+  const pz = y * CS;
   return (
     <group ref={ref} position={[px, FLOOR_Y + 0.36, pz]}>
       <mesh castShadow>
@@ -1677,7 +1686,23 @@ function GenericRotatingArtifactOrb({ x, y }: { x: number; y: number }) {
   );
 }
 
-function RotatingArtifactGlbPickup({ x, y, url }: { x: number; y: number; url: string }) {
+function RotatingArtifactGlbPickup({
+  x,
+  y,
+  url,
+  spin = true,
+  /** When set, uniform scale so max(XZ) footprint matches this (corridor width). Otherwise cube-fit with `MAZE_ROTATING_PICKUP_MAX_DIM`. */
+  maxHorizSpan,
+  /** Extra Y rotation (radians) applied before optional spin — e.g. magic portal ring alignment. */
+  staticRotationY = 0,
+}: {
+  x: number;
+  y: number;
+  url: string;
+  spin?: boolean;
+  maxHorizSpan?: number;
+  staticRotationY?: number;
+}) {
   const { scene } = useGLTF(url);
   const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   const spinRef = useRef<THREE.Group>(null);
@@ -1693,21 +1718,28 @@ function RotatingArtifactGlbPickup({ x, y, url }: { x: number; y: number; url: s
     clone.scale.setScalar(1);
     const box = new THREE.Box3().setFromObject(clone);
     const size = box.getSize(new THREE.Vector3());
-    const maxD = Math.max(size.x, size.y, size.z, 1e-4);
-    const u = MAZE_ROTATING_PICKUP_MAX_DIM / maxD;
+    let u: number;
+    if (maxHorizSpan != null) {
+      const sxz = Math.max(size.x, size.z);
+      u = maxHorizSpan / Math.max(sxz, 1e-4);
+    } else {
+      const maxD = Math.max(size.x, size.y, size.z, 1e-4);
+      u = MAZE_ROTATING_PICKUP_MAX_DIM / maxD;
+    }
     clone.scale.setScalar(u);
     clone.updateMatrixWorld(true);
     const b2 = new THREE.Box3().setFromObject(clone);
     clone.position.set(0, -b2.min.y + 0.02, 0);
-  }, [clone]);
+  }, [clone, maxHorizSpan]);
   useFrame((_, dt) => {
+    if (!spin) return;
     if (spinRef.current) spinRef.current.rotation.y += dt * 1.05;
   });
-  const px = x * CS + CS * 0.5;
-  const pz = y * CS + CS * 0.5;
+  const px = x * CS;
+  const pz = y * CS;
   return (
     <group position={[px, FLOOR_Y + 0.02, pz]}>
-      <group ref={spinRef}>
+      <group ref={spinRef} rotation={[0, staticRotationY, 0]}>
         <primitive object={clone} />
       </group>
     </group>
@@ -1738,9 +1770,20 @@ function MazeWorldFeaturePickups({ items }: { items: Array<{ x: number; y: numbe
   if (!items.length) return null;
   return (
     <>
-      {items.map((p) => (
-        <RotatingArtifactGlbPickup key={`${p.x},${p.y},${p.url}`} x={p.x} y={p.y} url={p.url} />
-      ))}
+      {items.map((p) => {
+        const isMagicTeleport = p.url === MAZE_WORLD_FEATURE_MAGIC_TELEPORT_GLB;
+        return (
+          <RotatingArtifactGlbPickup
+            key={`${p.x},${p.y},${p.url}`}
+            x={p.x}
+            y={p.y}
+            url={p.url}
+            spin={!isMagicTeleport}
+            maxHorizSpan={isMagicTeleport ? MAZE_MAGIC_TELEPORT_RING_HORIZ_SPAN : undefined}
+            staticRotationY={isMagicTeleport ? MAZE_MAGIC_TELEPORT_RING_YAW : 0}
+          />
+        );
+      })}
     </>
   );
 }

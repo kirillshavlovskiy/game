@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build static HTML (out/) and zip for itch.io HTML upload.
+# Windows (no bash): `npm run package:itch` runs scripts/package-itch.cjs instead.
 # Upload dist/creep-labyrinth-itch.zip — kind: HTML, index.html at zip root.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

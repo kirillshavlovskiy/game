@@ -844,21 +844,20 @@ function PositionedGltfSubject(
   };
   const { scene, animations } = useGLTF(rest.url);
   /**
-   * `useGLTF` returns a shared cached scene; a previous combat canvas can leave bones in strike/hurt poses.
-   * `Center` then frames that stale pose — often reads as the player sunk under the viewport while the monster looks fine.
-   * Clone (skinned-safe) and bind-pose skeletons before layout, same idea as `MazeIsoView` markers.
+   * `useGLTF` returns a shared cached scene — we **clone** so combat instances don’t fight over bone state.
+   * **Do not** call `skeleton.pose()` on the clone: maze `PlayerAvatar3D` does not, and `pose()` changes rest bone
+   * scales so `BoneAttachedWeapon`’s `getWorldScale` compensation no longer matches the maze (weapon vs body wrong).
    */
   const sceneView = useMemo(() => {
     const root = SkeletonUtils.clone(scene);
-    root.traverse((obj) => {
-      const sm = obj as THREE.SkinnedMesh;
-      if (sm.isSkinnedMesh && sm.skeleton) {
-        sm.skeleton.pose();
-      }
-    });
     root.updateMatrixWorld(true);
     return root;
   }, [scene]);
+  /**
+   * Same as `MazeIsoView` `PlayerAvatar3D`: `useAnimations` root is the **scaled wrapper** `<group>` around
+   * `<primitive object={sceneView} />`, not the scene object. That keeps skinned bone world matrices consistent
+   * with maze ISO for `BoneAttachedWeapon` sizing.
+   */
   const innerRef = useRef<THREE.Group>(null);
   const { actions, names, mixer } = useAnimations(animations, innerRef);
   const onFinishedRef = useRef(rest.onOneShotAnimationFinished);

@@ -11,7 +11,11 @@ const combatLog = (message: string, ...args: unknown[]) => {
   console.log("[COMBAT]", message, ...args);
 };
 
-/** TEMP: `false` restores movement dice and finite moves. */
+/**
+ * When `true`, movement pool stays unlimited — no movement dice modal after each step.
+ * Use this so single-player does not re-open the movement dice after every 1-move roll.
+ * Set to `false` for classic finite moves (roll once, then spend until empty).
+ */
 const TEMP_INFINITE_MOVES = true;
 const INFINITE_MOVES_POOL = 999_999;
 
@@ -2443,6 +2447,9 @@ const HORROR_HERO_PORTRAITS = [
   { path: `${HERO_PORTRAIT_PREFIX}hero-wear-4.png`, title: "Horror hero — gambeson & pauldron (no weapons)" },
 ] as const;
 
+/** Player 1 (index 0): only this portrait at start — no hero/emoji picker in start menu / settings. */
+const PLAYER_1_FIXED_AVATAR_PATH = HORROR_HERO_PORTRAITS[0]!.path;
+
 function isHeroPortraitPath(value: string): boolean {
   return (
     value.startsWith(HERO_PORTRAIT_PREFIX) ||
@@ -3312,6 +3319,15 @@ export default function LabyrinthGame() {
         : PLAYER_AVATARS[i % PLAYER_AVATARS.length]
     )
   );
+  /** Player 1 portrait is not selectable — keep state aligned with `PLAYER_1_FIXED_AVATAR_PATH`. */
+  useEffect(() => {
+    setPlayerAvatars((prev) => {
+      if (prev[0] === PLAYER_1_FIXED_AVATAR_PATH) return prev;
+      const next = [...prev];
+      next[0] = PLAYER_1_FIXED_AVATAR_PATH;
+      return next;
+    });
+  }, [numPlayers]);
   const [playerWeaponGlb, setPlayerWeaponGlb] = useState<string[]>(() =>
     Array.from({ length: 10 }, (_, i) => WEAPON_OPTIONS[i % WEAPON_OPTIONS.length]!.path),
   );
@@ -8046,94 +8062,122 @@ export default function LabyrinthGame() {
                         gap: 4,
                         flexShrink: 0,
                         maxWidth: isMobile ? "100%" : AVATAR_PICKER_WRAP_MAX_W,
+                        alignItems: "center",
                       }}
                     >
-                      {HORROR_HERO_PORTRAITS.map((h) => (
-                        <button
-                          key={h.path}
-                          type="button"
-                          title={h.title}
-                          className="start-menu-avatar-btn"
-                          onClick={() => {
-                            setPlayerAvatars((prev) => {
-                              const next =
-                                prev.length >= numPlayers
-                                  ? [...prev]
-                                  : [
-                                      ...prev,
-                                      ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
-                                        PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length]
-                                      ),
-                                    ];
-                              next[i] = h.path;
-                              return next;
-                            });
-                          }}
+                      {i === 0 ? (
+                        <div
+                          title={HORROR_HERO_PORTRAITS[0]!.title}
                           style={{
                             width: AVATAR_PICKER_BTN_PX,
                             height: AVATAR_PICKER_BTN_PX,
-                            padding: 0,
-                            lineHeight: 1,
-                            border:
-                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
-                                ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
-                                : `1px solid ${START_MENU_BORDER_MUTE}`,
+                            border: `2px solid ${START_MENU_ACCENT_BRIGHT}`,
                             borderRadius: 6,
-                            background:
-                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
-                                ? START_MENU_SELECTED_FILL
-                                : START_MENU_CTRL_BG,
-                            cursor: "pointer",
+                            background: START_MENU_SELECTED_FILL,
+                            overflow: "hidden",
+                            flexShrink: 0,
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            overflow: "hidden",
                           }}
                         >
                           <img
-                            src={h.path}
+                            src={heroPortraitImgSrc(PLAYER_1_FIXED_AVATAR_PATH)}
                             alt=""
                             draggable={false}
                             style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
                           />
-                        </button>
-                      ))}
-                      {PLAYER_AVATARS.map((av) => (
-                        <button
-                          key={av}
-                          type="button"
-                          className="start-menu-avatar-btn"
-                          onClick={() => {
-                            setPlayerAvatars((prev) => {
-                              const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length])];
-                              next[i] = av;
-                              return next;
-                            });
-                          }}
-                          style={{
-                            width: AVATAR_PICKER_BTN_PX,
-                            height: AVATAR_PICKER_BTN_PX,
-                            padding: 0,
-                            fontSize: AVATAR_PICKER_FONT,
-                            lineHeight: 1,
-                            border:
-                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av
-                                ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
-                                : `1px solid ${START_MENU_BORDER_MUTE}`,
-                            borderRadius: 6,
-                            background:
-                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av
-                                ? START_MENU_SELECTED_FILL
-                                : START_MENU_CTRL_BG,
-                            cursor: "pointer",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          {av}
-                        </button>
-                      ))}
+                        </div>
+                      ) : (
+                        <>
+                          {HORROR_HERO_PORTRAITS.map((h) => (
+                            <button
+                              key={h.path}
+                              type="button"
+                              title={h.title}
+                              className="start-menu-avatar-btn"
+                              onClick={() => {
+                                setPlayerAvatars((prev) => {
+                                  const next =
+                                    prev.length >= numPlayers
+                                      ? [...prev]
+                                      : [
+                                          ...prev,
+                                          ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
+                                            PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length]
+                                          ),
+                                        ];
+                                  next[i] = h.path;
+                                  return next;
+                                });
+                              }}
+                              style={{
+                                width: AVATAR_PICKER_BTN_PX,
+                                height: AVATAR_PICKER_BTN_PX,
+                                padding: 0,
+                                lineHeight: 1,
+                                border:
+                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
+                                    ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
+                                    : `1px solid ${START_MENU_BORDER_MUTE}`,
+                                borderRadius: 6,
+                                background:
+                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
+                                    ? START_MENU_SELECTED_FILL
+                                    : START_MENU_CTRL_BG,
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                overflow: "hidden",
+                              }}
+                            >
+                              <img
+                                src={h.path}
+                                alt=""
+                                draggable={false}
+                                style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
+                              />
+                            </button>
+                          ))}
+                          {PLAYER_AVATARS.map((av) => (
+                            <button
+                              key={av}
+                              type="button"
+                              className="start-menu-avatar-btn"
+                              onClick={() => {
+                                setPlayerAvatars((prev) => {
+                                  const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length])];
+                                  next[i] = av;
+                                  return next;
+                                });
+                              }}
+                              style={{
+                                width: AVATAR_PICKER_BTN_PX,
+                                height: AVATAR_PICKER_BTN_PX,
+                                padding: 0,
+                                fontSize: AVATAR_PICKER_FONT,
+                                lineHeight: 1,
+                                border:
+                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av
+                                    ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
+                                    : `1px solid ${START_MENU_BORDER_MUTE}`,
+                                borderRadius: 6,
+                                background:
+                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av
+                                    ? START_MENU_SELECTED_FILL
+                                    : START_MENU_CTRL_BG,
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                              }}
+                            >
+                              {av}
+                            </button>
+                          ))}
+                        </>
+                      )}
                     </div>
                     <input
                       type="text"
@@ -12399,85 +12443,121 @@ export default function LabyrinthGame() {
               <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flexShrink: 0, maxWidth: AVATAR_PICKER_WRAP_MAX_W }}>
-                      {HORROR_HERO_PORTRAITS.map((h) => (
-                        <button
-                          key={h.path}
-                          type="button"
-                          title={h.title}
-                          onClick={() => {
-                            setPlayerAvatars((prev) => {
-                              const next =
-                                prev.length >= numPlayers
-                                  ? [...prev]
-                                  : [
-                                      ...prev,
-                                      ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
-                                        PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length]
-                                      ),
-                                    ];
-                              next[i] = h.path;
-                              return next;
-                            });
-                          }}
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 4,
+                        flexShrink: 0,
+                        maxWidth: AVATAR_PICKER_WRAP_MAX_W,
+                        alignItems: "center",
+                      }}
+                    >
+                      {i === 0 ? (
+                        <div
+                          title={HORROR_HERO_PORTRAITS[0]!.title}
                           style={{
                             width: AVATAR_PICKER_BTN_PX,
                             height: AVATAR_PICKER_BTN_PX,
-                            padding: 0,
-                            lineHeight: 1,
-                            border:
-                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
-                                ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}`
-                                : "1px solid #444",
+                            border: `2px solid ${PLAYER_COLORS[0] ?? "#00ff88"}`,
                             borderRadius: 6,
-                            background:
-                              (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
-                                ? "rgba(0,255,136,0.2)"
-                                : "#1a1a24",
-                            cursor: "pointer",
+                            background: "rgba(0,255,136,0.2)",
+                            overflow: "hidden",
+                            flexShrink: 0,
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            overflow: "hidden",
                           }}
                         >
                           <img
-                            src={h.path}
+                            src={heroPortraitImgSrc(PLAYER_1_FIXED_AVATAR_PATH)}
                             alt=""
                             draggable={false}
                             style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
                           />
-                        </button>
-                      ))}
-                      {PLAYER_AVATARS.map((av) => (
-                        <button
-                          key={av}
-                          type="button"
-                          onClick={() => {
-                            setPlayerAvatars((prev) => {
-                              const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length])];
-                              next[i] = av;
-                              return next;
-                            });
-                          }}
-                          style={{
-                            width: AVATAR_PICKER_BTN_PX,
-                            height: AVATAR_PICKER_BTN_PX,
-                            padding: 0,
-                            fontSize: AVATAR_PICKER_FONT,
-                            lineHeight: 1,
-                            border: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}` : "1px solid #444",
-                            borderRadius: 6,
-                            background: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? "rgba(0,255,136,0.2)" : "#1a1a24",
-                            cursor: "pointer",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          {av}
-                        </button>
-                      ))}
+                        </div>
+                      ) : (
+                        <>
+                          {HORROR_HERO_PORTRAITS.map((h) => (
+                            <button
+                              key={h.path}
+                              type="button"
+                              title={h.title}
+                              onClick={() => {
+                                setPlayerAvatars((prev) => {
+                                  const next =
+                                    prev.length >= numPlayers
+                                      ? [...prev]
+                                      : [
+                                          ...prev,
+                                          ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
+                                            PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length]
+                                          ),
+                                        ];
+                                  next[i] = h.path;
+                                  return next;
+                                });
+                              }}
+                              style={{
+                                width: AVATAR_PICKER_BTN_PX,
+                                height: AVATAR_PICKER_BTN_PX,
+                                padding: 0,
+                                lineHeight: 1,
+                                border:
+                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
+                                    ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}`
+                                    : "1px solid #444",
+                                borderRadius: 6,
+                                background:
+                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
+                                    ? "rgba(0,255,136,0.2)"
+                                    : "#1a1a24",
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                overflow: "hidden",
+                              }}
+                            >
+                              <img
+                                src={h.path}
+                                alt=""
+                                draggable={false}
+                                style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
+                              />
+                            </button>
+                          ))}
+                          {PLAYER_AVATARS.map((av) => (
+                            <button
+                              key={av}
+                              type="button"
+                              onClick={() => {
+                                setPlayerAvatars((prev) => {
+                                  const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length])];
+                                  next[i] = av;
+                                  return next;
+                                });
+                              }}
+                              style={{
+                                width: AVATAR_PICKER_BTN_PX,
+                                height: AVATAR_PICKER_BTN_PX,
+                                padding: 0,
+                                fontSize: AVATAR_PICKER_FONT,
+                                lineHeight: 1,
+                                border: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}` : "1px solid #444",
+                                borderRadius: 6,
+                                background: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? "rgba(0,255,136,0.2)" : "#1a1a24",
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                              }}
+                            >
+                              {av}
+                            </button>
+                          ))}
+                        </>
+                      )}
                     </div>
                     <input
                       type="text"
