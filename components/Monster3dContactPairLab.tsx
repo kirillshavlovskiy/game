@@ -28,6 +28,7 @@ import {
   WEAPON_ATTACH_HAND,
   type WeaponAttachHand,
 } from "@/lib/weaponAttachConfig";
+import { combatFaceoff3dCanvasSizeDesktopPx } from "@/lib/combat3dFaceoffViewport";
 
 async function glbReachable(url: string): Promise<boolean> {
   try {
@@ -479,8 +480,20 @@ export function Monster3dContactPairLab() {
   const labDraculaHurtStrikeZone: StrikeTarget | undefined =
     monsterType === "V" && monsterState === "hurt" && draculaHurtAim !== "hp" ? draculaHurtAim : undefined;
 
-  const viewportW = 640;
-  const viewportH = 320;
+  /** Match desktop combat modal `CombatScene3D` props so camera distance / FOV (`compactAspect`) match in-game. */
+  const [labFaceoffVp, setLabFaceoffVp] = useState(() =>
+    typeof window !== "undefined"
+      ? combatFaceoff3dCanvasSizeDesktopPx(window.innerHeight)
+      : { width: 920, height: 380 }
+  );
+  useEffect(() => {
+    const sync = () => setLabFaceoffVp(combatFaceoff3dCanvasSizeDesktopPx(window.innerHeight));
+    sync();
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
+  }, []);
+  const viewportW = labFaceoffVp.width;
+  const viewportH = labFaceoffVp.height;
 
   const applyPreset = useCallback((pr: Preset) => {
     setPlayerState(pr.player);
@@ -597,7 +610,6 @@ bladeTwistRad: ${twist},
           setHurtMax(LAB_PLAYER_WIN_MONSTER_HURT_MAX);
         }
         setSeqPhase("off");
-        setReplayNonce((n) => n + 1);
       }
     };
     raf = window.requestAnimationFrame(step);
@@ -962,7 +974,7 @@ bladeTwistRad: ${twist},
           orbitMaxDistance={11}
           rollingApproachBlend={approach}
           faceOffAnimationSyncKey={faceOffAnimationSyncKey}
-          combatSceneSessionKey={`lab-${replayNonce}`}
+          combatSceneSessionKey="monster-3d-contact-lab"
           fallback={
             <div
               style={{

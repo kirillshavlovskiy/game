@@ -2249,23 +2249,30 @@ export function CombatScene3D({
   const isMergedMeshy =
     monsterType === "V" || monsterType === "K" || monsterType === "Z" || monsterType === "G" || monsterType === "S" || monsterType === "L";
   /**
-   * Modal / lab compact canvas: lift fighters + blood FX together so the viewport shows full figures, not just crowns
-   * (orbit pivot and camera rise by the same delta so framing stays coherent).
+   * Compact combat: **same vertical alignment on mobile + desktop** — drive dolly / ground / FOV from canvas aspect,
+   * not `isMobile` (desktop landscape was wide like phone landscape but used the “tall” preset before).
    */
   const shortWide = compactCombatViewport && compactCombatShortWide;
-  /**
-   * Phone landscape: orbit pivot must sit ~pelvis/waist — a high target (chest/head) makes dolly-zoom hug the
-   * upper body and shoves feet/legs into the bottom edge (HP strip reads as cutting the rigs). Lower camera Y
-   * than before lifts the pair in the frame so heads use the empty band above and legs clear the modal chrome.
-   */
-  const battleSceneGroundY = compactCombatViewport ? (shortWide ? 0.42 : 0.26) : 0;
-  const cameraZ = compactCombatViewport ? (shortWide ? 2.34 : 3.28) : 5.35;
-  const cameraY = compactCombatViewport ? (shortWide ? 0.84 : 0.92) + battleSceneGroundY : 1.0;
-  const fov = compactCombatViewport ? (shortWide ? 42 : 50) : 40;
+  /** Camera Z / FOV / ground use this — must match live combat `width`×`height` props (see `combat3dFaceoffViewport`). */
+  const compactAspect = compactCombatViewport ? width / Math.max(1, height) : 1;
+  /** 0 ≈ portrait / square canvas, 1 ≈ very wide landscape strip (lerp endpoints match former shortWide vs tall). */
+  const compactWideT = compactCombatViewport
+    ? Math.min(1, Math.max(0, (compactAspect - 1.45) / 1.15))
+    : 0;
+  const battleSceneGroundY = compactCombatViewport ? THREE.MathUtils.lerp(0.26, 0.42, compactWideT) : 0;
+  /** Extra world Y on the fight `group` only — orbit target stays put so figures read higher in the canvas with air under the feet. */
+  const compactFigureLiftWorld = compactCombatViewport ? 0.09 : 0;
+  /** Single mid-body offset so orbit center matches the pair for every compact size. */
+  const compactOrbitMidBodyOffset = 0.48;
+  const cameraZ = compactCombatViewport ? THREE.MathUtils.lerp(3.28, 2.34, compactWideT) : 5.35;
+  const orbitTargetY = compactCombatViewport ? battleSceneGroundY + compactOrbitMidBodyOffset : 0.8;
+  const cameraY = compactCombatViewport ? orbitTargetY + 0.36 : 1.0;
+  const fov = compactCombatViewport ? THREE.MathUtils.lerp(50, 42, compactWideT) : 40;
   const meshyCameraBases = { baseZ: cameraZ, baseY: cameraY, baseFov: fov };
-  const orbitMinD = orbitMinDistance ?? (compactCombatViewport ? (shortWide ? 0.78 : 1.12) : 2);
-  const orbitMaxD = orbitMaxDistance ?? (compactCombatViewport ? (shortWide ? 5.2 : 5.8) : 10);
-  const orbitTargetY = compactCombatViewport ? (shortWide ? 0.5 : 0.56) + battleSceneGroundY : 0.8;
+  const orbitMinD =
+    orbitMinDistance ?? (compactCombatViewport ? THREE.MathUtils.lerp(1.12, 0.78, compactWideT) : 2);
+  const orbitMaxD =
+    orbitMaxDistance ?? (compactCombatViewport ? THREE.MathUtils.lerp(5.8, 5.2, compactWideT) : 10);
   const resolvedArmourAttachHand = armourAttachHand ?? resolveWeaponAttachHand(armourGltfPath ?? null);
 
   const isContactExchange =
@@ -2379,13 +2386,25 @@ export function CombatScene3D({
         style={{
           width: "100%",
           maxWidth: width,
+          height,
+          overflow: "hidden",
+          position: "relative",
+          zIndex: 0,
+          lineHeight: 0,
           cursor: strikePickActive ? "crosshair" : "grab",
           touchAction: strikePickActive ? "auto" : "none",
         }}
       >
       <Canvas
         key={canvasKey}
-        style={{ width: "100%", maxWidth: width, height, display: "block", verticalAlign: "top" }}
+        style={{
+          width: "100%",
+          maxWidth: width,
+          height,
+          maxHeight: height,
+          display: "block",
+          verticalAlign: "top",
+        }}
         frameloop="always"
         dpr={[1, 2]}
         gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
@@ -2416,7 +2435,7 @@ export function CombatScene3D({
           <ambientLight intensity={0.38} />
           <directionalLight position={[3.2, 5.5, 2.8]} intensity={1.05} />
           <directionalLight position={[-2.5, 2.5, 4]} intensity={0.35} />
-          <group position={[0, battleSceneGroundY, 0]}>
+          <group position={[0, battleSceneGroundY + compactFigureLiftWorld, 0]}>
           {faceOffAnimationSyncKey != null && faceOffAnimationSyncKey !== "" ? (
             <CombatFaceOffPairedSubjects
               faceOffAnimationSyncKey={faceOffAnimationSyncKey}

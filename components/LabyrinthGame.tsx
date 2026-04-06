@@ -105,6 +105,7 @@ import {
   COMBAT_FACEOFF_APPROACH_DURATION_MS,
   resolveCombat3dClipLeads,
 } from "@/lib/combat3dContact";
+import { combatFaceoff3dCanvasHeightDesktopPx } from "@/lib/combat3dFaceoffViewport";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import MazeIsoView, {
   type CatapultTrajectoryPreviewFn,
@@ -3384,9 +3385,9 @@ export default function LabyrinthGame() {
     combatMonsterStrike3d && rolling && !combatArtifactRerollPrompt;
   /**
    * Merged 3D face-off approach blend (same semantics as `Monster3dContactPairLab` `approach`):
-   * - Between rolls: 1 → full strike-pick staging (`COMBAT_STRIKE_PICK_SEPARATION_HALF` in `combat3dContact`).
-   * - While the strike die rolls: 0 → 1 smoothstep over `COMBAT_FACEOFF_APPROACH_DURATION_MS` (hunt walk-in).
-   * - After fight / reroll UI: 0. Passed to `resolveCombat3dClipLeads` for jump lead scaling during exchanges.
+   * - Between strike rolls (and other non-roll UI that still leaves the fight open): 1 → strike-pick staging half.
+   * - While the strike die rolls: 0 → 1 smoothstep over `COMBAT_FACEOFF_APPROACH_DURATION_MS` (walk-in).
+   * - Fight over or no merged 3D / no `combatState`: 0 → wide idle half. Passed to `resolveCombat3dClipLeads`.
    */
   const combat3dApproachEligible =
     combatMonsterStrike3d && combatState != null && combatResult == null && !combatArtifactRerollPrompt;
@@ -3400,7 +3401,15 @@ export default function LabyrinthGame() {
     cancelAnimationFrame(combat3dApproachRafRef.current);
 
     if (!combat3dApproachEligible) {
-      setCombat3dApproachBlend(0);
+      /**
+       * `combat3dApproachEligible` is false during e.g. dice-artifact reroll (`combatArtifactRerollPrompt`).
+       * Snapping blend to 0 used wide `COMBAT_IDLE_SEPARATION_HALF` while `/monster-3d-animations` stays at default
+       * approach **1** (`COMBAT_STRIKE_PICK_SEPARATION_HALF`) for the same idle row — keep staging distance for any
+       * on-screen merged fight until the encounter resolves.
+       */
+      const keepStrikePickStaging =
+        combatMonsterStrike3d && combatState != null && combatResult == null;
+      setCombat3dApproachBlend(keepStrikePickStaging ? 1 : 0);
       return;
     }
     if (!rolling) {
@@ -10822,8 +10831,8 @@ export default function LabyrinthGame() {
               const combatFaceoffInnerW =
                 typeof window !== "undefined" ? window.innerWidth : 900;
               /**
-               * Mobile landscape: match `Monster3dContactPairLab` canvas aspect (640×320) so framing matches
-               * `/monster-3d-animations` combat simulation; height is capped by remaining viewport under chrome.
+               * Mobile landscape: width from viewport, height min(w/2, chrome cap).
+               * Desktop combat + `/monster-3d-animations` lab share `lib/combat3dFaceoffViewport` (920 x clamp(innerH-272)).
                */
               const mobileLsFaceoffCanvas =
                 isMobile &&
@@ -10871,14 +10880,8 @@ export default function LabyrinthGame() {
                 !isMobile &&
                 showCombatLandscapeVersus &&
                 monsterGltfPath
-                  ? Math.max(
-                      280,
-                      Math.min(
-                        540,
-                        Math.round(
-                          (typeof window !== "undefined" ? window.innerHeight : 900) - 272
-                        )
-                      )
+                  ? combatFaceoff3dCanvasHeightDesktopPx(
+                      typeof window !== "undefined" ? window.innerHeight : 900
                     )
                   : null;
               const combatScene3dHeightFaceoff =
@@ -11158,12 +11161,12 @@ export default function LabyrinthGame() {
                         width: "100%",
                         ...(useCombatLandscapeFaceoff
                           ? {
-                          flex: 1,
+                              flex: 1,
                               minHeight: 0,
-                          display: "flex",
-                          flexDirection: "column",
+                              display: "flex",
+                              flexDirection: "column",
                               justifyContent: "center",
-                          alignItems: "center",
+                              alignItems: "center",
                             }
                           : {}),
                         }}
@@ -11226,19 +11229,25 @@ export default function LabyrinthGame() {
                     )}
                     {monsterGltfPath && headerMt ? (
                       <div
-                          style={{
+                        style={{
                           position: "relative",
+                          zIndex: 0,
                           display: "flex",
                           flexDirection: "column",
                           alignItems: "center",
                           justifyContent: "center",
-                            width: "100%",
+                          width: "100%",
+                          overflow: "hidden",
                           marginBottom:
-                            isMobile && isLandscapeCompact && useCombatLandscapeFaceoff
-                              ? 8
-                              : combatActiveFitViewport
-                                ? 2
-                                : 4,
+                            monsterGltfPath && headerMt
+                              ? isMobile
+                                ? 14
+                                : 18
+                              : isMobile && isLandscapeCompact && useCombatLandscapeFaceoff
+                                ? 8
+                                : combatActiveFitViewport
+                                  ? 2
+                                  : 4,
                           ...(useCombatLandscapeFaceoff
                             ? { flex: "0 0 auto", minHeight: 0 }
                             : {}),
@@ -11687,10 +11696,12 @@ export default function LabyrinthGame() {
                     </div>
                     <div
                       style={{
+                        position: "relative",
+                        zIndex: 2,
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
                         gap: "4px 8px",
-                        marginTop: 0,
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
                         marginBottom: 2,
                         width: "100%",
                         alignItems: "center",
@@ -12072,6 +12083,7 @@ export default function LabyrinthGame() {
                         <div
                           style={{
                             position: "relative",
+                            zIndex: 0,
                             display: "flex",
                             flexDirection: "column",
                             alignItems: "center",
@@ -12079,6 +12091,8 @@ export default function LabyrinthGame() {
                             width: "100%",
                             flex: "1 1 auto",
                             minHeight: 0,
+                            overflow: "hidden",
+                            marginBottom: isMobile ? 14 : 18,
                           }}
                         >
                           <CombatScene3D
@@ -12203,11 +12217,13 @@ export default function LabyrinthGame() {
 
                     <div
                       style={{
+                        position: "relative",
+                        zIndex: 2,
                         gridColumn: "1 / -1",
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
                         gap: "4px 8px",
-                        marginTop: 0,
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
                         marginBottom: 1,
                         width: "100%",
                         alignItems: "center",
