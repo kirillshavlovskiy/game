@@ -11233,7 +11233,12 @@ export default function LabyrinthGame() {
                           alignItems: "center",
                           justifyContent: "center",
                             width: "100%",
-                          marginBottom: combatActiveFitViewport ? 2 : 4,
+                          marginBottom:
+                            isMobile && isLandscapeCompact && useCombatLandscapeFaceoff
+                              ? 8
+                              : combatActiveFitViewport
+                                ? 2
+                                : 4,
                           ...(useCombatLandscapeFaceoff
                             ? { flex: "0 0 auto", minHeight: 0 }
                             : {}),

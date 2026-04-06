@@ -866,6 +866,8 @@ function PositionedGltfSubject(
   /** See `playedClampedStateThisEffectRef` on `GltfSubject` — Strict Mode remount must replay clips. */
   const playedClampedStateThisEffectRef = useRef(false);
   const prevAnimationSyncKeyRef = useRef<string | undefined>(undefined);
+  /** After `CombatFaceOffPairedSubjects` gate reset, `animationSyncKey` is briefly `undefined` then restored; suppress the follow-up bump so hunt→strike keeps `locomotionHandoffToStrike` (no `stopAllAction` flash). */
+  const resumeAfterPairGateRef = useRef(false);
   const draculaVariantRef = useRef(rest.draculaAttackVariant);
   draculaVariantRef.current = rest.draculaAttackVariant;
   const draculaHurtRef = useRef(rest.draculaHurtHp);
@@ -931,10 +933,13 @@ function PositionedGltfSubject(
   }, [actions, animations.length, pairGateToken, pairPlaybackRole, onPairPlaybackMixerReady]);
 
   useEffect(() => {
-    const syncKeyBump =
-      animationSyncKey != null &&
-      animationSyncKey !== prevAnimationSyncKeyRef.current;
-    if (syncKeyBump) prevAnimationSyncKeyRef.current = animationSyncKey;
+    const keyMissing = animationSyncKey == null || animationSyncKey === "";
+    let syncKeyBump = !keyMissing && animationSyncKey !== prevAnimationSyncKeyRef.current;
+    if (!keyMissing && resumeAfterPairGateRef.current) {
+      syncKeyBump = false;
+      resumeAfterPairGateRef.current = false;
+    }
+    if (!keyMissing) prevAnimationSyncKeyRef.current = animationSyncKey;
 
     const prevState = prevVisualStateRef.current;
 
@@ -1226,6 +1231,7 @@ function PositionedGltfSubject(
         prevPlayerAttackTimingKeyRef.current = playerAttackTimingKey;
       }
     }
+    if (keyMissing) resumeAfterPairGateRef.current = true;
     invalidate();
     return () => {
       playedClampedStateThisEffectRef.current = false;
@@ -2247,14 +2253,19 @@ export function CombatScene3D({
    * (orbit pivot and camera rise by the same delta so framing stays coherent).
    */
   const shortWide = compactCombatViewport && compactCombatShortWide;
-  const battleSceneGroundY = compactCombatViewport ? (shortWide ? 0.38 : 0.26) : 0;
-  const cameraZ = compactCombatViewport ? (shortWide ? 2.52 : 3.28) : 5.35;
-  const cameraY = compactCombatViewport ? (shortWide ? 1.02 : 0.92) + battleSceneGroundY : 1.0;
-  const fov = compactCombatViewport ? (shortWide ? 44 : 50) : 40;
+  /**
+   * Phone landscape: orbit pivot must sit ~pelvis/waist — a high target (chest/head) makes dolly-zoom hug the
+   * upper body and shoves feet/legs into the bottom edge (HP strip reads as cutting the rigs). Lower camera Y
+   * than before lifts the pair in the frame so heads use the empty band above and legs clear the modal chrome.
+   */
+  const battleSceneGroundY = compactCombatViewport ? (shortWide ? 0.42 : 0.26) : 0;
+  const cameraZ = compactCombatViewport ? (shortWide ? 2.34 : 3.28) : 5.35;
+  const cameraY = compactCombatViewport ? (shortWide ? 0.84 : 0.92) + battleSceneGroundY : 1.0;
+  const fov = compactCombatViewport ? (shortWide ? 42 : 50) : 40;
   const meshyCameraBases = { baseZ: cameraZ, baseY: cameraY, baseFov: fov };
   const orbitMinD = orbitMinDistance ?? (compactCombatViewport ? (shortWide ? 0.78 : 1.12) : 2);
   const orbitMaxD = orbitMaxDistance ?? (compactCombatViewport ? (shortWide ? 5.2 : 5.8) : 10);
-  const orbitTargetY = compactCombatViewport ? (shortWide ? 0.74 : 0.56) + battleSceneGroundY : 0.8;
+  const orbitTargetY = compactCombatViewport ? (shortWide ? 0.5 : 0.56) + battleSceneGroundY : 0.8;
   const resolvedArmourAttachHand = armourAttachHand ?? resolveWeaponAttachHand(armourGltfPath ?? null);
 
   const isContactExchange =
