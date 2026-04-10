@@ -1720,6 +1720,109 @@ export class Labyrinth {
   }
 }
 
+/**
+ * True when `LabyrinthGame.doMove` will not mutate `grid` for this landing cell (safe to alias `lab.grid` on the clone).
+ * Hidden tiles, artifact/shield pickups, and collecting your own diamond all write to the grid (or reveal from hidden).
+ */
+export function canShareGridForDoMoveStep(
+  lab: Labyrinth,
+  currentPlayer: number,
+  destX: number,
+  destY: number,
+): boolean {
+  const key = `${destX},${destY}`;
+  if (lab.hiddenCells.has(key)) return false;
+  const cell = lab.getCellAt(destX, destY);
+  if (isArtifactCell(cell)) return false;
+  if (isShieldCell(cell)) return false;
+  if (isDiamondCell(cell) && getCollectibleOwner(cell) === currentPlayer) return false;
+  return true;
+}
+
+/** Same success conditions as `movePlayer` without mutating `lab`. */
+export function playerStepWouldSucceed(
+  lab: Labyrinth,
+  playerIndex: number,
+  dx: number,
+  dy: number,
+  jumpOnly: boolean,
+): boolean {
+  const p = lab.players[playerIndex];
+  if (!p) return false;
+  if (!jumpOnly) {
+    const nx = p.x + dx;
+    const ny = p.y + dy;
+    return lab.canMove(nx, ny);
+  }
+  if ((p.jumps ?? 0) <= 0) return false;
+  const nx = p.x + dx;
+  const ny = p.y + dy;
+  const midCell = lab.grid[ny]?.[nx];
+  const canJumpOver = midCell === WALL || isTrapCell(midCell);
+  if (!canJumpOver) return false;
+  const jx = nx + dx;
+  const jy = ny + dy;
+  return jx >= 0 && jx < lab.width && jy >= 0 && jy < lab.height && lab.canMove(jx, jy);
+}
+
+/** Clone for one `doMove` step; when `shareGrid` is true, `next.grid` aliases `lab.grid` (read-only for grid). */
+export function cloneLabyrinthForDoMove(lab: Labyrinth, shareGrid: boolean): Labyrinth {
+  const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity, lab.firstMonsterType);
+  next.grid = shareGrid ? lab.grid : lab.grid.map((r) => [...r]);
+  next.players = lab.players.map((p) => ({
+    ...p,
+    hp: p.hp ?? DEFAULT_PLAYER_HP,
+    jumps: p.jumps ?? 0,
+    diamonds: p.diamonds ?? 0,
+    shield: p.shield ?? 0,
+    bombs: p.bombs ?? 0,
+    artifacts: p.artifacts ?? 0,
+    artifactsCollected: p.artifactsCollected ?? [],
+    artifactDice: p.artifactDice ?? 0,
+    artifactShield: p.artifactShield ?? 0,
+    artifactTeleport: p.artifactTeleport ?? 0,
+    artifactReveal: p.artifactReveal ?? 0,
+    artifactHealing: p.artifactHealing ?? 0,
+    artifactTorch: p.artifactTorch ?? 0,
+    artifactHolySword: p.artifactHolySword ?? 0,
+    artifactHolyCross: p.artifactHolyCross ?? 0,
+    artifactDragonFuryAxe: p.artifactDragonFuryAxe ?? 0,
+    artifactEternalFrostblade: p.artifactEternalFrostblade ?? 0,
+    artifactZweihandhammer: p.artifactZweihandhammer ?? 0,
+    artifactAzureDragonShield: p.artifactAzureDragonShield ?? 0,
+    artifactNordicShield: p.artifactNordicShield ?? 0,
+    artifactWardShield: p.artifactWardShield ?? 0,
+    diceBonus: p.diceBonus ?? 0,
+  }));
+  next.hiddenCells = new Map(lab.hiddenCells);
+  next.webPositions = [...(lab.webPositions || [])];
+  next.fogZones = new Map(lab.fogZones || new Map());
+  next.bombCollectedBy = new Map(
+    [...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]),
+  );
+  next.teleportUsedFrom = new Map(
+    [...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]),
+  );
+  next.teleportUsedTo = new Map(
+    [...(lab.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]),
+  );
+  next.catapultUsedFrom = new Map(
+    [...(lab.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]),
+  );
+  next.visitedCells = new Set(lab.visitedCells || []);
+  next.goalX = lab.goalX;
+  next.goalY = lab.goalY;
+  next.monsters = lab.monsters.map((m) => ({
+    ...m,
+    patrolArea: [...m.patrolArea],
+  }));
+  next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
+  next.round = lab.round;
+  next.currentRound = lab.currentRound;
+  next.extraPaths = lab.extraPaths;
+  return next;
+}
+
 export const SIZE_OPTIONS = [10, 25, 30, 40] as const;
 export const DIFFICULTY_OPTIONS = [1, 2, 3, 4] as const;
 

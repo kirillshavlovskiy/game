@@ -168,6 +168,9 @@ import {
   type MonsterType,
   type StoredArtifactKind,
   DEFAULT_PLAYER_HP,
+  canShareGridForDoMoveStep,
+  cloneLabyrinthForDoMove,
+  playerStepWouldSucceed,
 } from "@/lib/labyrinth";
 import { MULTIPLAYER_ENABLED } from "@/lib/gameEnv";
 import { ARTIFACT_KIND_VISUAL_GLB } from "@/lib/storedArtifactGlbs";
@@ -1873,8 +1876,8 @@ function IsoHudJoystickMoveRing({
   }, [knobMax]);
   const joystickLookRingActive =
     !!onJoystickLookGrid && lookRingOuterPx > MOVE_KNOB_DEAD_PX + 0.5;
-  const [knob, setKnob] = useState({ x: 0, y: 0 });
   const knobRef = useRef({ x: 0, y: 0 });
+  const knobVisualRef = useRef<HTMLDivElement | null>(null);
   const dragActive = useRef(false);
   const ptrStartRef = useRef<{ x: number; y: number } | null>(null);
   const repeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -2011,7 +2014,10 @@ function IsoHudJoystickMoveRing({
     }
     const mClamped = Math.hypot(ox, oy);
     knobRef.current = { x: ox, y: oy };
-    setKnob({ x: ox, y: oy });
+    const kv = knobVisualRef.current;
+    if (kv) {
+      kv.style.transform = `translate(calc(-50% + ${ox}px), calc(-50% + ${oy}px))`;
+    }
 
     if (!joystickLookRingActive) {
       const key = moveCardinalKeyFromKnobOffset(ox, oy);
@@ -2061,7 +2067,8 @@ function IsoHudJoystickMoveRing({
     activeMoveCardinalRef.current = null;
     lastLookEmittedRef.current = null;
     knobRef.current = { x: 0, y: 0 };
-    setKnob({ x: 0, y: 0 });
+    const kv = knobVisualRef.current;
+    if (kv) kv.style.transform = "translate(-50%, -50%)";
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
     } catch {
@@ -2145,10 +2152,11 @@ function IsoHudJoystickMoveRing({
         />
       ) : null}
       <div
+        ref={knobVisualRef}
         style={{
           position: "absolute",
-          left: `calc(50% + ${knob.x}px)`,
-          top: `calc(50% + ${knob.y}px)`,
+          left: "50%",
+          top: "50%",
           transform: "translate(-50%, -50%)",
           width: ISO_HUD_KNOB_HANDLE_PX,
           height: ISO_HUD_KNOB_HANDLE_PX,
@@ -6395,48 +6403,14 @@ export default function LabyrinthGame() {
     setDiceBonusApplied(null);
       setJumpAdded(null);
       if (isWebCell) setWebSlowed(true);
-      const next = new Labyrinth(lab.width, lab.height, 0, lab.numPlayers, lab.monsterDensity, lab.firstMonsterType);
-      next.grid = lab.grid.map((r) => [...r]);
-      next.players = lab.players.map((p) => ({
-        ...p,
-        hp: p.hp ?? DEFAULT_PLAYER_HP,
-        jumps: p.jumps ?? 0,
-        diamonds: p.diamonds ?? 0,
-        shield: p.shield ?? 0,
-        bombs: p.bombs ?? 0,
-        artifacts: p.artifacts ?? 0,
-        artifactsCollected: p.artifactsCollected ?? [],
-        artifactDice: p.artifactDice ?? 0,
-        artifactShield: p.artifactShield ?? 0,
-        artifactTeleport: p.artifactTeleport ?? 0,
-        artifactReveal: p.artifactReveal ?? 0,
-        artifactHealing: p.artifactHealing ?? 0,
-        artifactTorch: p.artifactTorch ?? 0,
-        artifactHolySword: p.artifactHolySword ?? 0,
-        artifactHolyCross: p.artifactHolyCross ?? 0,
-        artifactDragonFuryAxe: p.artifactDragonFuryAxe ?? 0,
-        artifactEternalFrostblade: p.artifactEternalFrostblade ?? 0,
-        artifactZweihandhammer: p.artifactZweihandhammer ?? 0,
-        artifactAzureDragonShield: p.artifactAzureDragonShield ?? 0,
-        artifactNordicShield: p.artifactNordicShield ?? 0,
-        artifactWardShield: p.artifactWardShield ?? 0,
-        diceBonus: p.diceBonus ?? 0,
-      }));
-      next.hiddenCells = new Map(lab.hiddenCells);
-      next.webPositions = [...(lab.webPositions || [])];
-      next.fogZones = new Map(lab.fogZones || new Map());
-      next.bombCollectedBy = new Map([...(lab.bombCollectedBy || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
-      next.teleportUsedFrom = new Map([...(lab.teleportUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
-      next.teleportUsedTo = new Map([...(lab.teleportUsedTo || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
-      next.catapultUsedFrom = new Map([...(lab.catapultUsedFrom || new Map()).entries()].map(([k, v]) => [k, new Set(v)]));
-      next.visitedCells = new Set(lab.visitedCells || []);
-      next.goalX = lab.goalX;
-      next.goalY = lab.goalY;
-      next.monsters = lab.monsters.map((m) => ({
-        ...m,
-        patrolArea: [...m.patrolArea],
-      }));
-      next.eliminatedPlayers = new Set(lab.eliminatedPlayers);
+      if (!playerStepWouldSucceed(lab, currentPlayer, dx, dy, jumpOnly)) {
+        if (!TEMP_INFINITE_MOVES) {
+          movesLeftRef.current += costToPay;
+        }
+        return;
+      }
+      const shareGrid = canShareGridForDoMoveStep(lab, currentPlayer, destX, destY);
+      const next = cloneLabyrinthForDoMove(lab, shareGrid);
       const moveSucceeded = next.movePlayer(dx, dy, currentPlayer, jumpOnly);
       if (!moveSucceeded) {
         if (!TEMP_INFINITE_MOVES) {
@@ -14789,14 +14763,14 @@ export default function LabyrinthGame() {
         </>
       )}
 
-      {isMobile && showMoveGrid && lab && !isoImmersiveUi && mazeMapView === "iso" ? (
+      {isMobile && showMoveGrid && lab && mazeMapView === "iso" ? (
             <div
               style={{
                 position: "fixed",
             left: "max(8px, env(safe-area-inset-left, 0px))",
                 right: "max(8px, env(safe-area-inset-right, 0px))",
                 bottom: "max(36px, calc(20px + env(safe-area-inset-bottom, 0px)))",
-                zIndex: 114,
+                zIndex: isoImmersiveUi ? ISO_IMMERSIVE_HUD_Z + 90 : 114,
             display: "flex",
             flexDirection: "row",
             alignItems: "flex-end",

@@ -815,6 +815,8 @@ function PlayerMarker({
   const prevCombatPulseRef = useRef(combatPulse);
   const cueSnapshotRef = useRef(isoCombatPlayerCue);
   cueSnapshotRef.current = isoCombatPlayerCue;
+  /** Skip expensive `setFromObject` most frames when nearly settled (skinned mesh bounds). */
+  const groundBoxFrameRef = useRef(0);
 
   useEffect(() => { targetPos.current.set(playerX * CS, FLOOR_Y + 0.02, playerY * CS); }, [playerX, playerY]);
   useEffect(() => {
@@ -897,12 +899,17 @@ function PlayerMarker({
     }
     const modelAnchor = modelAnchorRef.current;
     if (modelAnchor) {
-      groundBox.setFromObject(modelAnchor);
-      const desiredMinY = FLOOR_Y + 0.015;
-      const neededLift = Math.max(0, desiredMinY - groundBox.min.y);
-      // Keep feet on floor if clip root offsets dip below the maze plane.
-      groundLiftRef.current = Math.max(groundLiftRef.current * 0.9, neededLift);
-      modelAnchor.position.y = groundLiftRef.current;
+      groundBoxFrameRef.current += 1;
+      const moving = transit > 0.045;
+      if (moving || groundBoxFrameRef.current % 5 === 0) {
+        groundBox.setFromObject(modelAnchor);
+        const desiredMinY = FLOOR_Y + 0.015;
+        const neededLift = Math.max(0, desiredMinY - groundBox.min.y);
+        groundLiftRef.current = Math.max(groundLiftRef.current * 0.9, neededLift);
+        modelAnchor.position.y = groundLiftRef.current;
+      } else {
+        modelAnchor.position.y = groundLiftRef.current;
+      }
     }
   });
 
@@ -2149,8 +2156,8 @@ function CameraController({
   const { camera, gl } = useThree();
   const controlsRef = useRef<any>(null);
   const prevResetTick = useRef(resetTick);
-  const dragRef = useRef<{ x: number; y: number } | null>(null);
-  /** Which mouse button started the current canvas drag (0 = left, 2 = right). Touch drags leave this null. */
+  const dragRef = useRef<{ x: number; y: number; touchId?: number } | null>(null);
+  /** Which mouse button started the current canvas drag (0 = left, 2 = right). Touch drags set `touchId`. */
   const mouseOrbitButtonRef = useRef<number | null>(null);
   const dragAccumRef = useRef(0);
   /** True for exactly the frame when orbitLookByPixelDelta (minimap ring) applied a delta — synchronous guard like dragRef. */
@@ -2275,32 +2282,55 @@ function CameraController({
     };
 
     const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
+      const added = e.changedTouches[0];
+      if (!added) return;
+      if (dragRef.current?.touchId !== undefined) return;
       e.preventDefault();
-      dragRef.current = { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY };
+      dragRef.current = {
+        x: added.clientX,
+        y: added.clientY,
+        touchId: added.identifier,
+      };
       dragAccumRef.current = 0;
       mapRotationLog("canvasPointer", { phase: "touchStart", touchUi, touchSens });
     };
     const onTouchMove = (e: TouchEvent) => {
-      if (!dragRef.current || e.touches.length !== 1) return;
+      const d = dragRef.current;
+      if (!d || d.touchId === undefined) return;
+      let t: Touch | undefined;
+      for (let i = 0; i < e.touches.length; i++) {
+        const c = e.touches.item(i);
+        if (c && c.identifier === d.touchId) {
+          t = c;
+          break;
+        }
+      }
+      if (!t) return;
       e.preventDefault();
-      const t = e.touches[0]!;
-      const rawDx = t.clientX - dragRef.current.x;
-      const rawDy = t.clientY - dragRef.current.y;
+      const rawDx = t.clientX - d.x;
+      const rawDy = t.clientY - d.y;
       dragAccumRef.current += Math.abs(rawDx) + Math.abs(rawDy);
       const dx = rawDx * touchSens;
       const dy = rawDy * touchSens;
-      dragRef.current = { x: t.clientX, y: t.clientY };
+      dragRef.current = { x: t.clientX, y: t.clientY, touchId: d.touchId };
       mapRotationLog("canvasOrbitDelta", { dx, dy, rawDx, rawDy, kind: "touch", touchUi }, 80);
       applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
-    const onTouchEnd = () => {
-      if (dragAccumRef.current > DRAG_SUPPRESS_THRESHOLD_PX) {
-        _suppressNextFloorClick = true;
+    const onTouchEnd = (e: TouchEvent) => {
+      const d = dragRef.current;
+      if (d?.touchId === undefined) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const c = e.changedTouches.item(i);
+        if (c && c.identifier === d.touchId) {
+          if (dragAccumRef.current > DRAG_SUPPRESS_THRESHOLD_PX) {
+            _suppressNextFloorClick = true;
+          }
+          mapRotationLog("canvasPointer", { phase: "touchEnd", touchUi });
+          dragRef.current = null;
+          dragAccumRef.current = 0;
+          return;
+        }
       }
-      mapRotationLog("canvasPointer", { phase: "touchEnd", touchUi });
-      dragRef.current = null;
-      dragAccumRef.current = 0;
     };
 
     const capMouse: AddEventListenerOptions = { capture: true };
@@ -3407,6 +3437,7 @@ function MazeScene({
   orbitRingPointerHeldRef: MutableRefObject<boolean>;
 }) {
   const shadowRange = Math.max(mapWidth, mapHeight) * CS;
+  const shadowMapSize = touchUi ? 512 : 1024;
   return (
     <>
       <MazeAtmosphericFog />
@@ -3417,9 +3448,9 @@ function MazeScene({
         position={[18, 26, 10]}
         intensity={0.22}
         color="#c8d2e2"
-        castShadow
-        shadow-mapSize-width={1024}
-        shadow-mapSize-height={1024}
+        castShadow={!touchUi}
+        shadow-mapSize-width={shadowMapSize}
+        shadow-mapSize-height={shadowMapSize}
         shadow-camera-near={0.5}
         shadow-camera-far={220}
         shadow-camera-left={-shadowRange}
@@ -4028,7 +4059,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
     >
       <Canvas
         key={webglCanvasGeneration}
-        shadows
+        shadows={!touchUi}
         camera={{ position: [camDist, CAM_HEIGHT, camDist], fov: THREE.MathUtils.clamp(92 - zoom * 16, 58, 95), near: 0.1, far: 800 }}
         style={
           fillViewport
@@ -4055,7 +4086,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           stencil: false,
           depth: true,
         }}
-        dpr={[1, 1.25]}
+        dpr={touchUi ? [1, 1] : [1, 1.25]}
         onCreated={({ gl }) => {
           gl.setClearColor("#06060a");
         }}
