@@ -1341,13 +1341,13 @@ void useTexture.preload(MAZE_FLOOR_TEXTURE);
 void useTexture.preload(MAZE_ISO_WALL_SIDE_TEXTURE);
 
 /** Exponential depth fog — distance haze (stronger = thicker air). */
-const ATMOSPHERIC_FOG_COLOR = 0x030408;
-/** Slightly thinner than before so walkable floor (PBR + shadows) stays readable mid-range. */
-const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0051;
+const ATMOSPHERIC_FOG_COLOR = 0x020309;
+/** Stronger haze for horror read; still leaves near-field corridors playable. */
+const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0092;
 /** Every path cell gets at least this mist strength; game fog zones blend toward full opacity. */
-const CORRIDOR_BASE_MIST = 0.32;
+const CORRIDOR_BASE_MIST = 0.48;
 /** Per-cell fog wobble so neighbouring tiles read at visibly different densities. */
-const CORRIDOR_FOG_LOCAL_JITTER = 0.26;
+const CORRIDOR_FOG_LOCAL_JITTER = 0.34;
 
 function MazeAtmosphericFog() {
   const { scene } = useThree();
@@ -1381,8 +1381,8 @@ function CorridorFogBucketLayer({
 
   const material = useMemo(() => {
     const fMid = (bucket + 0.5) / CORRIDOR_FOG_BUCKETS;
-    const opBase = Math.min(0.96, 0.22 + fMid * 0.76);
-    const opacity = layer === 0 ? opBase * 0.82 : opBase * 0.68;
+    const opBase = Math.min(0.99, 0.32 + fMid * 0.66);
+    const opacity = layer === 0 ? opBase * 0.91 : opBase * 0.79;
     return new THREE.MeshStandardMaterial({
       map: fogTex,
       transparent: true,
@@ -1390,9 +1390,9 @@ function CorridorFogBucketLayer({
       depthWrite: false,
       roughness: 1,
       metalness: 0,
-      color: layer === 0 ? "#7a8498" : "#6a7388",
-      emissive: layer === 0 ? "#151820" : "#12151c",
-      emissiveIntensity: layer === 0 ? 0.022 : 0.015,
+      color: layer === 0 ? "#5a6278" : "#4a5268",
+      emissive: layer === 0 ? "#0a0d14" : "#080a10",
+      emissiveIntensity: layer === 0 ? 0.038 : 0.026,
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -1,
@@ -1452,7 +1452,7 @@ function CorridorFogVolumes({
   const fogTex = useTexture(MAZE_CORRIDOR_FOG_TEXTURE_URL);
   useEffect(() => {
     fogTex.wrapS = fogTex.wrapT = THREE.RepeatWrapping;
-    fogTex.repeat.set(2.2, 2.2);
+    fogTex.repeat.set(2.85, 2.85);
   }, [fogTex]);
 
   const cells = useMemo(() => {
@@ -2067,6 +2067,103 @@ function FloorStains({
         <FloorStainInstancedLayer key={texIdx} map={stainTextures[texIdx]!} instances={instances} />
       ))}
     </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Wet floor puddles — glossy under fog (no extra texture assets)    */
+/* ------------------------------------------------------------------ */
+type FloorPuddleInstance = { x: number; z: number; rot: number; sx: number; sz: number };
+
+function FloorWetPuddles({
+  grid,
+  mapWidth,
+  mapHeight,
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+}) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+
+  const instances = useMemo(() => {
+    const out: FloorPuddleInstance[] = [];
+    for (let y = 0; y < mapHeight; y++) {
+      for (let x = 0; x < mapWidth; x++) {
+        if (grid[y]?.[x] === WALL) continue;
+        const h1 = cellHash(x, y, 701);
+        if (h1 > 360) continue;
+        const rot = (cellHash(x, y, 702) / 1000) * Math.PI * 2;
+        const ox = ((cellHash(x, y, 703) / 1000) - 0.5) * CS * 0.52;
+        const oz = ((cellHash(x, y, 704) / 1000) - 0.5) * CS * 0.52;
+        const sx = CS * (0.26 + (cellHash(x, y, 705) / 1000) * 0.55);
+        const sz = CS * (0.2 + (cellHash(x, y, 706) / 1000) * 0.48);
+        out.push({ x: x * CS + ox, z: y * CS + oz, rot, sx, sz });
+        if (cellHash(x, y, 707) > 935) {
+          const ox2 = ((cellHash(x, y, 708) / 1000) - 0.5) * CS * 0.35;
+          const oz2 = ((cellHash(x, y, 709) / 1000) - 0.5) * CS * 0.35;
+          const rot2 = (cellHash(x, y, 710) / 1000) * Math.PI * 2;
+          out.push({
+            x: x * CS + ox2,
+            z: y * CS + oz2,
+            rot: rot2,
+            sx: CS * (0.14 + (cellHash(x, y, 711) / 1000) * 0.22),
+            sz: CS * (0.11 + (cellHash(x, y, 712) / 1000) * 0.2),
+          });
+        }
+      }
+    }
+    return out;
+  }, [grid, mapWidth, mapHeight]);
+
+  const material = useMemo(
+    () =>
+      new THREE.MeshPhysicalMaterial({
+        color: "#060a10",
+        roughness: 0.09,
+        metalness: 0.62,
+        transparent: true,
+        opacity: 0.78,
+        depthWrite: false,
+        clearcoat: 1,
+        clearcoatRoughness: 0.05,
+        envMapIntensity: 0.35,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      }),
+    [],
+  );
+
+  useEffect(() => () => material.dispose(), [material]);
+
+  useLayoutEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh || instances.length === 0) return;
+    for (let i = 0; i < instances.length; i++) {
+      const p = instances[i]!;
+      dummy.position.set(p.x, FLOOR_Y + 0.028, p.z);
+      dummy.rotation.set(-Math.PI / 2, 0, p.rot);
+      dummy.scale.set(p.sx, p.sz, 1);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [instances, dummy]);
+
+  if (instances.length === 0) return null;
+
+  return (
+    <instancedMesh
+      ref={meshRef}
+      args={[undefined, material, instances.length]}
+      receiveShadow
+      frustumCulled
+    >
+      <circleGeometry args={[0.5, 28]} />
+    </instancedMesh>
   );
 }
 
@@ -3451,12 +3548,12 @@ function MazeScene({
   return (
     <>
       <MazeAtmosphericFog />
-      {/* Base fill: was ~0.008 — floor is MeshStandard + shadowed; walls use MeshBasic tops so they stayed bright alone. */}
-      <ambientLight intensity={0.16} color="#2b3040" />
-      <hemisphereLight args={["#8a95a8", "#4a423c", 0.32]} />
+      {/* Slightly dimmer fill so volumetric + exp fog reads thicker without crushing torches. */}
+      <ambientLight intensity={0.12} color="#252a38" />
+      <hemisphereLight args={["#7a8498", "#3d3632", 0.26]} />
       <directionalLight
         position={[18, 26, 10]}
-        intensity={0.22}
+        intensity={0.2}
         color="#c8d2e2"
         castShadow={!touchUi}
         shadow-mapSize-width={shadowMapSize}
@@ -3472,8 +3569,9 @@ function MazeScene({
       <directionalLight position={[-12, 12, -12]} intensity={0.072} color="#8a96b0" />
 
       <FloorTiles grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} onCellClick={onCellClick} />
-      <CorridorFogVolumes grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
       <FloorStains grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
+      <FloorWetPuddles grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
+      <CorridorFogVolumes grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
       <WallTorches
         grid={grid}
         mapWidth={mapWidth}
