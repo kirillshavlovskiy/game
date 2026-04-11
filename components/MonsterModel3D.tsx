@@ -805,6 +805,8 @@ function PositionedGltfSubject(
     offhandBladeTwistRad?: number;
     offhandExtraEulerRad?: readonly [number, number, number];
     offhandGripPositionLocal?: readonly [number, number, number];
+    /** Lab / tuning: play this clip if it exists; overrides `resolvePlayerAnimationClipName` / `resolveMonsterAnimationClipName`. */
+    debugForceClipName?: string | null;
   }
 ) {
   const {
@@ -830,6 +832,7 @@ function PositionedGltfSubject(
     playerLocomotionToAttackCrossfadeSec,
     monsterLocomotionToAttackCrossfadeSec,
     playerHurtHandoffCrossfadeSec,
+    debugForceClipName = null,
     ...rest
   } = props;
   const effectiveWeaponAttachHand = weaponAttachHand ?? resolveWeaponAttachHand(weaponUrl ?? null);
@@ -1154,7 +1157,8 @@ function PositionedGltfSubject(
     const dHurt = draculaHurtRef.current;
     const hurtCtx =
       dHurt?.hp != null && dHurt?.maxHp != null ? { hp: dHurt.hp, maxHp: dHurt.maxHp } : dHurt ?? null;
-    const pick = rest.isPlayerModel
+    const debugName = debugForceClipName?.trim();
+    const pickResolved = rest.isPlayerModel
       ? resolvePlayerAnimationClipName(rest.visualState, names, draculaVariantRef.current, {
           fatalJumpKill: playerJumpKillRef.current,
           playerHurtHpLost: playerHurtCtxRef.current?.hpLost,
@@ -1169,6 +1173,7 @@ function PositionedGltfSubject(
           draculaHurtStrikeZone: rest.draculaHurtStrikeZone ?? null,
           draculaAngryLockSkill01: rest.draculaLoopAngrySkill01 && rest.visualState === "angry",
         });
+    const pick = debugName && actions[debugName] ? debugName : pickResolved;
     const loops = shouldLoopVisualState(rest.visualState, !!rest.draculaLoopAngrySkill01);
     let actForListener: THREE.AnimationAction | null = null;
     let didNotify = false;
@@ -1265,6 +1270,7 @@ function PositionedGltfSubject(
     locomotionToAttackFadeSec,
     monsterLocomotionToAttackCrossfadeSec,
     playerHurtHandoffCrossfadeSec,
+    debugForceClipName,
   ]);
 
   const scale =
@@ -1907,6 +1913,11 @@ export function BoneAttachedWeapon({
   return null;
 }
 
+export interface FaceoffClipCatalog {
+  player: string[];
+  monster: string[];
+}
+
 export interface CombatScene3DProps {
   monsterGltfPath: string;
   playerGltfPath: string;
@@ -1974,6 +1985,8 @@ export interface CombatScene3DProps {
   /**
    * When set, both rigs restart their clips from the same key change — paired sync (combat modal + contact lab).
    * Key must not include every-frame lerps (e.g. approach blend).
+   * **Do not** encode `playerVisualState` / `monsterVisualState` here: bumps would disable hunt→strike crossfades in
+   * `PositionedGltfSubject` (`syncKeyBump` clears `locomotionHandoffToStrike`). Pair load still uses GLB URLs + this key.
    */
   faceOffAnimationSyncKey?: string;
   /**
@@ -1985,6 +1998,34 @@ export interface CombatScene3DProps {
   orbitMinDistance?: number;
   /** Override OrbitControls max dolly distance. */
   orbitMaxDistance?: number;
+  /** Face-off lab: sorted clip names from loaded player + monster GLBs (for raw-clip tuning UI). */
+  onFaceoffClipCatalog?: (catalog: FaceoffClipCatalog) => void;
+  /** Lab: if present and the name exists on the rig, play this clip instead of the state resolver. */
+  playerDebugClipName?: string | null;
+  monsterDebugClipName?: string | null;
+}
+
+/** Contact lab: list clips from both GLBs (shared `useGLTF` cache with the fighters). */
+function FaceoffGltfClipCatalogProbe({
+  playerUrl,
+  monsterUrl,
+  onCatalog,
+}: {
+  playerUrl: string;
+  monsterUrl: string;
+  onCatalog: (c: FaceoffClipCatalog) => void;
+}) {
+  const { animations: pa } = useGLTF(playerUrl);
+  const { animations: ma } = useGLTF(monsterUrl);
+  const playerKey = pa.map((a) => a.name).join("\0");
+  const monsterKey = ma.map((a) => a.name).join("\0");
+  useEffect(() => {
+    onCatalog({
+      player: pa.map((a) => a.name).sort((a, b) => a.localeCompare(b)),
+      monster: ma.map((a) => a.name).sort((a, b) => a.localeCompare(b)),
+    });
+  }, [playerUrl, monsterUrl, playerKey, monsterKey, onCatalog]);
+  return null;
 }
 
 /** Same vertical splits as `CombatStrikeZonePicker` raycast (legs / body / head). */
@@ -2240,6 +2281,9 @@ export function CombatScene3D({
   combatSceneSessionKey,
   orbitMinDistance,
   orbitMaxDistance,
+  onFaceoffClipCatalog,
+  playerDebugClipName = null,
+  monsterDebugClipName = null,
 }: CombatScene3DProps) {
   const [webglRestoreGeneration, setWebglRestoreGeneration] = useState(0);
   const bumpWebglCombatCanvas = useCallback(() => {
@@ -2435,6 +2479,13 @@ export function CombatScene3D({
           <ambientLight intensity={0.38} />
           <directionalLight position={[3.2, 5.5, 2.8]} intensity={1.05} />
           <directionalLight position={[-2.5, 2.5, 4]} intensity={0.35} />
+          {onFaceoffClipCatalog ? (
+            <FaceoffGltfClipCatalogProbe
+              playerUrl={playerGltfPath}
+              monsterUrl={monsterGltfPath}
+              onCatalog={onFaceoffClipCatalog}
+            />
+          ) : null}
           <group position={[0, battleSceneGroundY + compactFigureLiftWorld, 0]}>
           {faceOffAnimationSyncKey != null && faceOffAnimationSyncKey !== "" ? (
             <CombatFaceOffPairedSubjects
@@ -2467,6 +2518,7 @@ export function CombatScene3D({
                   offhandBladeTwistRad={armourOffhandBladeTwistRad}
                   offhandExtraEulerRad={armourOffhandExtraEulerRad}
                   offhandGripPositionLocal={armourOffhandGripPositionLocal}
+                  debugForceClipName={playerDebugClipName}
                 />
               }
               monsterEl={
@@ -2485,6 +2537,7 @@ export function CombatScene3D({
                   hitRootRef={monsterHitRootRef}
                   monsterHurtClipStartTimeSec={monsterHurtClipStartTimeSec}
                   monsterLocomotionToAttackCrossfadeSec={monsterLocomotionToAttackCrossfadeSec}
+                  debugForceClipName={monsterDebugClipName}
                 />
               }
             />
@@ -2515,6 +2568,7 @@ export function CombatScene3D({
                 offhandBladeTwistRad={armourOffhandBladeTwistRad}
                 offhandExtraEulerRad={armourOffhandExtraEulerRad}
                 offhandGripPositionLocal={armourOffhandGripPositionLocal}
+                debugForceClipName={playerDebugClipName}
               />
               <PositionedGltfSubject
                 key={monsterGltfPath}
@@ -2531,6 +2585,7 @@ export function CombatScene3D({
                 hitRootRef={monsterHitRootRef}
                 monsterHurtClipStartTimeSec={monsterHurtClipStartTimeSec}
                 monsterLocomotionToAttackCrossfadeSec={monsterLocomotionToAttackCrossfadeSec}
+                debugForceClipName={monsterDebugClipName}
               />
             </>
           )}

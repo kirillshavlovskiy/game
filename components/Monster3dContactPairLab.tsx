@@ -4,7 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import type { MonsterType } from "@/lib/labyrinth";
 import { getMonsterName } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
-import { CombatScene3D, combatFaceOffPositions } from "@/components/MonsterModel3D";
+import {
+  CombatScene3D,
+  combatFaceOffPositions,
+  type FaceoffClipCatalog,
+} from "@/components/MonsterModel3D";
 import { COMBAT_FACEOFF_APPROACH_DURATION_MS, resolveCombat3dClipLeads } from "@/lib/combat3dContact";
 import {
   draculaAttackVariantFromStrikeTarget,
@@ -60,6 +64,8 @@ type Preset = {
  * Presets match **one roll’s net outcome** in the real combat modal: either the player dealt more damage to the
  * monster (player `attack` vs monster `hurt` / `knockdown`) or the monster dealt more to the player (`attack` vs
  * `hurt` / `knockdown`). The game does not show both fighters in full attack clips at once for that beat.
+ * Strike buttons cover the full `PLAYER_HITS_MONSTER` + `MONSTER_HITS_PLAYER` matrices (3 tiers × 2 defender poses
+ * each way), plus “Between rolls · both idle” for staging.
  */
 /** After a player-win strike, merged Dracula/skeleton hurt clips use HP/max — 7/9 is the doc “light flinch” band. */
 const LAB_PLAYER_WIN_MONSTER_HURT_HP = 7;
@@ -71,9 +77,12 @@ const STRIKE_PRESETS: Preset[] = [
   { label: "Player net win · P light strike / M hurt", player: "attack", monster: "hurt", pVar: "light", mVar: "light" },
   { label: "Player net win · P spell strike / M knockdown", player: "attack", monster: "knockdown", pVar: "spell", mVar: "spell" },
   { label: "Player net win · P skill strike / M knockdown", player: "attack", monster: "knockdown", pVar: "skill", mVar: "skill" },
+  { label: "Player net win · P light strike / M knockdown", player: "attack", monster: "knockdown", pVar: "light", mVar: "light" },
   { label: "Monster net win · M spell strike / P hurt", player: "hurt", monster: "attack", pVar: "spell", mVar: "spell" },
   { label: "Monster net win · M skill strike / P hurt", player: "hurt", monster: "attack", pVar: "skill", mVar: "skill" },
   { label: "Monster net win · M light strike / P hurt", player: "hurt", monster: "attack", pVar: "light", mVar: "light" },
+  { label: "Monster net win · M spell strike / P knockdown", player: "knockdown", monster: "attack", pVar: "spell", mVar: "spell" },
+  { label: "Monster net win · M skill strike / P knockdown", player: "knockdown", monster: "attack", pVar: "skill", mVar: "skill" },
   { label: "Monster net win · M light strike / P knockdown", player: "knockdown", monster: "attack", pVar: "light", mVar: "light" },
   { label: "Between rolls · both idle", player: "idle", monster: "idle", pVar: "light", mVar: "light" },
 ];
@@ -263,6 +272,19 @@ export function Monster3dContactPairLab() {
   );
   const [labOffhandGripPosM, setLabOffhandGripPosM] = useState<[number, number, number]>(LAB_OFFHAND_ATTACH_UI_DEFAULT.grip);
 
+  const [faceoffClipCatalog, setFaceoffClipCatalog] = useState<FaceoffClipCatalog | null>(null);
+  const [labPlayerDebugClip, setLabPlayerDebugClip] = useState("");
+  const [labMonsterDebugClip, setLabMonsterDebugClip] = useState("");
+  const onFaceoffClipCatalog = useCallback((c: FaceoffClipCatalog) => {
+    setFaceoffClipCatalog(c);
+  }, []);
+
+  useEffect(() => {
+    if (!faceoffClipCatalog) return;
+    setLabPlayerDebugClip((prev) => (prev && faceoffClipCatalog.player.includes(prev) ? prev : ""));
+    setLabMonsterDebugClip((prev) => (prev && faceoffClipCatalog.monster.includes(prev) ? prev : ""));
+  }, [faceoffClipCatalog]);
+
   useEffect(() => {
     if (!labPlayerWeaponGlb) {
       setWeaponFileOk(null);
@@ -397,13 +419,13 @@ export function Monster3dContactPairLab() {
    * Paired GLB restart key — **must not** include `rollingApproachBlend` / approach lerp: during connected sequence that
    * value updates every RAF frame; bumping the key would re-run `CombatFaceOffPairedSubjects` gates and restart hunt
    * clips from t=0 every frame (visible jitter). World X still follows `approach` via `combatFaceOffPositions` only.
+   * **Do not** include `playerState` / `monsterState` / `seqPhase`: bumps would disable hunt→strike crossfades
+   * (`PositionedGltfSubject` `syncKeyBump` vs `locomotionHandoffToStrike`). Use `replayNonce` for a hard paired restart.
    */
   const faceOffAnimationSyncKey = useMemo(
     () =>
       [
         monsterType,
-        playerState,
-        monsterState,
         playerVariant,
         monsterVariant,
         strikePick ? "1" : "0",
@@ -411,7 +433,6 @@ export function Monster3dContactPairLab() {
         fatalJump ? "1" : "0",
         String(replayNonce),
         draculaHurtAim,
-        seqPhase,
         draculaMonsterAttackAim,
         playerHurtClipSource,
         labPlayerWeaponGlb ?? "",
@@ -426,8 +447,6 @@ export function Monster3dContactPairLab() {
       ].join("|"),
     [
       monsterType,
-      playerState,
-      monsterState,
       playerVariant,
       monsterVariant,
       strikePick,
@@ -437,7 +456,6 @@ export function Monster3dContactPairLab() {
       fatalJump,
       replayNonce,
       draculaHurtAim,
-      seqPhase,
       draculaMonsterAttackAim,
       playerHurtClipSource,
       labPlayerWeaponGlb,
@@ -975,6 +993,9 @@ bladeTwistRad: ${twist},
           rollingApproachBlend={approach}
           faceOffAnimationSyncKey={faceOffAnimationSyncKey}
           combatSceneSessionKey="monster-3d-contact-lab"
+          onFaceoffClipCatalog={onFaceoffClipCatalog}
+          playerDebugClipName={labPlayerDebugClip.trim() || null}
+          monsterDebugClipName={labMonsterDebugClip.trim() || null}
           fallback={
             <div
               style={{
@@ -1045,6 +1066,129 @@ bladeTwistRad: ${twist},
           ))}
         </div>
       </div>
+
+      <details
+        open
+        style={{
+          width: "100%",
+          maxWidth: viewportW,
+          margin: "12px auto 0",
+          padding: "12px 14px",
+          borderRadius: 12,
+          background: "rgba(0,0,0,0.22)",
+          border: "1px solid rgba(120,200,255,0.15)",
+        }}
+      >
+        <summary
+          style={{
+            cursor: "pointer",
+            fontSize: "0.85rem",
+            fontWeight: 600,
+            color: "#b8d8f0",
+            listStyle: "none",
+          }}
+        >
+          Tuning · all clips & raw playback
+        </summary>
+        <p style={{ margin: "10px 0 8px", fontSize: "0.74rem", color: "#a8b8c8", lineHeight: 1.45 }}>
+          World X spacing follows <strong style={{ color: "#c8d8e8" }}>Player visual</strong> /{" "}
+          <strong style={{ color: "#c8d8e8" }}>Monster visual</strong> in More (and approach slider). Lead-ins and
+          hunt→strike fades match <code style={{ color: "#d0c4e8" }}>resolveCombat3dClipLeads</code> for the current
+          pair. Pick a <strong style={{ color: "#c8d8e8" }}>raw clip</strong> below to bypass the state resolver and
+          inspect any animation on the loaded GLBs.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+            gap: 10,
+            marginBottom: 10,
+          }}
+        >
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "#b8afc8" }}>
+            Player raw clip (optional)
+            <select
+              value={labPlayerDebugClip}
+              onChange={(e) => {
+                cancelLabSequence();
+                setLabPlayerDebugClip(e.target.value);
+                setReplayNonce((n) => n + 1);
+              }}
+              style={selectStyle}
+            >
+              <option value="">— resolved from Player visual —</option>
+              {(faceoffClipCatalog?.player ?? []).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "#b8afc8" }}>
+            Monster raw clip (optional)
+            <select
+              value={labMonsterDebugClip}
+              onChange={(e) => {
+                cancelLabSequence();
+                setLabMonsterDebugClip(e.target.value);
+                setReplayNonce((n) => n + 1);
+              }}
+              style={selectStyle}
+            >
+              <option value="">— resolved from Monster visual —</option>
+              {(faceoffClipCatalog?.monster ?? []).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {!faceoffClipCatalog ? (
+          <p style={{ margin: 0, fontSize: "0.72rem", color: "#8899aa" }}>Loading clip index from GLBs…</p>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: "0.7rem", color: "#7ec8ff", marginBottom: 4 }}>Player ({faceoffClipCatalog.player.length})</div>
+              <pre
+                style={{
+                  margin: 0,
+                  maxHeight: 160,
+                  overflow: "auto",
+                  padding: 8,
+                  borderRadius: 8,
+                  background: "rgba(0,0,0,0.45)",
+                  fontSize: "0.65rem",
+                  color: "#c8c8d8",
+                  lineHeight: 1.35,
+                }}
+              >
+                {faceoffClipCatalog.player.join("\n")}
+              </pre>
+            </div>
+            <div>
+              <div style={{ fontSize: "0.7rem", color: "#7ec8ff", marginBottom: 4 }}>
+                Monster ({faceoffClipCatalog.monster.length})
+              </div>
+              <pre
+                style={{
+                  margin: 0,
+                  maxHeight: 160,
+                  overflow: "auto",
+                  padding: 8,
+                  borderRadius: 8,
+                  background: "rgba(0,0,0,0.45)",
+                  fontSize: "0.65rem",
+                  color: "#c8c8d8",
+                  lineHeight: 1.35,
+                }}
+              >
+                {faceoffClipCatalog.monster.join("\n")}
+              </pre>
+            </div>
+          </div>
+        )}
+      </details>
 
       <div
         style={{

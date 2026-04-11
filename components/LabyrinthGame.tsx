@@ -450,7 +450,7 @@ const MOVE_KNOB_REPEAT_MS_FAST = 352;
 /** Just past dead zone → slowest repeat. */
 const MOVE_KNOB_REPEAT_MS_SLOW = 400;
 /** After first step, wait this long before auto-repeat starts (hold = “delayed” repeat from center). */
-const MOVE_KNOB_HOLD_DELAY_MS = 420;
+const MOVE_KNOB_HOLD_DELAY_MS = 160;
 /** Drag band between mini map disc and compass (tuned so inner map stays large vs joystick for same outer diameter). */
 const MINIMAP_ORBIT_RING_PX = 15;
 /** Space outside orbit for N/E/S/W labels and ticks (fixed = global map north). */
@@ -1986,6 +1986,70 @@ function IsoHudJoystickMoveRing({
     [clearRepeat, joystickLookRingActive, lookRingOuterPx, tryMoveFromKnob],
   );
 
+  /** Apply knob offset from client coords; used on pointerdown (touch often skips move until finger slides) and pointermove. */
+  const applyJoystickClient = useCallback(
+    (el: HTMLElement, clientX: number, clientY: number) => {
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      let ox = clientX - cx;
+      let oy = clientY - cy;
+      const m = Math.hypot(ox, oy);
+      if (m > knobMax) {
+        ox = (ox / m) * knobMax;
+        oy = (oy / m) * knobMax;
+      }
+      const mClamped = Math.hypot(ox, oy);
+      knobRef.current = { x: ox, y: oy };
+      const kv = knobVisualRef.current;
+      if (kv) {
+        kv.style.transform = `translate(calc(-50% + ${ox}px), calc(-50% + ${oy}px))`;
+      }
+
+      if (!joystickLookRingActive) {
+        const key = moveCardinalKeyFromKnobOffset(ox, oy);
+        if (key == null) {
+          clearRepeat();
+          activeMoveCardinalRef.current = null;
+          return;
+        }
+        if (key !== activeMoveCardinalRef.current) {
+          activeMoveCardinalRef.current = key;
+          tryMoveFromKnob(ox, oy);
+          armAcceleratedRepeat(ox, oy);
+        }
+        return;
+      }
+      if (mClamped < MOVE_KNOB_DEAD_PX) {
+        clearRepeat();
+        activeMoveCardinalRef.current = null;
+        return;
+      }
+      if (mClamped <= lookRingOuterPx) {
+        clearRepeat();
+        activeMoveCardinalRef.current = null;
+        emitLookFromKnob(ox, oy);
+        return;
+      }
+      const key = moveCardinalKeyFromKnobOffset(ox, oy);
+      if (key == null) return;
+      if (key !== activeMoveCardinalRef.current) {
+        activeMoveCardinalRef.current = key;
+        tryMoveFromKnob(ox, oy);
+        armAcceleratedRepeat(ox, oy);
+      }
+    },
+    [
+      knobMax,
+      joystickLookRingActive,
+      lookRingOuterPx,
+      clearRepeat,
+      tryMoveFromKnob,
+      armAcceleratedRepeat,
+      emitLookFromKnob,
+    ],
+  );
+
   const onJoystickPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (focusDisabled) return;
     e.preventDefault();
@@ -1996,61 +2060,13 @@ function IsoHudJoystickMoveRing({
     clearRepeat();
     activeMoveCardinalRef.current = null;
     lastLookEmittedRef.current = null;
+    applyJoystickClient(e.currentTarget as HTMLElement, e.clientX, e.clientY);
   };
 
   const onJoystickPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!dragActive.current || focusDisabled) return;
     e.preventDefault();
-    const el = e.currentTarget as HTMLElement;
-    const r = el.getBoundingClientRect();
-    const cx = r.left + r.width / 2;
-    const cy = r.top + r.height / 2;
-    let ox = e.clientX - cx;
-    let oy = e.clientY - cy;
-    const m = Math.hypot(ox, oy);
-    if (m > knobMax) {
-      ox = (ox / m) * knobMax;
-      oy = (oy / m) * knobMax;
-    }
-    const mClamped = Math.hypot(ox, oy);
-    knobRef.current = { x: ox, y: oy };
-    const kv = knobVisualRef.current;
-    if (kv) {
-      kv.style.transform = `translate(calc(-50% + ${ox}px), calc(-50% + ${oy}px))`;
-    }
-
-    if (!joystickLookRingActive) {
-      const key = moveCardinalKeyFromKnobOffset(ox, oy);
-      if (key == null) {
-        clearRepeat();
-        activeMoveCardinalRef.current = null;
-        return;
-      }
-      if (key !== activeMoveCardinalRef.current) {
-        activeMoveCardinalRef.current = key;
-        tryMoveFromKnob(ox, oy);
-        armAcceleratedRepeat(ox, oy);
-      }
-      return;
-    }
-    if (mClamped < MOVE_KNOB_DEAD_PX) {
-      clearRepeat();
-      activeMoveCardinalRef.current = null;
-      return;
-    }
-    if (mClamped <= lookRingOuterPx) {
-      clearRepeat();
-      activeMoveCardinalRef.current = null;
-      emitLookFromKnob(ox, oy);
-      return;
-    }
-    const key = moveCardinalKeyFromKnobOffset(ox, oy);
-    if (key == null) return;
-    if (key !== activeMoveCardinalRef.current) {
-      activeMoveCardinalRef.current = key;
-      tryMoveFromKnob(ox, oy);
-      armAcceleratedRepeat(ox, oy);
-    }
+    applyJoystickClient(e.currentTarget as HTMLElement, e.clientX, e.clientY);
   };
 
   const endJoystickPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -10888,6 +10904,8 @@ export default function LabyrinthGame() {
                * Same paired-mixer gate as `Monster3dContactPairLab` (`faceOffAnimationSyncKey`): without it, player/monster
                * GLBs that load at different times start clips one frame apart and contact timing diverges from the lab.
                * Omit `rollingApproachBlend` — it lerps every frame; world X still updates via `combatFaceOffPositions`.
+               * Omit `gltfVisualState` / `playerGltfVisualState` — including them bumps the key on every beat and disables
+               * hunt→strike crossfades in `PositionedGltfSubject` (`syncKeyBump` blocks `locomotionHandoffToStrike`).
                */
               const combat3dFaceOffSyncKey =
                 isMonster3DEnabled() && monsterGltfPath && headerMt
@@ -10897,8 +10915,6 @@ export default function LabyrinthGame() {
                         : `post-${String(combatResult?.monsterType ?? "?")}-${headerPi}`,
                       headerMt,
                       String(headerPi),
-                      gltfVisualState,
-                      playerGltfVisualState,
                       monsterDraculaVariantForCombat3d ?? "na",
                       playerAttackVariantForClipLeads ?? "na",
                       combatStrikePick3dDuringRoll ? "sp1" : "sp0",
