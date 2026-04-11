@@ -934,6 +934,22 @@ function BottomDockInventoryIcon({ variant }: { variant: ArtifactIconVariant }) 
   );
 }
 
+/**
+ * Rotation (deg) shared by player-centered minimap (CSS applies the negated angle) and compass ticks so N/S/E/W
+ * stay aligned with maze north while the ▲ stays upright.
+ */
+function isoMinimapMapRotationDeg(
+  bearingAngleDeg: number | null,
+  playerFacing: Record<number, { dx: number; dy: number }>,
+  currentPlayer: number,
+): number {
+  const activeFacing = playerFacing[currentPlayer] ?? { dx: 0, dy: 1 };
+  const len = Math.hypot(activeFacing.dx, activeFacing.dy) || 1;
+  const activeFacingAngleDeg =
+    (Math.atan2(activeFacing.dy / len, activeFacing.dx / len) * 180) / Math.PI + 90;
+  return bearingAngleDeg != null ? bearingAngleDeg : activeFacingAngleDeg;
+}
+
 /** Same 2D grid mini map as the iso bottom dock (− / % / +, wheel & pinch zoom, fog, ▲ facing). */
 function IsoDockGridMiniMap({
   lab,
@@ -996,8 +1012,7 @@ function IsoDockGridMiniMap({
   const activeFacingLen = Math.hypot(activeFacing.dx, activeFacing.dy) || 1;
   const activeFacingAngleDeg =
     (Math.atan2(activeFacing.dy / activeFacingLen, activeFacing.dx / activeFacingLen) * 180) / Math.PI + 90;
-  const bearing = bearingAngleDeg ?? null;
-  const mapRotationDeg = playerCenteredRotate && bearing != null ? bearing : activeFacingAngleDeg;
+  const mapRotationDeg = isoMinimapMapRotationDeg(bearingAngleDeg ?? null, playerFacing, currentPlayer);
   const curPl = lab.players[currentPlayer];
   const playerGX = curPl?.x ?? 0;
   const playerGY = curPl?.y ?? 0;
@@ -1611,6 +1626,8 @@ function MobileLandscapeMinimapOrbitWrap({
     { label: "W", ang: Math.PI },
   ] as const;
 
+  const mapRotationDeg = isoMinimapMapRotationDeg(bearingAngleDeg ?? null, playerFacing, currentPlayer);
+
   const { onRingPointerDown, onRingPointerMove, onRingPointerEnd } = useMinimapOrbitRingPointerHandlers({
     mazeIsoViewRef,
     wrap,
@@ -1692,29 +1709,31 @@ function MobileLandscapeMinimapOrbitWrap({
             stroke="rgba(100,110,130,0.35)"
             strokeWidth={1}
           />
-          {cardinals.map(({ label, ang }) => {
-            const x1 = cx + Math.cos(ang) * tickOuter;
-            const y1 = cy + Math.sin(ang) * tickOuter;
-            const x2 = cx + Math.cos(ang) * (tickOuter - tickLen);
-            const y2 = cy + Math.sin(ang) * (tickOuter - tickLen);
-            const lx = cx + Math.cos(ang) * labelR;
-            const ly = cy + Math.sin(ang) * labelR;
-            return (
-              <Fragment key={label}>
-                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(180,190,210,0.75)" strokeWidth={1.5} strokeLinecap="round" />
-                <text
-                  x={lx}
-                  y={ly}
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  fill="rgba(200,210,230,0.9)"
-                  style={{ fontSize: 10, fontWeight: 700, fontFamily: "monospace" }}
-                >
-                  {label}
-                </text>
-              </Fragment>
-            );
-          })}
+          <g transform={`rotate(${mapRotationDeg}, ${cx}, ${cy})`}>
+            {cardinals.map(({ label, ang }) => {
+              const x1 = cx + Math.cos(ang) * tickOuter;
+              const y1 = cy + Math.sin(ang) * tickOuter;
+              const x2 = cx + Math.cos(ang) * (tickOuter - tickLen);
+              const y2 = cy + Math.sin(ang) * (tickOuter - tickLen);
+              const lx = cx + Math.cos(ang) * labelR;
+              const ly = cy + Math.sin(ang) * labelR;
+              return (
+                <Fragment key={label}>
+                  <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(180,190,210,0.75)" strokeWidth={1.5} strokeLinecap="round" />
+                  <text
+                    x={lx}
+                    y={ly}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fill="rgba(200,210,230,0.9)"
+                    style={{ fontSize: 10, fontWeight: 700, fontFamily: "monospace" }}
+                  >
+                    {label}
+                  </text>
+                </Fragment>
+              );
+            })}
+          </g>
         </g>
         <path
           d={donutD}
