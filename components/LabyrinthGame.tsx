@@ -9166,13 +9166,16 @@ export default function LabyrinthGame() {
             ...(headerMenuUseFixedLayer
                   ? {
                       position: "fixed",
-                      left: 12,
-                      right: 12,
-                  top: headerMenuFixedDropdownTop,
+                      left: "max(12px, env(safe-area-inset-left, 0px))",
+                      right: "max(12px, env(safe-area-inset-right, 0px))",
+                      top: headerMenuFixedDropdownTop,
+                      bottom: "max(12px, env(safe-area-inset-bottom, 0px))",
                       marginTop: 0,
-                      maxHeight: "min(72vh, 520px)",
+                      maxHeight: "none",
                       overflowY: "auto",
-                  zIndex: isoImmersiveUi ? ISO_IMMERSIVE_HUD_Z + 70 : HEADER_Z_INDEX + 2,
+                      WebkitOverflowScrolling: "touch",
+                      overscrollBehavior: "contain",
+                      zIndex: isoImmersiveUi ? ISO_IMMERSIVE_HUD_Z + 70 : HEADER_Z_INDEX + 2,
                     }
                   : {
                       position: "absolute",
@@ -9180,7 +9183,12 @@ export default function LabyrinthGame() {
                       right: 0,
                       marginTop: 6,
                       minWidth: 272,
-                      maxWidth: "min(92vw, 340px)",
+                      width: "min(340px, calc(100vw - 24px))",
+                      maxWidth: "min(92vw, calc(100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px) - 16px))",
+                      maxHeight: `min(520px, calc(100dvh - ${HEADER_HEIGHT + 28}px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)))`,
+                      overflowY: "auto",
+                      WebkitOverflowScrolling: "touch",
+                      overscrollBehavior: "contain",
                     }),
               }}
             >
@@ -12492,7 +12500,7 @@ export default function LabyrinthGame() {
       )}
       {settingsOpen && (
         <FullscreenPortal target={fsPortalTarget}>
-        <div style={{ ...modalOverlayStyle, zIndex: SETTINGS_MODAL_Z }} onClick={() => setSettingsOpen(false)}>
+        <div style={{ ...settingsModalOverlayStyle, zIndex: SETTINGS_MODAL_Z }} onClick={() => setSettingsOpen(false)}>
           <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
             <h2 style={modalTitleStyle}>Game Setup</h2>
             <div style={modalRowStyle}>
@@ -16714,6 +16722,23 @@ const modalOverlayStyle: React.CSSProperties = {
   zIndex: 1000,
 };
 
+/** Game setup — scrollable in short landscape / mobile; safe areas; panel width clamped to viewport */
+const settingsModalOverlayStyle: React.CSSProperties = {
+  ...modalOverlayStyle,
+  alignItems: "flex-start",
+  justifyContent: "center",
+  overflowY: "auto",
+  overflowX: "hidden",
+  WebkitOverflowScrolling: "touch",
+  overscrollBehavior: "contain",
+  paddingLeft: "max(12px, env(safe-area-inset-left, 0px))",
+  paddingRight: "max(12px, env(safe-area-inset-right, 0px))",
+  paddingTop: "max(12px, env(safe-area-inset-top, 0px))",
+  paddingBottom: "max(12px, env(safe-area-inset-bottom, 0px))",
+  boxSizing: "border-box",
+  minHeight: "100dvh",
+};
+
 const combatModalOverlayStyle: React.CSSProperties = {
   ...modalOverlayStyle,
   background: "rgba(0,0,0,0.85)",
@@ -16938,9 +16963,14 @@ const modalStyle: React.CSSProperties = {
   padding: "1.5rem",
   borderRadius: 8,
   border: "1px solid #333",
-  minWidth: 280,
-  maxHeight: "90vh",
-  overflowY: "auto",
+  boxSizing: "border-box",
+  width: "100%",
+  minWidth: 0,
+  maxWidth: 520,
+  maxHeight: "none",
+  overflowX: "hidden",
+  overflowY: "visible",
+  flexShrink: 0,
 };
 
 const modalTitleStyle: React.CSSProperties = {
