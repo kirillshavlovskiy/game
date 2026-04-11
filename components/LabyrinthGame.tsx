@@ -13041,6 +13041,7 @@ export default function LabyrinthGame() {
             playerY={cp.y}
             facingDx={walkFacingMap[currentPlayer]?.dx ?? 0}
             facingDy={walkFacingMap[currentPlayer]?.dy ?? 1}
+            playerFacingBearingDeg={isoCameraBearingDeg}
             zoom={mazeZoom}
             visible
             onCellClick={handleCellTap}
