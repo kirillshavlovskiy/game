@@ -1688,6 +1688,8 @@ function MobileLandscapeMinimapOrbitWrap({
           top: 0,
           zIndex: 2,
           overflow: "visible",
+          /** Let the center disc receive taps/wheel/pinch on `IsoDockGridMiniMap`; only the green donut path captures orbit drags. */
+          pointerEvents: "none",
           touchAction: "none",
         }}
         aria-hidden
@@ -14855,14 +14857,18 @@ export default function LabyrinthGame() {
         </>
       )}
 
-      {isMobile && showMoveGrid && lab && mazeMapView === "iso" ? (
+      {isMobile &&
+        showMoveGrid &&
+        lab &&
+        mazeMapView === "iso" &&
+        !isoImmersiveUi ? (
             <div
               style={{
                 position: "fixed",
             left: "max(8px, env(safe-area-inset-left, 0px))",
                 right: "max(8px, env(safe-area-inset-right, 0px))",
                 bottom: "max(36px, calc(20px + env(safe-area-inset-bottom, 0px)))",
-                zIndex: isoImmersiveUi ? ISO_IMMERSIVE_HUD_Z + 90 : 114,
+                zIndex: 114,
             display: "flex",
             flexDirection: "row",
             alignItems: "flex-end",
