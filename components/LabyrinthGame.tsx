@@ -1508,7 +1508,8 @@ function useMinimapOrbitRingPointerHandlers({
           ringDragRef.current = { x: e.clientX, y: e.clientY, angle: newAng };
           return;
         }
-        mazeIsoViewRef.current?.orbitLookByPixelDelta(-tangPx * sens, -rad * sens);
+        /* Inverted vs older ring feel: drag clockwise on the left minimap ring orbits camera / walk-facing the other way. */
+        mazeIsoViewRef.current?.orbitLookByPixelDelta(tangPx * sens, rad * sens);
         mazeIsoViewRef.current?.bumpRotateSession();
       }
       ringDragRef.current = { x: e.clientX, y: e.clientY, angle: newAng };
@@ -1532,7 +1533,7 @@ function useMinimapOrbitRingPointerHandlers({
         const tapAng = ringTapAngleRef.current;
         const rightHalf = tapAng > -Math.PI / 2 && tapAng < Math.PI / 2;
         const totalPx = (Math.PI / 2) / 0.005;
-        const dir = rightHalf ? -1 : 1;
+        const dir = rightHalf ? 1 : -1;
         const frames = 20;
         const step = (totalPx * dir) / frames;
         const m = mazeIsoViewRef.current;
