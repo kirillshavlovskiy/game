@@ -11236,13 +11236,14 @@ export default function LabyrinthGame() {
                       style={{
                         position: "relative",
                         width: "100%",
+                        /* flex-start + growing 3D slot — vertical center had pulled HP/roll UI up over the WebGL view */
                         ...(useCombatLandscapeFaceoff
                           ? {
                               flex: 1,
                               minHeight: 0,
                               display: "flex",
                               flexDirection: "column",
-                              justifyContent: "center",
+                              justifyContent: "flex-start",
                               alignItems: "center",
                             }
                           : {}),
@@ -11326,7 +11327,11 @@ export default function LabyrinthGame() {
                                   ? 2
                                   : 4,
                           ...(useCombatLandscapeFaceoff
-                            ? { flex: "0 0 auto", minHeight: 0 }
+                            ? {
+                                flex: "1 1 auto",
+                                minHeight: 0,
+                                justifyContent: "flex-start",
+                              }
                             : {}),
                         }}
                       >
@@ -11413,13 +11418,19 @@ export default function LabyrinthGame() {
                       style={{
                         display: "flex",
                         flexDirection: "column",
-                            alignItems: "center",
-                            justifyContent: "center",
+                        alignItems: "center",
+                        justifyContent: "flex-start",
                         width: "100%",
                         flexShrink: 0,
+                        marginTop: useCombatLandscapeFaceoff ? "auto" : undefined,
                         paddingLeft: 4,
                         paddingRight: 4,
-                        paddingTop: mobileCompactActiveCombat && isLandscapeCompact ? 0 : undefined,
+                        paddingTop:
+                          mobileCompactActiveCombat && isLandscapeCompact
+                            ? useCombatLandscapeFaceoff
+                              ? 6
+                              : 0
+                            : undefined,
                         paddingBottom: mobileCompactActiveCombat && isLandscapeCompact ? 0 : undefined,
                         boxSizing: "border-box",
                       }}
