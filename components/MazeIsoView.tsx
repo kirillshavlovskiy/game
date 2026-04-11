@@ -2196,6 +2196,13 @@ const CAM_POS_LERP = 0.2;
 /** How fast the camera rotates to face behind the player (0-1 per frame). */
 const CAM_ROT_LERP = 0.18;
 
+/**
+ * Raw screen-space drag on the 3D canvas is negated so yaw/pitch match the minimap green-ring
+ * `orbitLookByPixelDelta` path (tangential + radial pixels). Ring calls `applyManualOrbitFromDelta` directly;
+ * canvas / tilt use this sign so both inputs orbit the same way.
+ */
+const CANVAS_ORBIT_DELTA_SIGN = -1;
+
 function applyManualOrbitFromDelta(
   camera: THREE.Camera,
   controlsRef: { current: any },
@@ -2209,7 +2216,7 @@ function applyManualOrbitFromDelta(
   const target = ctrl.target;
   const offset = camera.position.clone().sub(target);
   const spherical = new THREE.Spherical().setFromVector3(offset);
-  /* +dx = orbit right, +dy = look more “up” on screen (natural drag vs old inverted feel). */
+  /* +dx → +theta (after CANVAS_ORBIT_DELTA_SIGN on canvas): orbit / ring stay aligned. */
   spherical.theta += dxPx * 0.005;
   spherical.phi = Math.max(0.2, Math.min(Math.PI / 2.2, spherical.phi + dyPx * 0.005));
   offset.setFromSpherical(spherical);
@@ -2359,7 +2366,14 @@ function CameraController({
       dragAccumRef.current += Math.abs(dx) + Math.abs(dy);
       dragRef.current = { x: e.clientX, y: e.clientY };
       mapRotationLog("canvasOrbitDelta", { dx, dy, kind: "mouse", touchUi }, 80);
-      applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
+      applyManualOrbitFromDelta(
+        camera,
+        controlsRef,
+        CANVAS_ORBIT_DELTA_SIGN * dx,
+        CANVAS_ORBIT_DELTA_SIGN * dy,
+        hasManualCameraRef,
+        manualOffsetRef,
+      );
     };
     const onMouseUp = () => {
       if (dragAccumRef.current > DRAG_SUPPRESS_THRESHOLD_PX) {
@@ -2412,7 +2426,14 @@ function CameraController({
       const dy = rawDy * touchSens;
       dragRef.current = { x: t.clientX, y: t.clientY, touchId: d.touchId };
       mapRotationLog("canvasOrbitDelta", { dx, dy, rawDx, rawDy, kind: "touch", touchUi }, 80);
-      applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
+      applyManualOrbitFromDelta(
+        camera,
+        controlsRef,
+        CANVAS_ORBIT_DELTA_SIGN * dx,
+        CANVAS_ORBIT_DELTA_SIGN * dy,
+        hasManualCameraRef,
+        manualOffsetRef,
+      );
     };
     const onTouchEnd = (e: TouchEvent) => {
       const d = dragRef.current;
@@ -2469,7 +2490,14 @@ function CameraController({
       if (dg > 180) dg -= 360;
       if (dg < -180) dg += 360;
       if (Math.abs(dg) > 55 || Math.abs(db) > 55) return;
-      applyManualOrbitFromDelta(camera, controlsRef, dg * 4, db * 4, hasManualCameraRef, manualOffsetRef);
+      applyManualOrbitFromDelta(
+        camera,
+        controlsRef,
+        CANVAS_ORBIT_DELTA_SIGN * dg * 4,
+        CANVAS_ORBIT_DELTA_SIGN * db * 4,
+        hasManualCameraRef,
+        manualOffsetRef,
+      );
     };
     window.addEventListener("deviceorientation", onOrient, true);
     return () => window.removeEventListener("deviceorientation", onOrient, true);
