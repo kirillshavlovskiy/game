@@ -1500,7 +1500,9 @@ function useMinimapOrbitRingPointerHandlers({
       const ddy = e.clientY - prev.y;
       const rad = ddx * nx + ddy * ny;
       const rMidPx = ((rDonutInner + rDonutOuter) / 2) * sx;
-      const tangPx = dA * rMidPx * MINIMAP_ORBIT_TANGENTIAL_BOOST;
+      /* atan2(vy,vx) increases for CCW on screen; negate so CW on the ring matches a left→right canvas swipe
+       * (see CANVAS_ORBIT_DELTA_SIGN + applyManualOrbitFromDelta theta in MazeIsoView). */
+      const tangPx = -dA * rMidPx * MINIMAP_ORBIT_TANGENTIAL_BOOST;
       const sens = MINIMAP_ORBIT_POINTER_SENS;
       if (tangPx !== 0 || rad !== 0) {
         if (skipNextOrbitApplyRef.current) {
@@ -1508,7 +1510,6 @@ function useMinimapOrbitRingPointerHandlers({
           ringDragRef.current = { x: e.clientX, y: e.clientY, angle: newAng };
           return;
         }
-        /* Inverted vs older ring feel: drag clockwise on the left minimap ring orbits camera / walk-facing the other way. */
         mazeIsoViewRef.current?.orbitLookByPixelDelta(tangPx * sens, rad * sens);
         mazeIsoViewRef.current?.bumpRotateSession();
       }
@@ -1533,7 +1534,8 @@ function useMinimapOrbitRingPointerHandlers({
         const tapAng = ringTapAngleRef.current;
         const rightHalf = tapAng > -Math.PI / 2 && tapAng < Math.PI / 2;
         const totalPx = (Math.PI / 2) / 0.005;
-        const dir = rightHalf ? 1 : -1;
+        /* Same yaw sign convention as tangential drag: right-half tap ↔ step that matches L→R swipe. */
+        const dir = rightHalf ? -1 : 1;
         const frames = 20;
         const step = (totalPx * dir) / frames;
         const m = mazeIsoViewRef.current;
