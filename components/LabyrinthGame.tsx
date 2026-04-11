@@ -384,8 +384,23 @@ function releaseDraculaTelegraphIfPending(lab: Labyrinth, mi: number): void {
 }
 
 /**
+ * Snap continuous iso camera bearing (`atan2(z,x)` in degrees + 90, see `MazeIsoView`) to a grid step N/E/S/W.
+ * Used so joystick ↑/→ match “into the view” / “right on screen” instead of a stale `playerFacing` basis.
+ */
+function cardinalGridFromIsoBearingDeg(bearingDeg: number): { dx: number; dy: number } {
+  const θ = ((bearingDeg - 90) * Math.PI) / 180;
+  const wx = Math.cos(θ);
+  const wz = Math.sin(θ);
+  if (Math.abs(wx) >= Math.abs(wz)) {
+    return { dx: wx >= 0 ? 1 : -1, dy: 0 };
+  }
+  return { dx: 0, dy: wz >= 0 ? 1 : -1 };
+}
+
+/**
  * ↑/↓/←/→ and WASD / joystick: forward/back/left/right from the walk basis (`playerFacing`).
- * On 3D iso that basis tracks camera aim; strafe moves no longer overwrite it (see `doMove` `updateFacing`).
+ * On 3D iso, walk basis follows live camera bearing when available (see `walkFacingMap` below).
+ * Strafe moves no longer overwrite facing (see `doMove` `updateFacing`).
  */
 function getRelativeDirectionsFromFacing(
   playerIndex: number,
@@ -3300,6 +3315,10 @@ export default function LabyrinthGame() {
     mazeMapViewRef.current = mazeMapView;
   }, [mazeMapView]);
   const [playerFacing, setPlayerFacing] = useState<Record<number, { dx: number; dy: number }>>({});
+  /** Iso: last camera-walk cardinal written to `playerFacing` (avoid setState on every bearing frame). */
+  const prevIsoWalkCardinalKeyRef = useRef<string | null>(null);
+  /** Latest 3D camera bearing (deg); updated before `setIsoCameraBearingDeg` so walk/joystick can read it above that state hook. */
+  const isoCameraBearingDegRef = useRef<number | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   /** Landscape + short viewport: tighter combat face-off (sprites/grid); full mobile UI comes from `isMobile` (includes this case). */
   const [isLandscapeCompact, setIsLandscapeCompact] = useState(false);
@@ -7155,7 +7174,15 @@ export default function LabyrinthGame() {
           return;
         }
       }
-      const rel = getRelativeDirectionsFromFacing(currentPlayerRef.current, playerFacingRef.current);
+      const cp = currentPlayerRef.current;
+      const bearingDeg = isoCameraBearingDegRef.current;
+      const camCardinal =
+        mazeMapViewRef.current === "iso" && bearingDeg != null
+          ? cardinalGridFromIsoBearingDeg(bearingDeg)
+          : null;
+      const facingMapForKeys =
+        camCardinal != null ? { ...playerFacingRef.current, [cp]: camCardinal } : playerFacingRef.current;
+      const rel = getRelativeDirectionsFromFacing(cp, facingMapForKeys);
       const keyToVec: Record<string, [number, number]> = {
         ArrowUp: [rel.forward.dx, rel.forward.dy],
         ArrowDown: [rel.backward.dx, rel.backward.dy],
@@ -7195,12 +7222,19 @@ export default function LabyrinthGame() {
   }
   const cp = lab?.players[currentPlayer];
   const gameOver = winner !== null;
+  const bearingDegLive = mazeMapView === "iso" ? isoCameraBearingDegRef.current : null;
+  const cameraWalkCardinal =
+    bearingDegLive != null ? cardinalGridFromIsoBearingDeg(bearingDegLive) : null;
+  const walkFacingMap =
+    cameraWalkCardinal != null
+      ? { ...playerFacing, [currentPlayer]: cameraWalkCardinal }
+      : playerFacing;
   const {
     forward: relativeForward,
     backward: relativeBackward,
     left: relativeLeft,
     right: relativeRight,
-  } = getRelativeDirectionsFromFacing(currentPlayer, playerFacing);
+  } = getRelativeDirectionsFromFacing(currentPlayer, walkFacingMap);
   const moveDisabled =
     movesLeft <= 0 ||
     gameOver ||
@@ -7785,14 +7819,37 @@ export default function LabyrinthGame() {
   /** Continuous camera “into view” bearing for player-centered mini-maps (touch orbit vs cardinal-facing only). */
   const [isoCameraBearingDeg, setIsoCameraBearingDeg] = useState<number | null>(null);
   const onIsoCameraBearingDeg = useCallback((deg: number) => {
+    isoCameraBearingDegRef.current = deg;
     setIsoCameraBearingDeg(deg);
   }, []);
   useEffect(() => {
     if (mazeMapView !== "iso") setIsoCamRotateActive(false);
   }, [mazeMapView]);
   useEffect(() => {
-    if (mazeMapView !== "iso") setIsoCameraBearingDeg(null);
+    if (mazeMapView !== "iso") {
+      isoCameraBearingDegRef.current = null;
+      setIsoCameraBearingDeg(null);
+    }
   }, [mazeMapView]);
+
+  /** Keep walk basis + 3D pawn yaw aligned with current orbit (same snap as minimap / `onTouchCameraForwardGrid`). */
+  useEffect(() => {
+    if (mazeMapView !== "iso" || isoCameraBearingDeg == null) {
+      prevIsoWalkCardinalKeyRef.current = null;
+      return;
+    }
+    const g = cardinalGridFromIsoBearingDeg(isoCameraBearingDeg);
+    const key = `${g.dx},${g.dy}`;
+    if (prevIsoWalkCardinalKeyRef.current === key) return;
+    prevIsoWalkCardinalKeyRef.current = key;
+    setPlayerFacing((prev) => {
+      const cur = prev[currentPlayer];
+      if (cur?.dx === g.dx && cur?.dy === g.dy) return prev;
+      const next = { ...prev, [currentPlayer]: { dx: g.dx, dy: g.dy } };
+      playerFacingRef.current = next;
+      return next;
+    });
+  }, [mazeMapView, isoCameraBearingDeg, currentPlayer]);
 
   const leaveIsoImmersiveOnly = useCallback(async () => {
     setIsoImmersiveFallback(false);
@@ -12961,8 +13018,8 @@ export default function LabyrinthGame() {
             mapHeight={lab.height}
             playerX={cp.x}
             playerY={cp.y}
-            facingDx={playerFacing[currentPlayer]?.dx ?? 0}
-            facingDy={playerFacing[currentPlayer]?.dy ?? 1}
+            facingDx={walkFacingMap[currentPlayer]?.dx ?? 0}
+            facingDy={walkFacingMap[currentPlayer]?.dy ?? 1}
             zoom={mazeZoom}
             visible
             onCellClick={handleCellTap}
