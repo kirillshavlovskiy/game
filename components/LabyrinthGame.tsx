@@ -401,10 +401,12 @@ function cardinalGridFromIsoBearingDeg(bearingDeg: number): { dx: number; dy: nu
  * ↑/↓/←/→ and WASD / joystick: forward/back/left/right from the walk basis (`playerFacing`).
  * On 3D iso, walk basis follows live camera bearing when available (see `walkFacingMap` below).
  * Strafe moves no longer overwrite facing (see `doMove` `updateFacing`).
+ * `invertScreenAxes` (iso 3D): flip F/B and swap L/R so stick/keys match natural screen-up/right vs camera.
  */
 function getRelativeDirectionsFromFacing(
   playerIndex: number,
-  facingMap: Record<number, { dx: number; dy: number }>
+  facingMap: Record<number, { dx: number; dy: number }>,
+  invertScreenAxes = false,
 ): {
   forward: { dx: number; dy: number };
   backward: { dx: number; dy: number };
@@ -420,10 +422,18 @@ function getRelativeDirectionsFromFacing(
       : Math.abs(sdx) >= Math.abs(sdy)
         ? { dx: sdx, dy: 0 }
         : { dx: 0, dy: sdy };
-  const forward = { dx: facing.dx, dy: facing.dy };
-  const backward = { dx: -facing.dx, dy: -facing.dy };
-  const left = { dx: facing.dy, dy: -facing.dx };
-  const right = { dx: -facing.dy, dy: facing.dx };
+  const forward = invertScreenAxes
+    ? { dx: -facing.dx, dy: -facing.dy }
+    : { dx: facing.dx, dy: facing.dy };
+  const backward = invertScreenAxes
+    ? { dx: facing.dx, dy: facing.dy }
+    : { dx: -facing.dx, dy: -facing.dy };
+  const left = invertScreenAxes
+    ? { dx: -facing.dy, dy: facing.dx }
+    : { dx: facing.dy, dy: -facing.dx };
+  const right = invertScreenAxes
+    ? { dx: facing.dy, dy: -facing.dx }
+    : { dx: -facing.dy, dy: facing.dx };
   return { forward, backward, left, right };
 }
 
@@ -936,7 +946,7 @@ function BottomDockInventoryIcon({ variant }: { variant: ArtifactIconVariant }) 
 
 /**
  * Rotation (deg) shared by player-centered minimap (CSS applies the negated angle) and compass ticks so N/S/E/W
- * stay aligned with maze north while the ▲ stays upright.
+ * stay aligned with maze north. The active-player ▲ still rotates with `activeFacingAngleDeg` so map-forward matches the pawn.
  */
 function isoMinimapMapRotationDeg(
   bearingAngleDeg: number | null,
@@ -962,7 +972,7 @@ function IsoDockGridMiniMap({
   isoMiniMapPinchStartRef,
   onOpenGrid,
   clipDiameter,
-  /** Move-HUD disc: player stays centered; map rotates so facing points up (no separate ▲ rotation). */
+  /** Move-HUD disc: player stays centered; map rotates with bearing; ▲ uses grid facing so it matches the 3D pawn. */
   playerCenteredRotate = false,
   /** Touch 3D: when set, map rotation follows camera “into view” bearing (smooth orbit); else player facing only. */
   bearingAngleDeg,
@@ -1113,9 +1123,7 @@ function IsoDockGridMiniMap({
                     position: "absolute",
                     left: "50%",
                     top: "50%",
-                    transform: playerCenteredRotate
-                      ? "translate(-50%, -50%)"
-                      : `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
+                    transform: `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
                     color: "#062214",
                     fontSize: `${Math.max(9, miniCell * 1.12)}px`,
                     fontWeight: 900,
@@ -1510,7 +1518,7 @@ function useMinimapOrbitRingPointerHandlers({
           ringDragRef.current = { x: e.clientX, y: e.clientY, angle: newAng };
           return;
         }
-        mazeIsoViewRef.current?.orbitLookByPixelDelta(tangPx * sens, rad * sens);
+        mazeIsoViewRef.current?.orbitLookByPixelDelta(-tangPx * sens, -rad * sens);
         mazeIsoViewRef.current?.bumpRotateSession();
       }
       ringDragRef.current = { x: e.clientX, y: e.clientY, angle: newAng };
@@ -1534,7 +1542,7 @@ function useMinimapOrbitRingPointerHandlers({
         const tapAng = ringTapAngleRef.current;
         const rightHalf = tapAng > -Math.PI / 2 && tapAng < Math.PI / 2;
         const totalPx = (Math.PI / 2) / 0.005;
-        const dir = rightHalf ? 1 : -1;
+        const dir = rightHalf ? -1 : 1;
         const frames = 20;
         const step = (totalPx * dir) / frames;
         const m = mazeIsoViewRef.current;
@@ -7203,7 +7211,7 @@ export default function LabyrinthGame() {
           : null;
       const facingMapForKeys =
         camCardinal != null ? { ...playerFacingRef.current, [cp]: camCardinal } : playerFacingRef.current;
-      const rel = getRelativeDirectionsFromFacing(cp, facingMapForKeys);
+      const rel = getRelativeDirectionsFromFacing(cp, facingMapForKeys, mazeMapViewRef.current === "iso");
       const keyToVec: Record<string, [number, number]> = {
         ArrowUp: [rel.forward.dx, rel.forward.dy],
         ArrowDown: [rel.backward.dx, rel.backward.dy],
@@ -7255,7 +7263,7 @@ export default function LabyrinthGame() {
     backward: relativeBackward,
     left: relativeLeft,
     right: relativeRight,
-  } = getRelativeDirectionsFromFacing(currentPlayer, walkFacingMap);
+  } = getRelativeDirectionsFromFacing(currentPlayer, walkFacingMap, mazeMapView === "iso");
   const moveDisabled =
     movesLeft <= 0 ||
     gameOver ||

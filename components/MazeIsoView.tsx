@@ -2112,8 +2112,9 @@ function applyManualOrbitFromDelta(
   const target = ctrl.target;
   const offset = camera.position.clone().sub(target);
   const spherical = new THREE.Spherical().setFromVector3(offset);
-  spherical.theta -= dxPx * 0.005;
-  spherical.phi = Math.max(0.2, Math.min(Math.PI / 2.2, spherical.phi - dyPx * 0.005));
+  /* +dx = orbit right, +dy = look more “up” on screen (natural drag vs old inverted feel). */
+  spherical.theta += dxPx * 0.005;
+  spherical.phi = Math.max(0.2, Math.min(Math.PI / 2.2, spherical.phi + dyPx * 0.005));
   offset.setFromSpherical(spherical);
   camera.position.copy(target).add(offset);
   camera.lookAt(target);
