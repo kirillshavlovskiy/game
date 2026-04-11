@@ -82,12 +82,6 @@ type Props = {
   playerY: number;
   facingDx: number;
   facingDy: number;
-  /**
-   * When set (iso play), pawn yaw follows the same continuous “into the view” bearing as the mini-map
-   * (`atan2(toPawn.z, toPawn.x)+90` deg). Cardinal `facingDx`/`facingDy` stay for walk/grid; without this the
-   * model snapped to N/E/S/W while the map orbited smoothly.
-   */
-  playerFacingBearingDeg?: number | null;
   zoom?: number;
   visible: boolean;
   onCellClick?: (x: number, y: number) => void;
@@ -766,17 +760,11 @@ function combatHoldSeconds(moment: IsoCombatPlayerMoment, fatalJump: boolean): n
   return 0.78;
 }
 
-/** Radians on Y: same basis as `-atan2(gridDy, gridDx)` and `cardinalGridFromIsoBearingDeg` / camera bearing. */
-function isoBearingDegToMarkerYawRad(bearingDeg: number): number {
-  return -((bearingDeg - 90) * Math.PI) / 180;
-}
-
 function PlayerMarker({
   playerX,
   playerY,
   facingDx,
   facingDy,
-  playerFacingBearingDeg = null,
   combatPulse = 0,
   playerGlbPath,
   playerWeaponGltfPath,
@@ -788,7 +776,6 @@ function PlayerMarker({
   playerY: number;
   facingDx: number;
   facingDy: number;
-  playerFacingBearingDeg?: number | null;
   combatPulse?: number;
   playerGlbPath?: string;
   playerWeaponGltfPath?: string | null;
@@ -806,10 +793,8 @@ function PlayerMarker({
   const targetYawRef = useRef(0);
   const facingDxRef = useRef(facingDx);
   const facingDyRef = useRef(facingDy);
-  const bearingDegRef = useRef(playerFacingBearingDeg);
   facingDxRef.current = facingDx;
   facingDyRef.current = facingDy;
-  bearingDegRef.current = playerFacingBearingDeg;
   const didInitPosRef = useRef(false);
   const groundLiftRef = useRef(0);
   const groundBox = useMemo(() => new THREE.Box3(), []);
@@ -843,17 +828,12 @@ function PlayerMarker({
 
   useFrame(() => {
     if (!groupRef.current) return;
-    const bearing = bearingDegRef.current;
-    if (bearing != null && Number.isFinite(bearing)) {
-      /* Continuous camera / mini-map bearing — matches `IsoDockGridMiniMap` + `onIsoCameraBearingDeg`. */
-      targetYawRef.current = isoBearingDegToMarkerYawRad(bearing);
-    } else {
-      const fdx = facingDxRef.current;
-      const fdy = facingDyRef.current;
-      const facingLen = Math.hypot(fdx, fdy);
-      if (facingLen > 0.01) {
-        targetYawRef.current = -Math.atan2(fdy, fdx);
-      }
+    const fdx = facingDxRef.current;
+    const fdy = facingDyRef.current;
+    const facingLen = Math.hypot(fdx, fdy);
+    if (facingLen > 0.01) {
+      /* Grid-facing yaw only — orbit/dolly does not spin the pawn; mini-map still uses camera bearing separately. */
+      targetYawRef.current = -Math.atan2(fdy, fdx);
     }
     if (!didInitPosRef.current) {
       groupRef.current.position.copy(targetPos.current);
@@ -892,28 +872,14 @@ function PlayerMarker({
       if (glen > 1e-5) {
         const vx = gx / glen;
         const vz = gz / glen;
-        const b = bearingDegRef.current;
-        let fx: number;
-        let fz: number;
-        if (b != null && Number.isFinite(b)) {
-          const θ = ((b - 90) * Math.PI) / 180;
-          fx = Math.cos(θ);
-          fz = Math.sin(θ);
-        } else {
-          const fdx = facingDxRef.current;
-          const fdy = facingDyRef.current;
-          const fl = Math.hypot(fdx, fdy);
-          if (fl <= 1e-5) {
-            fx = 0;
-            fz = 0;
-          } else {
-            fx = fdx / fl;
-            fz = fdy / fl;
-          }
-        }
-        if (Math.hypot(fx, fz) > 1e-5) {
-          const forwardDot = vx * fx + vz * fz;
-          const rightDot = vx * (-fz) + vz * fx;
+        const fdx = facingDxRef.current;
+        const fdy = facingDyRef.current;
+        const fl = Math.hypot(fdx, fdy);
+        if (fl > 1e-5) {
+          const fx = fdx / fl;
+          const fy = fdy / fl;
+          const forwardDot = vx * fx + vz * fy;
+          const rightDot = vx * (-fy) + vz * fx;
           const adf = Math.abs(forwardDot);
           const adr = Math.abs(rightDot);
           if (adf >= adr) {
@@ -2592,8 +2558,14 @@ function CameraController({
     // Keep manual camera adjustment persistent while following the player.
     // Reset: explicit reset, turn/facing change, teleport/catapult framing, or a touch step to a new tile.
 
-    // Auto-follow current player and orient behind movement direction unless user is actively rotating.
-    if (!rotateMode && !dragRef.current && !orbitRingGesture) {
+    /**
+     * Orbit pivot must track the player every frame (including rotate mode / after minimap orbit).
+     * Previously we skipped the whole block while `rotateMode`, so the target froze and the rig stopped
+     * following moves. Only suppress smooth camera lerp while a finger/mouse drag or minimap ring gesture
+     * is actively driving the view (those paths update offset each event; we snap rig to target+offset here).
+     */
+    const activeOrbitDrag = !!dragRef.current || orbitRingGesture;
+    if (!lockCameraToAutoFraming) {
       const transitionBlend = transitionBlendRef.current;
       let posLerp = THREE.MathUtils.lerp(CAM_POS_LERP, 0.42, transitionBlend);
       let rotLerp = THREE.MathUtils.lerp(CAM_ROT_LERP, 0.34, transitionBlend);
@@ -2602,10 +2574,13 @@ function CameraController({
         rotLerp = Math.max(rotLerp, 0.44);
       }
       ctrl.target.lerp(desiredTarget, posLerp);
-      // Keep a stable camera offset from the current target to prevent tilt drift.
       const desiredCameraPos = ctrl.target.clone().add(desiredOffset);
-      camera.position.lerp(desiredCameraPos, rotLerp);
-      transitionBlendRef.current = Math.max(0, transitionBlend * 0.9 - 0.012);
+      if (activeOrbitDrag) {
+        camera.position.copy(desiredCameraPos);
+      } else {
+        camera.position.lerp(desiredCameraPos, rotLerp);
+        transitionBlendRef.current = Math.max(0, transitionBlend * 0.9 - 0.012);
+      }
       ctrl.update();
     }
 
@@ -2689,7 +2664,7 @@ function CameraController({
         orbitRingGesture,
         lockCameraToAutoFraming,
         hasManualCamera: hasManualCameraRef.current,
-        autoFollowLerping: !rotateMode && !dragRef.current && !orbitRingGesture,
+        autoFollowLerping: !lockCameraToAutoFraming && !dragRef.current && !orbitRingGesture,
         cameraDrivesFacingGrid,
         bearingDiag,
         hB_len: hBLen,
@@ -3433,7 +3408,7 @@ function Monsters3D({
 }
 
 function MazeScene({
-  grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy, playerFacingBearingDeg = null,
+  grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
   zoom, rotateMode, onCellClick, resetTick, teleportOptions, teleportMode, catapultMode,
   catapultFrom, catapultAimClient, catapultTrajectoryPreview, catapultLockCameraForPull,
   magicPortalPreviewOptions, teleportSourceType,
@@ -3544,7 +3519,6 @@ function MazeScene({
         playerY={playerY}
         facingDx={facingDx}
         facingDy={facingDy}
-        playerFacingBearingDeg={playerFacingBearingDeg}
         combatPulse={combatPulseVersion}
         playerGlbPath={playerGlbPath}
         playerWeaponGltfPath={playerWeaponGltfPath}
@@ -3912,7 +3886,6 @@ export function MiniMapStrip({
 const MazeIsoView = forwardRef(function MazeIsoView(
   {
     grid, mapWidth, mapHeight, playerX, playerY, facingDx, facingDy,
-    playerFacingBearingDeg = null,
     zoom = 1,
     visible,
     onCellClick,
@@ -4138,7 +4111,6 @@ const MazeIsoView = forwardRef(function MazeIsoView(
           grid={grid} mapWidth={mapWidth} mapHeight={mapHeight}
           playerX={playerX} playerY={playerY}
           facingDx={facingDx} facingDy={facingDy}
-          playerFacingBearingDeg={playerFacingBearingDeg}
           zoom={zoom}
           rotateMode={rotateMode}
           onCellClick={onCellClick}
