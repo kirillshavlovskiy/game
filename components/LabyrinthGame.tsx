@@ -401,12 +401,10 @@ function cardinalGridFromIsoBearingDeg(bearingDeg: number): { dx: number; dy: nu
  * ↑/↓/←/→ and WASD / joystick: forward/back/left/right from the walk basis (`playerFacing`).
  * On 3D iso, walk basis follows live camera bearing when available (see `walkFacingMap` below).
  * Strafe moves no longer overwrite facing (see `doMove` `updateFacing`).
- * `invertScreenAxes` (iso 3D): flip F/B and swap L/R so stick/keys match natural screen-up/right vs camera.
  */
 function getRelativeDirectionsFromFacing(
   playerIndex: number,
-  facingMap: Record<number, { dx: number; dy: number }>,
-  invertScreenAxes = false,
+  facingMap: Record<number, { dx: number; dy: number }>
 ): {
   forward: { dx: number; dy: number };
   backward: { dx: number; dy: number };
@@ -422,18 +420,10 @@ function getRelativeDirectionsFromFacing(
       : Math.abs(sdx) >= Math.abs(sdy)
         ? { dx: sdx, dy: 0 }
         : { dx: 0, dy: sdy };
-  const forward = invertScreenAxes
-    ? { dx: -facing.dx, dy: -facing.dy }
-    : { dx: facing.dx, dy: facing.dy };
-  const backward = invertScreenAxes
-    ? { dx: facing.dx, dy: facing.dy }
-    : { dx: -facing.dx, dy: -facing.dy };
-  const left = invertScreenAxes
-    ? { dx: -facing.dy, dy: facing.dx }
-    : { dx: facing.dy, dy: -facing.dx };
-  const right = invertScreenAxes
-    ? { dx: facing.dy, dy: -facing.dx }
-    : { dx: -facing.dy, dy: facing.dx };
+  const forward = { dx: facing.dx, dy: facing.dy };
+  const backward = { dx: -facing.dx, dy: -facing.dy };
+  const left = { dx: facing.dy, dy: -facing.dx };
+  const right = { dx: -facing.dy, dy: facing.dx };
   return { forward, backward, left, right };
 }
 
@@ -7211,7 +7201,7 @@ export default function LabyrinthGame() {
           : null;
       const facingMapForKeys =
         camCardinal != null ? { ...playerFacingRef.current, [cp]: camCardinal } : playerFacingRef.current;
-      const rel = getRelativeDirectionsFromFacing(cp, facingMapForKeys, mazeMapViewRef.current === "iso");
+      const rel = getRelativeDirectionsFromFacing(cp, facingMapForKeys);
       const keyToVec: Record<string, [number, number]> = {
         ArrowUp: [rel.forward.dx, rel.forward.dy],
         ArrowDown: [rel.backward.dx, rel.backward.dy],
@@ -7263,7 +7253,7 @@ export default function LabyrinthGame() {
     backward: relativeBackward,
     left: relativeLeft,
     right: relativeRight,
-  } = getRelativeDirectionsFromFacing(currentPlayer, walkFacingMap, mazeMapView === "iso");
+  } = getRelativeDirectionsFromFacing(currentPlayer, walkFacingMap);
   const moveDisabled =
     movesLeft <= 0 ||
     gameOver ||
