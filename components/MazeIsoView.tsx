@@ -530,81 +530,50 @@ function FloorTiles({
 /* ------------------------------------------------------------------ */
 /*  Walls                                                              */
 /* ------------------------------------------------------------------ */
-/** Chebyshev distance — walls this close to the player fade so they do not fully occlude the avatar. */
-const NEAR_PLAYER_WALL_FADE_CHEBYSHEV_R = 2;
-const NEAR_PLAYER_WALL_OPACITY = 0.42;
+/** Only walls that sit between camera and player (XZ) get this alpha — orbit keeps other walls opaque. */
+const WALL_OCCLUDER_FADE_OPACITY = 0.42;
+/** Half-width (meters) around the camera→player segment for “this wall blocks the view” (cell-sized). */
+const WALL_OCCLUDER_STRIP_HALF_WIDTH = CS * 0.68;
+/** Ignore segment ends so the player’s own cell and the camera anchor do not flicker. */
+const WALL_OCCLUDER_END_PAD = CS * 0.14;
+/** Expand segment AABB for cheap rejects (meters). */
+const WALL_OCCLUDER_BBOX_MARGIN = CS * 1.25;
 
-function WallInstances({
-  wallCells,
-  wallSideTex,
-  surfaceOpacity,
-}: {
-  wallCells: Array<[number, number]>;
-  wallSideTex: THREE.Texture;
-  surfaceOpacity: number;
-}) {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
-  const transparent = surfaceOpacity < 1 - 1e-6;
-
-  const wallMaterials = useMemo(() => {
-    const sideMat = new THREE.MeshStandardMaterial({
-      map: wallSideTex,
-      roughness: 0.9,
-      metalness: 0,
-      color: "#7a6a5a",
-      transparent,
-      opacity: surfaceOpacity,
-    });
-    const sideMatDark = new THREE.MeshStandardMaterial({
-      map: wallSideTex,
-      roughness: 0.9,
-      metalness: 0,
-      color: "#5a4a3a",
-      transparent,
-      opacity: surfaceOpacity,
-    });
-    const topMat = new THREE.MeshBasicMaterial({
-      map: wallSideTex,
-      color: "#2f2722",
-      transparent,
-      opacity: transparent ? surfaceOpacity : 1,
-    });
-    return [sideMat, sideMatDark, topMat, topMat, sideMat, sideMatDark];
-  }, [wallSideTex, surfaceOpacity, transparent]);
-
-  useEffect(() => {
-    return () => {
-      wallMaterials.forEach((m) => m.dispose());
-    };
-  }, [wallMaterials]);
-
-  useEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh) return;
-    const dummy = new THREE.Object3D();
-    for (let i = 0; i < wallCells.length; i++) {
-      const [x, y] = wallCells[i];
-      dummy.position.set(x * CS, FLOOR_Y + WALL_HEIGHT / 2, y * CS);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(i, dummy.matrix);
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-    mesh.computeBoundingSphere();
-  }, [wallCells]);
-
-  if (wallCells.length === 0) return null;
-
-  return (
-    <instancedMesh
-      ref={meshRef}
-      args={[undefined, undefined, wallCells.length]}
-      material={wallMaterials}
-      castShadow
-      receiveShadow
-    >
-      <boxGeometry args={[WALL_SIZE, WALL_HEIGHT, WALL_SIZE]} />
-    </instancedMesh>
-  );
+/**
+ * True when the wall cell center is close to the camera→player segment in XZ, strictly between endpoints
+ * (wall between eye and avatar from a top-down view — matches iso orbit).
+ */
+function wallCellOccludesPlayerFromCameraXZ(
+  wx: number,
+  wy: number,
+  camX: number,
+  camZ: number,
+  playerGx: number,
+  playerGy: number,
+): boolean {
+  const px = playerGx * CS;
+  const pz = playerGy * CS;
+  const wxw = wx * CS;
+  const wzw = wy * CS;
+  const dx = px - camX;
+  const dz = pz - camZ;
+  const segLenSq = dx * dx + dz * dz;
+  if (segLenSq < 1e-8) return false;
+  const segLen = Math.sqrt(segLenSq);
+  const invLen = 1 / segLen;
+  const ndx = dx * invLen;
+  const ndz = dz * invLen;
+  const vx = wxw - camX;
+  const vz = wzw - camZ;
+  const t = vx * ndx + vz * ndz;
+  if (t <= WALL_OCCLUDER_END_PAD || t >= segLen - WALL_OCCLUDER_END_PAD) return false;
+  const qx = camX + ndx * t;
+  const qz = camZ + ndz * t;
+  const ox = wxw - qx;
+  const oz = wzw - qz;
+  const distSq = ox * ox + oz * oz;
+  const hw = WALL_OCCLUDER_STRIP_HALF_WIDTH;
+  return distSq < hw * hw;
 }
 
 function WallBlocks({
@@ -620,6 +589,7 @@ function WallBlocks({
   playerX: number;
   playerY: number;
 }) {
+  const { camera } = useThree();
   const wallSideTex = useTexture(MAZE_ISO_WALL_SIDE_TEXTURE);
   useEffect(() => {
     wallSideTex.wrapS = wallSideTex.wrapT = THREE.RepeatWrapping;
@@ -634,27 +604,141 @@ function WallBlocks({
     return cells;
   }, [grid, mapWidth, mapHeight]);
 
-  const { farCells, nearCells } = useMemo(() => {
-    const far: Array<[number, number]> = [];
-    const near: Array<[number, number]> = [];
-    const r = NEAR_PLAYER_WALL_FADE_CHEBYSHEV_R;
-    for (const c of wallCells) {
-      const [x, y] = c;
-      const d = Math.max(Math.abs(x - playerX), Math.abs(y - playerY));
-      if (d <= r) near.push(c);
-      else far.push(c);
+  const wallCellsRef = useRef(wallCells);
+  wallCellsRef.current = wallCells;
+  const playerGridRef = useRef({ x: playerX, y: playerY });
+  playerGridRef.current.x = playerX;
+  playerGridRef.current.y = playerY;
+
+  const maxCount = wallCells.length;
+
+  const opaqueRef = useRef<THREE.InstancedMesh>(null);
+  const fadeRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+
+  useLayoutEffect(() => {
+    const o = opaqueRef.current;
+    const f = fadeRef.current;
+    if (o) o.count = 0;
+    if (f) f.count = 0;
+  }, [maxCount]);
+
+  const opaqueMaterials = useMemo(() => {
+    const sideMat = new THREE.MeshStandardMaterial({
+      map: wallSideTex,
+      roughness: 0.9,
+      metalness: 0,
+      color: "#7a6a5a",
+    });
+    const sideMatDark = new THREE.MeshStandardMaterial({
+      map: wallSideTex,
+      roughness: 0.9,
+      metalness: 0,
+      color: "#5a4a3a",
+    });
+    const topMat = new THREE.MeshBasicMaterial({ map: wallSideTex, color: "#2f2722" });
+    return [sideMat, sideMatDark, topMat, topMat, sideMat, sideMatDark];
+  }, [wallSideTex]);
+
+  const fadeOpacity = WALL_OCCLUDER_FADE_OPACITY;
+  const fadeMaterials = useMemo(() => {
+    const sideMat = new THREE.MeshStandardMaterial({
+      map: wallSideTex,
+      roughness: 0.9,
+      metalness: 0,
+      color: "#7a6a5a",
+      transparent: true,
+      opacity: fadeOpacity,
+    });
+    const sideMatDark = new THREE.MeshStandardMaterial({
+      map: wallSideTex,
+      roughness: 0.9,
+      metalness: 0,
+      color: "#5a4a3a",
+      transparent: true,
+      opacity: fadeOpacity,
+    });
+    const topMat = new THREE.MeshBasicMaterial({
+      map: wallSideTex,
+      color: "#2f2722",
+      transparent: true,
+      opacity: fadeOpacity,
+    });
+    return [sideMat, sideMatDark, topMat, topMat, sideMat, sideMatDark];
+  }, [wallSideTex, fadeOpacity]);
+
+  useEffect(() => {
+    return () => {
+      opaqueMaterials.forEach((m) => m.dispose());
+      fadeMaterials.forEach((m) => m.dispose());
+    };
+  }, [opaqueMaterials, fadeMaterials]);
+
+  useFrame(() => {
+    const cells = wallCellsRef.current;
+    const pg = playerGridRef.current;
+    const oMesh = opaqueRef.current;
+    const fMesh = fadeRef.current;
+    if (!cells.length || !oMesh || !fMesh) return;
+
+    const cx = camera.position.x;
+    const cz = camera.position.z;
+    const px = pg.x * CS;
+    const pz = pg.y * CS;
+    const m = WALL_OCCLUDER_BBOX_MARGIN;
+    const segMinX = Math.min(cx, px) - m;
+    const segMaxX = Math.max(cx, px) + m;
+    const segMinZ = Math.min(cz, pz) - m;
+    const segMaxZ = Math.max(cz, pz) + m;
+
+    let oi = 0;
+    let fi = 0;
+    for (let i = 0; i < cells.length; i++) {
+      const [wx, wy] = cells[i];
+      const wxw = wx * CS;
+      const wzw = wy * CS;
+      let occludes = false;
+      if (wxw >= segMinX && wxw <= segMaxX && wzw >= segMinZ && wzw <= segMaxZ) {
+        occludes = wallCellOccludesPlayerFromCameraXZ(wx, wy, cx, cz, pg.x, pg.y);
+      }
+      dummy.position.set(wx * CS, FLOOR_Y + WALL_HEIGHT / 2, wy * CS);
+      dummy.updateMatrix();
+      if (occludes) {
+        fMesh.setMatrixAt(fi++, dummy.matrix);
+      } else {
+        oMesh.setMatrixAt(oi++, dummy.matrix);
+      }
     }
-    return { farCells: far, nearCells: near };
-  }, [wallCells, playerX, playerY]);
+    oMesh.count = oi;
+    fMesh.count = fi;
+    oMesh.instanceMatrix.needsUpdate = true;
+    fMesh.instanceMatrix.needsUpdate = true;
+    oMesh.computeBoundingSphere();
+    fMesh.computeBoundingSphere();
+  });
+
+  if (maxCount === 0) return null;
 
   return (
     <>
-      {farCells.length > 0 ? (
-        <WallInstances wallCells={farCells} wallSideTex={wallSideTex} surfaceOpacity={1} />
-      ) : null}
-      {nearCells.length > 0 ? (
-        <WallInstances wallCells={nearCells} wallSideTex={wallSideTex} surfaceOpacity={NEAR_PLAYER_WALL_OPACITY} />
-      ) : null}
+      <instancedMesh
+        ref={opaqueRef}
+        args={[undefined, undefined, maxCount]}
+        material={opaqueMaterials}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={[WALL_SIZE, WALL_HEIGHT, WALL_SIZE]} />
+      </instancedMesh>
+      <instancedMesh
+        ref={fadeRef}
+        args={[undefined, undefined, maxCount]}
+        material={fadeMaterials}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={[WALL_SIZE, WALL_HEIGHT, WALL_SIZE]} />
+      </instancedMesh>
     </>
   );
 }
