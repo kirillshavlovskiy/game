@@ -11914,7 +11914,13 @@ export default function LabyrinthGame() {
                         </button>
                       </div>
                     ) : null}
-                    <div style={{ textAlign: "center", minHeight: 8 }}>
+                    <div
+                      style={{
+                        textAlign: "center",
+                        minHeight:
+                          combatState && !combatResult && headerSurpriseVisible && !rolling ? 8 : 0,
+                      }}
+                    >
                       {combatState && !combatResult && headerSurpriseVisible && !rolling ? (
                         <span
                           style={{
@@ -12389,7 +12395,7 @@ export default function LabyrinthGame() {
                         </div>
                               );
                             })()}
-            <div style={{ height: 2, flexShrink: 0, minHeight: 2 }} />
+            {!useCombatLandscapeFaceoff ? <div style={{ height: 2, flexShrink: 0, minHeight: 2 }} /> : null}
             <div
               style={{
                 ...combatResultSectionStyle,
@@ -12420,7 +12426,8 @@ export default function LabyrinthGame() {
                 <div
                   style={{
                     width: "100%",
-                  minHeight: showCombatOutcomeCenterOverlay ? 0 : 8,
+                    minHeight:
+                      showCombatOutcomeCenterOverlay || useCombatLandscapeFaceoff ? 0 : 8,
                     flexShrink: 0,
                   }}
                 aria-hidden
