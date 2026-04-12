@@ -107,17 +107,26 @@ export const MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER: Record<Combat3dStrike
   light: 0.38,
 };
 
+/**
+ * Merged player `Double_Combo_Attack`: impact is late in the clip — add this on top of table `attackerLeadInSec` **only**
+ * when that clip is selected (`applyPlayerAttackClipSkillLeadIn` in `MonsterModel3D`), so contact reads against the monster.
+ */
+export const PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC = 0.16;
+
 /** Player swings at monster: tier × (monster hurt | monster knockdown). */
 export const PLAYER_HITS_MONSTER: Record<Combat3dStrikeTier, Record<Combat3dDefenderPose, Combat3dContactRow>> = {
   spell: {
     hurt: {
-      separationHalf: 0.68,
       /**
-       * Player `attack` vs monster **standing hurt**. Keep moderate skip so **jump wind-up** (e.g. Jumping_Punch) stays on screen;
-       * very large values hid the takeoff entirely.
+       * Spell tier leads with **spin / combo** clips (`Double_Blade_Spin`, `Triple_Combo_Attack`, …) that barely translate.
+       * `0.68` was tuned for `Jumping_Punch` lunges and left combos visibly short of the monster in the combat modal.
        */
-      attackerLeadInSec: 0.34,
-      defenderReactionLeadInSec: 0.2,
+      separationHalf: 0.54,
+      /**
+       * Slightly shallower than legacy `0.34` now that X is tighter — keeps first combo beats on-screen before contact.
+       */
+      attackerLeadInSec: 0.28,
+      defenderReactionLeadInSec: 0.18,
     },
     knockdown: {
       separationHalf: 0.42,
@@ -129,13 +138,13 @@ export const PLAYER_HITS_MONSTER: Record<Combat3dStrikeTier, Record<Combat3dDefe
   skill: {
     hurt: {
       /**
-       * `Jumping_Punch`: **wider** half than monster skill (`MONSTER_HITS_PLAYER.skill.hurt` 0.52) so the jump starts
-       * before the rigs read nose-to-nose; **shallower** `attackerLeadInSec` keeps more takeoff at t→0 while root motion
-       * closes the gap. `defenderReactionLeadInSec` stays low so flinch tracks the earlier contact frame.
+       * Tier leads with **`Jumping_Punch`** — keep base seek **low** so skill strikes read soon after hunt crossfade.
+       * **`Double_Combo_Attack`** adds {@link PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC} in `MonsterModel3D` only
+       * for that clip so the combo hits nearer the monster (default seek was too early in the clip).
        */
-      separationHalf: 0.66,
-      attackerLeadInSec: 0.2,
-      defenderReactionLeadInSec: 0.03,
+      separationHalf: 0.54,
+      attackerLeadInSec: 0.12,
+      defenderReactionLeadInSec: 0.1,
     },
     knockdown: {
       /**
@@ -143,8 +152,8 @@ export const PLAYER_HITS_MONSTER: Record<Combat3dStrikeTier, Record<Combat3dDefe
        * (those tune monster→player). Match `skill.hurt` jump seek so `Jumping_Punch` wind-up matches standing hit; X
        * slightly tighter than `hurt` so the strike reads on a grounded rig; shallow fall skip like `spell.knockdown`.
        */
-      separationHalf: 0.6,
-      attackerLeadInSec: 0.2,
+      separationHalf: 0.5,
+      attackerLeadInSec: 0.18,
       defenderReactionLeadInSec: 0.08,
     },
   },
@@ -247,10 +256,11 @@ export function isKnownCombatStrikeTier(v: Combat3dStrikeTier | undefined): v is
 }
 
 /**
- * Map GLB portrait → defender column. Anything that is not knockdown uses **hurt** (incl. hunt/idle during wind-up).
+ * Map GLB portrait → defender column. **`defeated`** uses the same table as **knockdown** (fall/death clips), not
+ * **hurt** (standing flinch) — otherwise lethal strikes keep wide `*.hurt` face-off halves and zero monster lead-in.
  */
 export function defenderPoseFromVisual(state: Monster3DSpriteState): Combat3dDefenderPose {
-  return state === "knockdown" ? "knockdown" : "hurt";
+  return state === "knockdown" || state === "defeated" ? "knockdown" : "hurt";
 }
 
 export function rowMonsterHitsPlayer(
@@ -375,7 +385,9 @@ export function resolveCombat3dFaceOffSeparationHalf(args: Combat3dFaceOffArgs):
     playerVisualState === "recover" ||
     monsterVisualState === "recover" ||
     playerVisualState === "knockdown" ||
-    monsterVisualState === "knockdown";
+    monsterVisualState === "knockdown" ||
+    playerVisualState === "defeated" ||
+    monsterVisualState === "defeated";
 
   const useStrikeContactSpacing =
     isContactExchange ||
@@ -489,8 +501,6 @@ export function resolveCombat3dClipLeads(args: {
   const mAtk = monsterVisualState === "attack";
   const pAtk = playerVisualState === "attack";
   const pHurt = playerVisualState === "hurt";
-  const mHurt = monsterVisualState === "hurt";
-  const mKd = monsterVisualState === "knockdown";
   const playerDefenderPose = defenderPoseFromVisual(playerVisualState);
 
   const spellJumpLeadMult =
@@ -534,14 +544,12 @@ export function resolveCombat3dClipLeads(args: {
   }
 
   let meshyMonsterHurtLeadInSec = 0;
-  if (pAtk && mHurt && isKnownCombatStrikeTier(playerAttackVariant)) {
+  if (pAtk && !mAtk && isKnownCombatStrikeTier(playerAttackVariant)) {
     meshyMonsterHurtLeadInSec = adjustMonsterHurtLeadForPlayerAttackSync(
       playerAttackVariant,
       monsterVisualState,
       meshyPlayerAttackLeadInSec,
     );
-  } else if (pAtk && !mAtk && mKd && isKnownCombatStrikeTier(playerAttackVariant)) {
-    meshyMonsterHurtLeadInSec = PLAYER_HITS_MONSTER[playerAttackVariant].knockdown.defenderReactionLeadInSec;
   }
 
   const meshyPlayerHuntToAttackCrossfadeSec =

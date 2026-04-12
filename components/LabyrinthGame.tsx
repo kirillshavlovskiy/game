@@ -719,18 +719,6 @@ const COMBAT_LANDSCAPE_CENTER_COL_WIDTH = "clamp(160px, min(44vw, 56vh), 340px)"
 /** No `vh` in the middle term — short landscape height must not narrow the dice reroll dialog. */
 const COMBAT_LANDSCAPE_CENTER_COL_WIDTH_REROLL = "clamp(160px, 44vw, 340px)";
 const COMBAT_LANDSCAPE_CENTER_COL_MAX_W = "min(64vw, 400px)";
-/** Player | info | monster HP row — min column widths + gap so tracks never touch or stack wrong. */
-const combatHpBarsRowGridStyleBase: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "minmax(4.75rem, 1fr) minmax(2.25rem, auto) minmax(4.75rem, 1fr)",
-  columnGap: 14,
-  rowGap: 4,
-  width: "100%",
-  maxWidth: "100%",
-  alignItems: "center",
-  boxSizing: "border-box",
-  isolation: "isolate",
-};
 /** Combat modal uses maxHeight only so it fits viewport; no fixed height. */
 /** Bonus loot carousel — icon fits inside a fixed slot so the pick button does not resize per asset */
 const COMBAT_BONUS_LOOT_ICON_PX = 96;
@@ -948,7 +936,7 @@ function BottomDockInventoryIcon({ variant }: { variant: ArtifactIconVariant }) 
 
 /**
  * Rotation (deg) shared by player-centered minimap (CSS applies the negated angle) and compass ticks so N/S/E/W
- * stay aligned with maze north. The active-player ▲ still rotates with `activeFacingAngleDeg` so map-forward matches the pawn.
+ * stay aligned with maze north while the ▲ stays upright.
  */
 function isoMinimapMapRotationDeg(
   bearingAngleDeg: number | null,
@@ -974,7 +962,7 @@ function IsoDockGridMiniMap({
   isoMiniMapPinchStartRef,
   onOpenGrid,
   clipDiameter,
-  /** Move-HUD disc: player stays centered; map rotates with bearing; ▲ uses grid facing so it matches the 3D pawn. */
+  /** Move-HUD disc: player stays centered; map rotates so facing points up (no separate ▲ rotation). */
   playerCenteredRotate = false,
   /** Touch 3D: when set, map rotation follows camera “into view” bearing (smooth orbit); else player facing only. */
   bearingAngleDeg,
@@ -1125,7 +1113,9 @@ function IsoDockGridMiniMap({
                     position: "absolute",
                     left: "50%",
                     top: "50%",
-                    transform: `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
+                    transform: playerCenteredRotate
+                      ? "translate(-50%, -50%)"
+                      : `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
                     color: "#062214",
                     fontSize: `${Math.max(9, miniCell * 1.12)}px`,
                     fontWeight: 900,
@@ -1512,9 +1502,7 @@ function useMinimapOrbitRingPointerHandlers({
       const ddy = e.clientY - prev.y;
       const rad = ddx * nx + ddy * ny;
       const rMidPx = ((rDonutInner + rDonutOuter) / 2) * sx;
-      /* atan2(vy,vx) increases for CCW on screen; negate so CW on the ring matches a left→right canvas swipe
-       * (see CANVAS_ORBIT_DELTA_SIGN + applyManualOrbitFromDelta theta in MazeIsoView). */
-      const tangPx = -dA * rMidPx * MINIMAP_ORBIT_TANGENTIAL_BOOST;
+      const tangPx = dA * rMidPx * MINIMAP_ORBIT_TANGENTIAL_BOOST;
       const sens = MINIMAP_ORBIT_POINTER_SENS;
       if (tangPx !== 0 || rad !== 0) {
         if (skipNextOrbitApplyRef.current) {
@@ -1546,8 +1534,7 @@ function useMinimapOrbitRingPointerHandlers({
         const tapAng = ringTapAngleRef.current;
         const rightHalf = tapAng > -Math.PI / 2 && tapAng < Math.PI / 2;
         const totalPx = (Math.PI / 2) / 0.005;
-        /* Same yaw sign convention as tangential drag: right-half tap ↔ step that matches L→R swipe. */
-        const dir = rightHalf ? -1 : 1;
+        const dir = rightHalf ? 1 : -1;
         const frames = 20;
         const step = (totalPx * dir) / frames;
         const m = mazeIsoViewRef.current;
@@ -1701,8 +1688,6 @@ function MobileLandscapeMinimapOrbitWrap({
           top: 0,
           zIndex: 2,
           overflow: "visible",
-          /** Let the center disc receive taps/wheel/pinch on `IsoDockGridMiniMap`; only the green donut path captures orbit drags. */
-          pointerEvents: "none",
           touchAction: "none",
         }}
         aria-hidden
@@ -5363,6 +5348,8 @@ export default function LabyrinthGame() {
     combatLog("artifact reroll declined", { hadPending: !!pending });
     pendingArtifactRerollRef.current = null;
     setCombatArtifactRerollPrompt(false);
+    /** Roll finished mid–approach lerp, then prompt blocked `combat3dApproachEligible` — snap to full strike staging before `applyPost` so clip lead-ins match `PLAYER_HITS_MONSTER` (combo / Double_Combo_Attack distance). */
+    setCombat3dApproachBlend(1);
     combatDiceRerollReservedRef.current = false;
     setCombatDiceRerollReserved(false);
     if (pending) applyCombatPostResolveRef.current(pending.result);
@@ -9181,16 +9168,13 @@ export default function LabyrinthGame() {
             ...(headerMenuUseFixedLayer
                   ? {
                       position: "fixed",
-                      left: "max(12px, env(safe-area-inset-left, 0px))",
-                      right: "max(12px, env(safe-area-inset-right, 0px))",
-                      top: headerMenuFixedDropdownTop,
-                      bottom: "max(12px, env(safe-area-inset-bottom, 0px))",
+                      left: 12,
+                      right: 12,
+                  top: headerMenuFixedDropdownTop,
                       marginTop: 0,
-                      maxHeight: "none",
+                      maxHeight: "min(72vh, 520px)",
                       overflowY: "auto",
-                      WebkitOverflowScrolling: "touch",
-                      overscrollBehavior: "contain",
-                      zIndex: isoImmersiveUi ? ISO_IMMERSIVE_HUD_Z + 70 : HEADER_Z_INDEX + 2,
+                  zIndex: isoImmersiveUi ? ISO_IMMERSIVE_HUD_Z + 70 : HEADER_Z_INDEX + 2,
                     }
                   : {
                       position: "absolute",
@@ -9198,12 +9182,7 @@ export default function LabyrinthGame() {
                       right: 0,
                       marginTop: 6,
                       minWidth: 272,
-                      width: "min(340px, calc(100vw - 24px))",
-                      maxWidth: "min(92vw, calc(100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px) - 16px))",
-                      maxHeight: `min(520px, calc(100dvh - ${HEADER_HEIGHT + 28}px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)))`,
-                      overflowY: "auto",
-                      WebkitOverflowScrolling: "touch",
-                      overscrollBehavior: "contain",
+                      maxWidth: "min(92vw, 340px)",
                     }),
               }}
             >
@@ -10929,16 +10908,15 @@ export default function LabyrinthGame() {
                 monsterGltfPath &&
                 isLandscapeCompact
                   ? (() => {
-                      /* Reserve more modal height for title + dice/skills + HP + roll row so WebGL does not run under UI. */
-                      const chromeH = 168;
+                      const chromeH = 108;
                       const w = Math.min(
                         COMBAT_MODAL_WIDTH_LANDSCAPE_PX,
                         Math.max(300, Math.round(combatFaceoffInnerW - 20))
                       );
                       const hLabAspect = Math.round(w / 2);
                       const hMax = Math.max(
-                        168,
-                        Math.min(340, Math.round(combatFaceoffInnerH - chromeH))
+                        200,
+                        Math.min(380, Math.round(combatFaceoffInnerH - chromeH))
                       );
                       return { width: w, height: Math.min(hLabAspect, hMax) };
                     })()
@@ -11234,7 +11212,7 @@ export default function LabyrinthGame() {
                       ...combatLandscapeFaceoffWrapStyle,
                       position: "relative",
                       ...(useCombatLandscapeFaceoff
-                        ? { flex: 1, minHeight: 0, overflow: "hidden", gap: isMobile ? 10 : 12 }
+                        ? { flex: 1, minHeight: 0, overflow: "hidden", gap: isMobile ? 6 : 10 }
                         : {}),
                       ...(combatLandscapePostFight
                         ? {
@@ -11249,15 +11227,13 @@ export default function LabyrinthGame() {
                       style={{
                         position: "relative",
                         width: "100%",
-                        /* space-between: pin 3D to top of this column and HP/roll strip to bottom — avoids centering
-                         * the whole stack (overlap) and avoids flex-growing the WebGL row (which skewed framing). */
                         ...(useCombatLandscapeFaceoff
                           ? {
                               flex: 1,
                               minHeight: 0,
                               display: "flex",
                               flexDirection: "column",
-                              justifyContent: "space-between",
+                              justifyContent: "center",
                               alignItems: "center",
                             }
                           : {}),
@@ -11428,8 +11404,8 @@ export default function LabyrinthGame() {
                       style={{
                         display: "flex",
                         flexDirection: "column",
-                        alignItems: "center",
-                        justifyContent: "center",
+                            alignItems: "center",
+                            justifyContent: "center",
                         width: "100%",
                         flexShrink: 0,
                         paddingLeft: 4,
@@ -11788,24 +11764,18 @@ export default function LabyrinthGame() {
                     </div>
                     <div
                       style={{
-                        ...combatHpBarsRowGridStyleBase,
                         position: "relative",
                         zIndex: 2,
-                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 26 : 28) : 0,
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
+                        gap: "4px 8px",
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
                         marginBottom: 2,
+                        width: "100%",
+                        alignItems: "center",
                       }}
                     >
-                      <div
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          alignItems: "center",
-                          gap: 2,
-                          minWidth: 0,
-                          maxWidth: "100%",
-                          overflow: "hidden",
-                        }}
-                      >
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
                         {pHp != null ? (
                           <>
                             <span style={{ fontSize: "0.68rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
@@ -11816,7 +11786,7 @@ export default function LabyrinthGame() {
                                   height: "100%",
                                   background: pFill,
                                   transition: "width 0.25s ease",
-                                  boxShadow: `0 0 6px ${pGlow}`,
+                                  boxShadow: `0 0 10px ${pGlow}`,
                                 }}
                               />
                             </div>
@@ -11834,23 +11804,12 @@ export default function LabyrinthGame() {
                           alignItems: "center",
                           justifyContent: "center",
                           alignSelf: "center",
-                          padding: "0 4px",
-                          flexShrink: 0,
+                          padding: "0 2px",
                         }}
                       >
                         {combatInfoTriggerEl}
                       </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          alignItems: "center",
-                          gap: 2,
-                          minWidth: 0,
-                          maxWidth: "100%",
-                          overflow: "hidden",
-                        }}
-                      >
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
                         {headerMt ? (
                           <>
                             <span style={{ fontSize: "0.68rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
@@ -11943,13 +11902,7 @@ export default function LabyrinthGame() {
                         </button>
                       </div>
                     ) : null}
-                    <div
-                      style={{
-                        textAlign: "center",
-                        minHeight:
-                          combatState && !combatResult && headerSurpriseVisible && !rolling ? 8 : 0,
-                      }}
-                    >
+                    <div style={{ textAlign: "center", minHeight: 8 }}>
                       {combatState && !combatResult && headerSurpriseVisible && !rolling ? (
                         <span
                           style={{
@@ -12332,25 +12285,19 @@ export default function LabyrinthGame() {
 
                     <div
                       style={{
-                        ...combatHpBarsRowGridStyleBase,
                         position: "relative",
                         zIndex: 2,
                         gridColumn: "1 / -1",
-                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 26 : 28) : 0,
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
+                        gap: "4px 8px",
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
                         marginBottom: 1,
+                        width: "100%",
+                        alignItems: "center",
                       }}
                     >
-                      <div
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          alignItems: "center",
-                          gap: 2,
-                          minWidth: 0,
-                          maxWidth: "100%",
-                          overflow: "hidden",
-                        }}
-                      >
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
                         {pHp != null ? (
                           <>
                             <span style={{ fontSize: "0.68rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
@@ -12361,7 +12308,7 @@ export default function LabyrinthGame() {
                                   height: "100%",
                                   background: pFill,
                                   transition: "width 0.25s ease",
-                                  boxShadow: `0 0 6px ${pGlow}`,
+                                  boxShadow: `0 0 10px ${pGlow}`,
                                 }}
                               />
                             </div>
@@ -12379,23 +12326,12 @@ export default function LabyrinthGame() {
                           alignItems: "center",
                           justifyContent: "center",
                           alignSelf: "center",
-                          padding: "0 4px",
-                          flexShrink: 0,
+                          padding: "0 2px",
                         }}
                       >
                         {combatInfoTriggerEl}
                       </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          alignItems: "center",
-                          gap: 2,
-                          minWidth: 0,
-                          maxWidth: "100%",
-                          overflow: "hidden",
-                        }}
-                      >
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
                         {headerMt ? (
                           <>
                             <span style={{ fontSize: "0.68rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
@@ -12441,7 +12377,7 @@ export default function LabyrinthGame() {
                         </div>
                               );
                             })()}
-            {!useCombatLandscapeFaceoff ? <div style={{ height: 2, flexShrink: 0, minHeight: 2 }} /> : null}
+            <div style={{ height: 2, flexShrink: 0, minHeight: 2 }} />
             <div
               style={{
                 ...combatResultSectionStyle,
@@ -12472,8 +12408,7 @@ export default function LabyrinthGame() {
                 <div
                   style={{
                     width: "100%",
-                    minHeight:
-                      showCombatOutcomeCenterOverlay || useCombatLandscapeFaceoff ? 0 : 8,
+                  minHeight: showCombatOutcomeCenterOverlay ? 0 : 8,
                     flexShrink: 0,
                   }}
                 aria-hidden
@@ -12559,7 +12494,7 @@ export default function LabyrinthGame() {
       )}
       {settingsOpen && (
         <FullscreenPortal target={fsPortalTarget}>
-        <div style={{ ...settingsModalOverlayStyle, zIndex: SETTINGS_MODAL_Z }} onClick={() => setSettingsOpen(false)}>
+        <div style={{ ...modalOverlayStyle, zIndex: SETTINGS_MODAL_Z }} onClick={() => setSettingsOpen(false)}>
           <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
             <h2 style={modalTitleStyle}>Game Setup</h2>
             <div style={modalRowStyle}>
@@ -13060,7 +12995,13 @@ export default function LabyrinthGame() {
           flex: mazeMapView === "iso" || (mazeMapView === "grid" && isoImmersiveUi) ? 1 : undefined,
           minHeight: mazeMapView === "iso" || (mazeMapView === "grid" && isoImmersiveUi) ? 0 : undefined,
         }}>
-        {lab && cp && !combatState && !lab.eliminatedPlayers.has(currentPlayer) && mazeMapView === "iso" && (
+        {/** Avoid maze `<Canvas>` + combat `CombatScene3D` at once after `setCombatState(null)` (mobile WebGL). */}
+        {lab &&
+          cp &&
+          !combatState &&
+          !combatResult &&
+          !lab.eliminatedPlayers.has(currentPlayer) &&
+          mazeMapView === "iso" && (
           <div
             ref={isoPlayRootRef}
             className={isoPlayRootViewportFill ? "labyrinth-iso-edge-canvas-host" : undefined}
@@ -14922,18 +14863,14 @@ export default function LabyrinthGame() {
         </>
       )}
 
-      {isMobile &&
-        showMoveGrid &&
-        lab &&
-        mazeMapView === "iso" &&
-        !isoImmersiveUi ? (
+      {isMobile && showMoveGrid && lab && mazeMapView === "iso" ? (
             <div
               style={{
                 position: "fixed",
             left: "max(8px, env(safe-area-inset-left, 0px))",
                 right: "max(8px, env(safe-area-inset-right, 0px))",
                 bottom: "max(36px, calc(20px + env(safe-area-inset-bottom, 0px)))",
-                zIndex: 114,
+                zIndex: isoImmersiveUi ? ISO_IMMERSIVE_HUD_Z + 90 : 114,
             display: "flex",
             flexDirection: "row",
             alignItems: "flex-end",
@@ -16781,23 +16718,6 @@ const modalOverlayStyle: React.CSSProperties = {
   zIndex: 1000,
 };
 
-/** Game setup — scrollable in short landscape / mobile; safe areas; panel width clamped to viewport */
-const settingsModalOverlayStyle: React.CSSProperties = {
-  ...modalOverlayStyle,
-  alignItems: "flex-start",
-  justifyContent: "center",
-  overflowY: "auto",
-  overflowX: "hidden",
-  WebkitOverflowScrolling: "touch",
-  overscrollBehavior: "contain",
-  paddingLeft: "max(12px, env(safe-area-inset-left, 0px))",
-  paddingRight: "max(12px, env(safe-area-inset-right, 0px))",
-  paddingTop: "max(12px, env(safe-area-inset-top, 0px))",
-  paddingBottom: "max(12px, env(safe-area-inset-bottom, 0px))",
-  boxSizing: "border-box",
-  minHeight: "100dvh",
-};
-
 const combatModalOverlayStyle: React.CSSProperties = {
   ...modalOverlayStyle,
   background: "rgba(0,0,0,0.85)",
@@ -16918,13 +16838,13 @@ const combatLandscapeFaceoffWrapStyle: React.CSSProperties = {
 /** HP track with strong bottom edge (underline look) */
 const combatHpBarUnderlineTrack: React.CSSProperties = {
   width: "100%",
-  maxWidth: "100%",
+  maxWidth: 200,
   height: 9,
   background: "rgba(20,20,28,0.95)",
   borderRadius: 2,
   borderBottom: "3px solid #5a5a6a",
   overflow: "hidden",
-  boxSizing: "border-box",
+  boxSizing: "content-box",
   paddingBottom: 1,
 };
 
@@ -17022,14 +16942,9 @@ const modalStyle: React.CSSProperties = {
   padding: "1.5rem",
   borderRadius: 8,
   border: "1px solid #333",
-  boxSizing: "border-box",
-  width: "100%",
-  minWidth: 0,
-  maxWidth: 520,
-  maxHeight: "none",
-  overflowX: "hidden",
-  overflowY: "visible",
-  flexShrink: 0,
+  minWidth: 280,
+  maxHeight: "90vh",
+  overflowY: "auto",
 };
 
 const modalTitleStyle: React.CSSProperties = {

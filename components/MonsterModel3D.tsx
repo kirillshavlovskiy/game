@@ -23,6 +23,7 @@ import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
 import {
   approachPhaseSeparationHalf,
   COMBAT_STRIKE_PICK_SEPARATION_HALF,
+  PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC,
   rowMonsterHitsPlayer,
   rowPlayerHitsMonster,
   skeletonFaceOffExtraSeparationHalf,
@@ -116,7 +117,9 @@ export function combatFaceOffPositions(args: {
     playerVisualState === "recover" ||
     monsterVisualState === "recover" ||
     playerVisualState === "knockdown" ||
-    monsterVisualState === "knockdown";
+    monsterVisualState === "knockdown" ||
+    playerVisualState === "defeated" ||
+    monsterVisualState === "defeated";
   const useStrikeContactSpacing =
     isContactExchange ||
     playerVisualState === "attack" ||
@@ -283,6 +286,7 @@ function applyMonsterHurtClipContactSync(
 
 /**
  * Player `attack`: skip into clip (lead-in from `combat3dContact` / `resolveCombat3dClipLeads`).
+ * `Double_Combo_Attack` hits late — add `PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC` when that clip is active.
  * Monster `attack` is **not** seek-skipped here — only player `hurt` lead is tuned to monster contact in the resolver.
  */
 function applyPlayerAttackClipSkillLeadIn(
@@ -290,11 +294,19 @@ function applyPlayerAttackClipSkillLeadIn(
   isPlayerModel: boolean,
   visualState: Monster3DSpriteState,
   leadInSec: number,
+  resolvedClipName?: string | null,
 ): void {
-  if (!isPlayerModel || visualState !== "attack" || !(leadInSec > 0)) return;
+  if (!isPlayerModel || visualState !== "attack") return;
   const clip = act.getClip();
   if (!clip || clip.duration <= 0) return;
-  act.time = Math.min(leadInSec, Math.max(0, clip.duration - 0.04));
+  const nm = resolvedClipName ?? clip.name ?? "";
+  const isDoubleCombo = /Double_Combo_Attack/i.test(nm);
+  let t = Math.max(0, leadInSec);
+  if (t <= 0 && !isDoubleCombo) return;
+  if (isDoubleCombo) {
+    t += PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC;
+  }
+  act.time = Math.min(t, Math.max(0, clip.duration - 0.04));
 }
 
 class ModelErrorBoundary extends Component<
@@ -1213,13 +1225,13 @@ function PositionedGltfSubject(
         !!playerJumpKillRef.current,
       );
       applyMonsterHurtClipContactSync(act, !!rest.isPlayerModel, rest.visualState, monsterHurtStartRef.current);
-      applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackSeekLead);
+      applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackSeekLead, pick);
       if (loops) { act.setLoop(THREE.LoopRepeat, Infinity); act.clampWhenFinished = false; }
       else { act.setLoop(THREE.LoopOnce, 1); act.clampWhenFinished = true; if (onFinishedRef.current) { actForListener = act; mixer.addEventListener("finished", onFin); } }
       if (useLocomotionCross) {
         act.play();
         outgoingLocomotion.crossFadeTo(act, locomotionHandoffFadeSec, false);
-        applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackSeekLead);
+        applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackSeekLead, pick);
         applyPlayerHurtClipContactSync(
           act,
           !!rest.isPlayerModel,

@@ -529,30 +529,30 @@ const PLAYER_HUNT_CLIPS = [
 
 const PLAYER_ANGRY_CLIPS = [
   "Double_Blade_Spin",
-  "Charged_Axe_Chop",
-  "Triple_Combo_Attack",
+  "Double_Combo_Attack",
   "Reaping_Swing",
+  "Triple_Combo_Attack",
   "running",
 ] as const;
 
+/** Hard / d6-weighted pool — no `Charged_Axe_Chop` (crouched chop reads wrong in face-off). Prefer spin / combo / reaping. */
 const PLAYER_ATTACK_HEAVY_PRIORITY = [
+  "Double_Blade_Spin",
+  "Double_Combo_Attack",
+  "Reaping_Swing",
   "Triple_Combo_Attack",
   "Jumping_Punch",
-  "Charged_Axe_Chop",
-  "Double_Blade_Spin",
-  "Reaping_Swing",
 ] as const;
 
 const PLAYER_ATTACK_MEDIUM_PRIORITY = [
   "Jumping_Punch",
   "Charged_Upward_Slash",
-  "Double_Combo_Attack",
   "Attack",
+  "Double_Combo_Attack",
 ] as const;
 
-/** Light strike (d6 1–3): prefer short melee reads — avoid leading with generic `Attack` / flip / cast. */
+/** Light strike (d6 1–3): short reads — combo / axe chop excluded from lead (combo reserved for mid+ die tiers). */
 const PLAYER_ATTACK_LIGHT_PRIORITY = [
-  "Double_Combo_Attack",
   "Charged_Upward_Slash",
   "Attack",
   "Backflip_and_Hooks",
@@ -625,17 +625,18 @@ function buildPlayerHurtStandingClipOrder(hpLost: number, zone: StrikeTarget): s
 }
 
 const PLAYER_ANGRY_HEAVY = [
+  "Double_Blade_Spin",
+  "Double_Combo_Attack",
+  "Reaping_Swing",
   "Triple_Combo_Attack",
   "Jumping_Punch",
-  "Double_Blade_Spin",
-  "Charged_Axe_Chop",
-  "Reaping_Swing",
 ] as const;
 
 const PLAYER_ANGRY_MEDIUM = [
   "Jumping_Punch",
+  "Double_Blade_Spin",
+  "Reaping_Swing",
   "Double_Combo_Attack",
-  "Triple_Combo_Attack",
   "Charged_Upward_Slash",
 ] as const;
 
@@ -756,23 +757,25 @@ export function playerAttackClipPriority(
   variant: "spell" | "skill" | "light" = "spell",
   cycleIndex = 0,
 ): string[] {
+  /** d6 spell: spin → combo → reaping → triple → jump — no crouched `Charged_Axe_Chop`. */
   const spellLead = [
     "Double_Blade_Spin",
-    "Triple_Combo_Attack",
-    "Charged_Axe_Chop",
+    "Double_Combo_Attack",
     "Reaping_Swing",
+    "Triple_Combo_Attack",
     "Jumping_Punch",
   ] as const;
-  /** Skill tier: `Jumping_Punch` lunges to contact; `Double_Combo_Attack` root-motion read too far with face-off X. */
+  /** d4–d5 skill: lunge first, then same heavy reads; `Double_Combo_Attack` last (extra clip seek in `MonsterModel3D`). */
   const skillLead = [
     "Jumping_Punch",
+    "Double_Blade_Spin",
+    "Reaping_Swing",
     "Charged_Upward_Slash",
     "Attack",
     "Double_Combo_Attack",
   ] as const;
   const lightLead = [
     "Charged_Upward_Slash",
-    "Double_Combo_Attack",
     "Attack",
     "Backflip_and_Hooks",
     "Charged_Spell_Cast_2",

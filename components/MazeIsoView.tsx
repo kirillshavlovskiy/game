@@ -832,7 +832,7 @@ function PlayerMarker({
     const fdy = facingDyRef.current;
     const facingLen = Math.hypot(fdx, fdy);
     if (facingLen > 0.01) {
-      /* Grid-facing yaw only — orbit/dolly does not spin the pawn; mini-map still uses camera bearing separately. */
+      /* Grid-facing yaw — same basis as movement / minimap arrow. Do not blend toward camera (that made forward walk read as strafe). */
       targetYawRef.current = -Math.atan2(fdy, fdx);
     }
     if (!didInitPosRef.current) {
@@ -1341,13 +1341,13 @@ void useTexture.preload(MAZE_FLOOR_TEXTURE);
 void useTexture.preload(MAZE_ISO_WALL_SIDE_TEXTURE);
 
 /** Exponential depth fog — distance haze (stronger = thicker air). */
-const ATMOSPHERIC_FOG_COLOR = 0x020309;
-/** Stronger haze for horror read; still leaves near-field corridors playable. */
-const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0092;
+const ATMOSPHERIC_FOG_COLOR = 0x030408;
+/** Slightly thinner than before so walkable floor (PBR + shadows) stays readable mid-range. */
+const ATMOSPHERIC_FOG_EXP2_DENSITY = 0.0051;
 /** Every path cell gets at least this mist strength; game fog zones blend toward full opacity. */
-const CORRIDOR_BASE_MIST = 0.48;
+const CORRIDOR_BASE_MIST = 0.32;
 /** Per-cell fog wobble so neighbouring tiles read at visibly different densities. */
-const CORRIDOR_FOG_LOCAL_JITTER = 0.34;
+const CORRIDOR_FOG_LOCAL_JITTER = 0.26;
 
 function MazeAtmosphericFog() {
   const { scene } = useThree();
@@ -1381,8 +1381,8 @@ function CorridorFogBucketLayer({
 
   const material = useMemo(() => {
     const fMid = (bucket + 0.5) / CORRIDOR_FOG_BUCKETS;
-    const opBase = Math.min(0.99, 0.32 + fMid * 0.66);
-    const opacity = layer === 0 ? opBase * 0.91 : opBase * 0.79;
+    const opBase = Math.min(0.96, 0.22 + fMid * 0.76);
+    const opacity = layer === 0 ? opBase * 0.82 : opBase * 0.68;
     return new THREE.MeshStandardMaterial({
       map: fogTex,
       transparent: true,
@@ -1390,9 +1390,9 @@ function CorridorFogBucketLayer({
       depthWrite: false,
       roughness: 1,
       metalness: 0,
-      color: layer === 0 ? "#5a6278" : "#4a5268",
-      emissive: layer === 0 ? "#0a0d14" : "#080a10",
-      emissiveIntensity: layer === 0 ? 0.038 : 0.026,
+      color: layer === 0 ? "#7a8498" : "#6a7388",
+      emissive: layer === 0 ? "#151820" : "#12151c",
+      emissiveIntensity: layer === 0 ? 0.022 : 0.015,
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -1,
@@ -1452,7 +1452,7 @@ function CorridorFogVolumes({
   const fogTex = useTexture(MAZE_CORRIDOR_FOG_TEXTURE_URL);
   useEffect(() => {
     fogTex.wrapS = fogTex.wrapT = THREE.RepeatWrapping;
-    fogTex.repeat.set(2.85, 2.85);
+    fogTex.repeat.set(2.2, 2.2);
   }, [fogTex]);
 
   const cells = useMemo(() => {
@@ -2071,103 +2071,6 @@ function FloorStains({
 }
 
 /* ------------------------------------------------------------------ */
-/*  Wet floor puddles — glossy under fog (no extra texture assets)    */
-/* ------------------------------------------------------------------ */
-type FloorPuddleInstance = { x: number; z: number; rot: number; sx: number; sz: number };
-
-function FloorWetPuddles({
-  grid,
-  mapWidth,
-  mapHeight,
-}: {
-  grid: string[][];
-  mapWidth: number;
-  mapHeight: number;
-}) {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
-  const dummy = useMemo(() => new THREE.Object3D(), []);
-
-  const instances = useMemo(() => {
-    const out: FloorPuddleInstance[] = [];
-    for (let y = 0; y < mapHeight; y++) {
-      for (let x = 0; x < mapWidth; x++) {
-        if (grid[y]?.[x] === WALL) continue;
-        const h1 = cellHash(x, y, 701);
-        if (h1 > 360) continue;
-        const rot = (cellHash(x, y, 702) / 1000) * Math.PI * 2;
-        const ox = ((cellHash(x, y, 703) / 1000) - 0.5) * CS * 0.52;
-        const oz = ((cellHash(x, y, 704) / 1000) - 0.5) * CS * 0.52;
-        const sx = CS * (0.26 + (cellHash(x, y, 705) / 1000) * 0.55);
-        const sz = CS * (0.2 + (cellHash(x, y, 706) / 1000) * 0.48);
-        out.push({ x: x * CS + ox, z: y * CS + oz, rot, sx, sz });
-        if (cellHash(x, y, 707) > 935) {
-          const ox2 = ((cellHash(x, y, 708) / 1000) - 0.5) * CS * 0.35;
-          const oz2 = ((cellHash(x, y, 709) / 1000) - 0.5) * CS * 0.35;
-          const rot2 = (cellHash(x, y, 710) / 1000) * Math.PI * 2;
-          out.push({
-            x: x * CS + ox2,
-            z: y * CS + oz2,
-            rot: rot2,
-            sx: CS * (0.14 + (cellHash(x, y, 711) / 1000) * 0.22),
-            sz: CS * (0.11 + (cellHash(x, y, 712) / 1000) * 0.2),
-          });
-        }
-      }
-    }
-    return out;
-  }, [grid, mapWidth, mapHeight]);
-
-  const material = useMemo(
-    () =>
-      new THREE.MeshPhysicalMaterial({
-        color: "#060a10",
-        roughness: 0.09,
-        metalness: 0.62,
-        transparent: true,
-        opacity: 0.78,
-        depthWrite: false,
-        clearcoat: 1,
-        clearcoatRoughness: 0.05,
-        envMapIntensity: 0.35,
-        polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
-      }),
-    [],
-  );
-
-  useEffect(() => () => material.dispose(), [material]);
-
-  useLayoutEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh || instances.length === 0) return;
-    for (let i = 0; i < instances.length; i++) {
-      const p = instances[i]!;
-      dummy.position.set(p.x, FLOOR_Y + 0.028, p.z);
-      dummy.rotation.set(-Math.PI / 2, 0, p.rot);
-      dummy.scale.set(p.sx, p.sz, 1);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(i, dummy.matrix);
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-    mesh.computeBoundingSphere();
-  }, [instances, dummy]);
-
-  if (instances.length === 0) return null;
-
-  return (
-    <instancedMesh
-      ref={meshRef}
-      args={[undefined, material, instances.length]}
-      receiveShadow
-      frustumCulled
-    >
-      <circleGeometry args={[0.5, 28]} />
-    </instancedMesh>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /*  Camera controller: smooth follow, pan default, rotate on demand    */
 /* ------------------------------------------------------------------ */
 /** Camera height above the floor while auto-following (slightly high so side walls clear the marker in 1-wide halls). */
@@ -2196,13 +2099,6 @@ const CAM_POS_LERP = 0.2;
 /** How fast the camera rotates to face behind the player (0-1 per frame). */
 const CAM_ROT_LERP = 0.18;
 
-/**
- * Raw screen-space drag on the 3D canvas is negated so yaw/pitch match the minimap green-ring
- * `orbitLookByPixelDelta` path (tangential + radial pixels). Ring calls `applyManualOrbitFromDelta` directly;
- * canvas / tilt use this sign so both inputs orbit the same way.
- */
-const CANVAS_ORBIT_DELTA_SIGN = -1;
-
 function applyManualOrbitFromDelta(
   camera: THREE.Camera,
   controlsRef: { current: any },
@@ -2216,9 +2112,8 @@ function applyManualOrbitFromDelta(
   const target = ctrl.target;
   const offset = camera.position.clone().sub(target);
   const spherical = new THREE.Spherical().setFromVector3(offset);
-  /* +dx → +theta (after CANVAS_ORBIT_DELTA_SIGN on canvas): orbit / ring stay aligned. */
-  spherical.theta += dxPx * 0.005;
-  spherical.phi = Math.max(0.2, Math.min(Math.PI / 2.2, spherical.phi + dyPx * 0.005));
+  spherical.theta -= dxPx * 0.005;
+  spherical.phi = Math.max(0.2, Math.min(Math.PI / 2.2, spherical.phi - dyPx * 0.005));
   offset.setFromSpherical(spherical);
   camera.position.copy(target).add(offset);
   camera.lookAt(target);
@@ -2366,14 +2261,7 @@ function CameraController({
       dragAccumRef.current += Math.abs(dx) + Math.abs(dy);
       dragRef.current = { x: e.clientX, y: e.clientY };
       mapRotationLog("canvasOrbitDelta", { dx, dy, kind: "mouse", touchUi }, 80);
-      applyManualOrbitFromDelta(
-        camera,
-        controlsRef,
-        CANVAS_ORBIT_DELTA_SIGN * dx,
-        CANVAS_ORBIT_DELTA_SIGN * dy,
-        hasManualCameraRef,
-        manualOffsetRef,
-      );
+      applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
     const onMouseUp = () => {
       if (dragAccumRef.current > DRAG_SUPPRESS_THRESHOLD_PX) {
@@ -2426,14 +2314,7 @@ function CameraController({
       const dy = rawDy * touchSens;
       dragRef.current = { x: t.clientX, y: t.clientY, touchId: d.touchId };
       mapRotationLog("canvasOrbitDelta", { dx, dy, rawDx, rawDy, kind: "touch", touchUi }, 80);
-      applyManualOrbitFromDelta(
-        camera,
-        controlsRef,
-        CANVAS_ORBIT_DELTA_SIGN * dx,
-        CANVAS_ORBIT_DELTA_SIGN * dy,
-        hasManualCameraRef,
-        manualOffsetRef,
-      );
+      applyManualOrbitFromDelta(camera, controlsRef, dx, dy, hasManualCameraRef, manualOffsetRef);
     };
     const onTouchEnd = (e: TouchEvent) => {
       const d = dragRef.current;
@@ -2490,14 +2371,7 @@ function CameraController({
       if (dg > 180) dg -= 360;
       if (dg < -180) dg += 360;
       if (Math.abs(dg) > 55 || Math.abs(db) > 55) return;
-      applyManualOrbitFromDelta(
-        camera,
-        controlsRef,
-        CANVAS_ORBIT_DELTA_SIGN * dg * 4,
-        CANVAS_ORBIT_DELTA_SIGN * db * 4,
-        hasManualCameraRef,
-        manualOffsetRef,
-      );
+      applyManualOrbitFromDelta(camera, controlsRef, dg * 4, db * 4, hasManualCameraRef, manualOffsetRef);
     };
     window.addEventListener("deviceorientation", onOrient, true);
     return () => window.removeEventListener("deviceorientation", onOrient, true);
@@ -2684,14 +2558,8 @@ function CameraController({
     // Keep manual camera adjustment persistent while following the player.
     // Reset: explicit reset, turn/facing change, teleport/catapult framing, or a touch step to a new tile.
 
-    /**
-     * Orbit pivot must track the player every frame (including rotate mode / after minimap orbit).
-     * Previously we skipped the whole block while `rotateMode`, so the target froze and the rig stopped
-     * following moves. Only suppress smooth camera lerp while a finger/mouse drag or minimap ring gesture
-     * is actively driving the view (those paths update offset each event; we snap rig to target+offset here).
-     */
-    const activeOrbitDrag = !!dragRef.current || orbitRingGesture;
-    if (!lockCameraToAutoFraming) {
+    // Auto-follow current player and orient behind movement direction unless user is actively rotating.
+    if (!rotateMode && !dragRef.current && !orbitRingGesture) {
       const transitionBlend = transitionBlendRef.current;
       let posLerp = THREE.MathUtils.lerp(CAM_POS_LERP, 0.42, transitionBlend);
       let rotLerp = THREE.MathUtils.lerp(CAM_ROT_LERP, 0.34, transitionBlend);
@@ -2700,13 +2568,10 @@ function CameraController({
         rotLerp = Math.max(rotLerp, 0.44);
       }
       ctrl.target.lerp(desiredTarget, posLerp);
+      // Keep a stable camera offset from the current target to prevent tilt drift.
       const desiredCameraPos = ctrl.target.clone().add(desiredOffset);
-      if (activeOrbitDrag) {
-        camera.position.copy(desiredCameraPos);
-      } else {
-        camera.position.lerp(desiredCameraPos, rotLerp);
-        transitionBlendRef.current = Math.max(0, transitionBlend * 0.9 - 0.012);
-      }
+      camera.position.lerp(desiredCameraPos, rotLerp);
+      transitionBlendRef.current = Math.max(0, transitionBlend * 0.9 - 0.012);
       ctrl.update();
     }
 
@@ -2790,7 +2655,7 @@ function CameraController({
         orbitRingGesture,
         lockCameraToAutoFraming,
         hasManualCamera: hasManualCameraRef.current,
-        autoFollowLerping: !lockCameraToAutoFraming && !dragRef.current && !orbitRingGesture,
+        autoFollowLerping: !rotateMode && !dragRef.current && !orbitRingGesture,
         cameraDrivesFacingGrid,
         bearingDiag,
         hB_len: hBLen,
@@ -3576,12 +3441,12 @@ function MazeScene({
   return (
     <>
       <MazeAtmosphericFog />
-      {/* Slightly dimmer fill so volumetric + exp fog reads thicker without crushing torches. */}
-      <ambientLight intensity={0.12} color="#252a38" />
-      <hemisphereLight args={["#7a8498", "#3d3632", 0.26]} />
+      {/* Base fill: was ~0.008 — floor is MeshStandard + shadowed; walls use MeshBasic tops so they stayed bright alone. */}
+      <ambientLight intensity={0.16} color="#2b3040" />
+      <hemisphereLight args={["#8a95a8", "#4a423c", 0.32]} />
       <directionalLight
         position={[18, 26, 10]}
-        intensity={0.2}
+        intensity={0.22}
         color="#c8d2e2"
         castShadow={!touchUi}
         shadow-mapSize-width={shadowMapSize}
@@ -3597,9 +3462,8 @@ function MazeScene({
       <directionalLight position={[-12, 12, -12]} intensity={0.072} color="#8a96b0" />
 
       <FloorTiles grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} onCellClick={onCellClick} />
-      <FloorStains grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
-      <FloorWetPuddles grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
       <CorridorFogVolumes grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
+      <FloorStains grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
       <WallTorches
         grid={grid}
         mapWidth={mapWidth}
