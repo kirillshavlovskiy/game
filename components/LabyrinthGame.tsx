@@ -3238,6 +3238,8 @@ export default function LabyrinthGame() {
         playerHpAtEnd?: number;
         /** Last strike tier on the killing blow — 3D death fall direction after footer snapshot clears */
         finishingStrikeSegment?: "spell" | "skill" | "light";
+        /** Same string as in-fight \`sessionId-monsterIndex-type-playerIndex\` so CombatScene3D keeps one mount after combatState clears. */
+        combatEncounterKey?: string;
       })
     | null
   >(null);
@@ -5203,6 +5205,7 @@ export default function LabyrinthGame() {
               bonusReward: null,
               bonusRewardOptions,
               bonusRewardApplied: bonusRewardOptions.length === 0,
+              combatEncounterKey: `${combat.sessionId}-${combat.monsterIndex}-${combat.monsterType}-${combat.playerIndex}`,
               ...(glanceKilled ? { monsterEffect: "glancing_kill" as const } : {}),
               ...(draculaAttackSegment ? { finishingStrikeSegment: draculaAttackSegment } : {}),
             };
@@ -10480,6 +10483,16 @@ export default function LabyrinthGame() {
               const headerSurpriseVisible =
                 !!combatState && !combatResult && combatHasRolledRef.current;
               const inActiveFight = !!combatState;
+              /** 3D win: use `defeated` immediately — `combatVictoryPhase` lags one frame behind useEffect and briefly showed `hurt` (alive) after lab flush. */
+              const postFight3dMonsterWin =
+                !inActiveFight &&
+                !!combatResult?.won &&
+                headerMt != null &&
+                isMonster3DEnabled() &&
+                getMonsterGltfPath(headerMt, "idle") != null;
+              const combatVictoryPhaseForSprites: "hurt" | "defeated" = postFight3dMonsterWin
+                ? "defeated"
+                : combatVictoryPhase;
               /** Between rolls: calm idle (full HP) or recover (wounded). Surprise stance only drives rolling pose + combat math — not the static portrait between strikes. */
               const headerMonsterCombatState: MonsterSpriteState = (() => {
                 if (inActiveFight && headerMt) {
@@ -10549,7 +10562,11 @@ export default function LabyrinthGame() {
                   return combatMonsterStance;
                 }
                 if (combatResult?.monsterType) {
-                  return getCombatResultMonsterSpriteState(combatResult, combatVictoryPhase, combatResult.monsterType);
+                  return getCombatResultMonsterSpriteState(
+                    combatResult,
+                    combatVictoryPhaseForSprites,
+                    combatResult.monsterType,
+                  );
                 }
                 return "neutral";
               })();
@@ -10592,6 +10609,9 @@ export default function LabyrinthGame() {
                 playerOffhandArmourGlb[headerPi]
               );
               const combatPlayerGlb = getPlayer3DGlb(playerAvatars[headerPi]);
+              /** Phone landscape + merged 3D: wide strip + figures low in frame — extra flex gap and margins so HP bars clear feet. */
+              const landscape3dMobileFaceoffAir =
+                useCombatLandscapeFaceoff && !!monsterGltfPath && isMobile && isLandscapeCompact;
 
               const playerGltfVisualState: MonsterSpriteState = (() => {
                 if (combatResult?.playerDefeated && !combatState) return "defeated";
@@ -10759,11 +10779,13 @@ export default function LabyrinthGame() {
                   ? handleCombatRecoveryClipFinished
                   : undefined;
               const combat3dInstanceKey =
-                combatState != null && headerMt != null
-                  ? `c3d-${combatState.sessionId}-${combatState.monsterIndex}-${headerMt}-${headerPi}`
-                  : headerMt != null
-                    ? `c3d-post-${headerPi}-${headerMt}`
-                    : "c3d";
+                headerMt != null
+                  ? combatState != null
+                    ? `c3d-${combatState.sessionId}-${combatState.monsterIndex}-${headerMt}-${headerPi}`
+                    : combatResult?.combatEncounterKey != null
+                      ? `c3d-${combatResult.combatEncounterKey}`
+                      : `c3d-post-${headerPi}-${headerMt}`
+                  : "c3d";
               let monsterMaxHp = 1;
               let monsterCurHp = 1;
               if (headerMt) {
@@ -11222,7 +11244,12 @@ export default function LabyrinthGame() {
                       ...combatLandscapeFaceoffWrapStyle,
                       position: "relative",
                       ...(useCombatLandscapeFaceoff
-                        ? { flex: 1, minHeight: 0, overflow: "hidden", gap: isMobile ? 6 : 10 }
+                        ? {
+                            flex: 1,
+                            minHeight: 0,
+                            overflow: "hidden",
+                            gap: landscape3dMobileFaceoffAir ? 24 : isMobile ? 10 : 12,
+                          }
                         : {}),
                       ...(combatLandscapePostFight
                         ? {
@@ -11316,11 +11343,12 @@ export default function LabyrinthGame() {
                           justifyContent: "center",
                           width: "100%",
                           overflow: "hidden",
-                          marginBottom:
-                            monsterGltfPath && headerMt
+                          marginBottom: landscape3dMobileFaceoffAir
+                            ? 32
+                            : monsterGltfPath && headerMt
                               ? isMobile
-                                ? 14
-                                : 18
+                                ? 18
+                                : 22
                               : isMobile && isLandscapeCompact && useCombatLandscapeFaceoff
                                 ? 8
                                 : combatActiveFitViewport
@@ -11560,7 +11588,13 @@ export default function LabyrinthGame() {
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
                         gap: "4px 8px",
-                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
+                        marginTop: monsterGltfPath && headerMt
+                          ? landscape3dMobileFaceoffAir
+                            ? 40
+                            : isMobile
+                              ? 26
+                              : 30
+                          : 0,
                         marginBottom: 2,
                         width: "100%",
                         alignItems: "center",
@@ -12356,7 +12390,13 @@ export default function LabyrinthGame() {
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
                         gap: "4px 8px",
-                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
+                        marginTop: monsterGltfPath && headerMt
+                          ? landscape3dMobileFaceoffAir
+                            ? 40
+                            : isMobile
+                              ? 26
+                              : 30
+                          : 0,
                         marginBottom: 1,
                         width: "100%",
                         alignItems: "center",
