@@ -719,6 +719,18 @@ const COMBAT_LANDSCAPE_CENTER_COL_WIDTH = "clamp(160px, min(44vw, 56vh), 340px)"
 /** No `vh` in the middle term — short landscape height must not narrow the dice reroll dialog. */
 const COMBAT_LANDSCAPE_CENTER_COL_WIDTH_REROLL = "clamp(160px, 44vw, 340px)";
 const COMBAT_LANDSCAPE_CENTER_COL_MAX_W = "min(64vw, 400px)";
+/** Player | info | monster HP row — min column widths + gap so tracks never touch or stack wrong. */
+const combatHpBarsRowGridStyleBase: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(4.75rem, 1fr) minmax(2.25rem, auto) minmax(4.75rem, 1fr)",
+  columnGap: 14,
+  rowGap: 4,
+  width: "100%",
+  maxWidth: "100%",
+  alignItems: "center",
+  boxSizing: "border-box",
+  isolation: "isolate",
+};
 /** Combat modal uses maxHeight only so it fits viewport; no fixed height. */
 /** Bonus loot carousel — icon fits inside a fixed slot so the pick button does not resize per asset */
 const COMBAT_BONUS_LOOT_ICON_PX = 96;
@@ -11776,18 +11788,24 @@ export default function LabyrinthGame() {
                     </div>
                     <div
                       style={{
+                        ...combatHpBarsRowGridStyleBase,
                         position: "relative",
                         zIndex: 2,
-                        display: "grid",
-                        gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
-                        gap: "4px 8px",
-                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 26 : 28) : 0,
                         marginBottom: 2,
-                        width: "100%",
-                        alignItems: "center",
                       }}
                     >
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          gap: 2,
+                          minWidth: 0,
+                          maxWidth: "100%",
+                          overflow: "hidden",
+                        }}
+                      >
                         {pHp != null ? (
                           <>
                             <span style={{ fontSize: "0.68rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
@@ -11798,7 +11816,7 @@ export default function LabyrinthGame() {
                                   height: "100%",
                                   background: pFill,
                                   transition: "width 0.25s ease",
-                                  boxShadow: `0 0 10px ${pGlow}`,
+                                  boxShadow: `0 0 6px ${pGlow}`,
                                 }}
                               />
                             </div>
@@ -11816,12 +11834,23 @@ export default function LabyrinthGame() {
                           alignItems: "center",
                           justifyContent: "center",
                           alignSelf: "center",
-                          padding: "0 2px",
+                          padding: "0 4px",
+                          flexShrink: 0,
                         }}
                       >
                         {combatInfoTriggerEl}
                       </div>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          gap: 2,
+                          minWidth: 0,
+                          maxWidth: "100%",
+                          overflow: "hidden",
+                        }}
+                      >
                         {headerMt ? (
                           <>
                             <span style={{ fontSize: "0.68rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
@@ -12303,19 +12332,25 @@ export default function LabyrinthGame() {
 
                     <div
                       style={{
+                        ...combatHpBarsRowGridStyleBase,
                         position: "relative",
                         zIndex: 2,
                         gridColumn: "1 / -1",
-                        display: "grid",
-                        gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
-                        gap: "4px 8px",
-                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 26 : 28) : 0,
                         marginBottom: 1,
-                        width: "100%",
-                        alignItems: "center",
                       }}
                     >
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          gap: 2,
+                          minWidth: 0,
+                          maxWidth: "100%",
+                          overflow: "hidden",
+                        }}
+                      >
                         {pHp != null ? (
                           <>
                             <span style={{ fontSize: "0.68rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
@@ -12326,7 +12361,7 @@ export default function LabyrinthGame() {
                                   height: "100%",
                                   background: pFill,
                                   transition: "width 0.25s ease",
-                                  boxShadow: `0 0 10px ${pGlow}`,
+                                  boxShadow: `0 0 6px ${pGlow}`,
                                 }}
                               />
                             </div>
@@ -12344,12 +12379,23 @@ export default function LabyrinthGame() {
                           alignItems: "center",
                           justifyContent: "center",
                           alignSelf: "center",
-                          padding: "0 2px",
+                          padding: "0 4px",
+                          flexShrink: 0,
                         }}
                       >
                         {combatInfoTriggerEl}
                       </div>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          gap: 2,
+                          minWidth: 0,
+                          maxWidth: "100%",
+                          overflow: "hidden",
+                        }}
+                      >
                         {headerMt ? (
                           <>
                             <span style={{ fontSize: "0.68rem", color: "#c8c8d0", letterSpacing: "0.04em" }}>HP</span>
@@ -16872,13 +16918,13 @@ const combatLandscapeFaceoffWrapStyle: React.CSSProperties = {
 /** HP track with strong bottom edge (underline look) */
 const combatHpBarUnderlineTrack: React.CSSProperties = {
   width: "100%",
-  maxWidth: 200,
+  maxWidth: "100%",
   height: 9,
   background: "rgba(20,20,28,0.95)",
   borderRadius: 2,
   borderBottom: "3px solid #5a5a6a",
   overflow: "hidden",
-  boxSizing: "content-box",
+  boxSizing: "border-box",
   paddingBottom: 1,
 };
 
