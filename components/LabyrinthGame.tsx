@@ -8686,6 +8686,18 @@ export default function LabyrinthGame() {
   const isoPlayRootViewportFill =
     mazeMapView === "iso" && (mobileIsoEdgeToEdge || (isoImmersiveUi && isMobile));
 
+  /**
+   * Fixed bottom minimap + joystick strip (non-immersive mobile, or immersive while maze WebGL is unmounted e.g.
+   * `combatResult`). When immersive **and** the iso shell is mounted, the same controls already render **inside**
+   * `isoPlayRootRef` — omit this strip or they duplicate.
+   */
+  const showMobileIsoFixedHudStrip =
+    isMobile &&
+    showMoveGrid &&
+    lab &&
+    mazeMapView === "iso" &&
+    (!isoImmersiveUi || combatResult != null);
+
   /** Unified combat scene: dice + roll/run live in the face-off row; hide duplicate lower dice strip. */
   const useCombatLandscapeFaceoff =
     combatState !== null && combatResult === null;
@@ -14863,7 +14875,7 @@ export default function LabyrinthGame() {
         </>
       )}
 
-      {isMobile && showMoveGrid && lab && mazeMapView === "iso" ? (
+      {showMobileIsoFixedHudStrip ? (
             <div
               style={{
                 position: "fixed",

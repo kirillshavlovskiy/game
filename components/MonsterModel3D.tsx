@@ -21,8 +21,9 @@ import type { MonsterType } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
 import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
 import {
-  approachPhaseSeparationHalf,
   COMBAT_STRIKE_PICK_SEPARATION_HALF,
+  combatWalkInEndSeparationHalf,
+  lerpWalkInSeparationHalf,
   PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC,
   rowMonsterHitsPlayer,
   rowPlayerHitsMonster,
@@ -126,7 +127,13 @@ export function combatFaceOffPositions(args: {
     monsterVisualState === "attack" ||
     inPostHitPose;
   if (!useStrikeContactSpacing) {
-    const h = approachPhaseSeparationHalf(rollingApproachBlend) + sk;
+    const walkEnd = combatWalkInEndSeparationHalf({
+      playerAttackVariant,
+      draculaAttackVariant,
+      playerVisualState,
+      monsterVisualState,
+    });
+    const h = lerpWalkInSeparationHalf(rollingApproachBlend, walkEnd) + sk;
     return { playerPosX: -h, monsterPosX: h };
   }
 
@@ -285,27 +292,22 @@ function applyMonsterHurtClipContactSync(
 }
 
 /**
- * Player `attack`: skip into clip (lead-in from `combat3dContact` / `resolveCombat3dClipLeads`).
- * `Double_Combo_Attack` hits late — add `PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC` when that clip is active.
- * Monster `attack` is **not** seek-skipped here — only player `hurt` lead is tuned to monster contact in the resolver.
+ * Player `attack`: skip into clip. `seekSec` is the **final** offset in seconds (base lead from
+ * `resolveCombat3dClipLeads` plus {@link PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC} when the resolved clip is
+ * `Double_Combo_Attack`, and hunt→attack crossfade backoff applied **before** this call). Monster `attack` is not
+ * seek-skipped here.
  */
 function applyPlayerAttackClipSkillLeadIn(
   act: THREE.AnimationAction,
   isPlayerModel: boolean,
   visualState: Monster3DSpriteState,
-  leadInSec: number,
-  resolvedClipName?: string | null,
+  seekSec: number,
 ): void {
   if (!isPlayerModel || visualState !== "attack") return;
   const clip = act.getClip();
   if (!clip || clip.duration <= 0) return;
-  const nm = resolvedClipName ?? clip.name ?? "";
-  const isDoubleCombo = /Double_Combo_Attack/i.test(nm);
-  let t = Math.max(0, leadInSec);
-  if (t <= 0 && !isDoubleCombo) return;
-  if (isDoubleCombo) {
-    t += PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC;
-  }
+  const t = Math.max(0, seekSec);
+  if (t <= 0) return;
   act.time = Math.min(t, Math.max(0, clip.duration - 0.04));
 }
 
@@ -1205,13 +1207,24 @@ function PositionedGltfSubject(
         outgoingLocomotion !== act &&
         (outgoingLocomotion.getEffectiveWeight() > 1e-4 || outgoingLocomotion.isRunning());
       /**
-       * Hunt→incoming clip: time advances for the whole crossfade — back up seek so the intended frame lands when weight reaches 1.
+       * Hunt→incoming clip: time advances for the whole crossfade — back up seek so the intended frame lands when
+       * weight reaches 1. `Double_Combo_Attack` extra lead must be folded **before** subtracting fade; otherwise
+       * `max(0, raw - fade)` is often 0 and the extra is applied after, starting mid-clip then advancing past the
+       * tuned contact frame (reads as two combo beats / duplicate action).
        */
       const rawPlayerAttackLead = playerAttackLeadRef.current;
+      const playerAttackDoubleComboExtra =
+        rest.isPlayerModel &&
+        rest.visualState === "attack" &&
+        !!pick &&
+        /Double_Combo_Attack/i.test(pick)
+          ? PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC
+          : 0;
+      const playerAttackFullSeekSec = rawPlayerAttackLead + playerAttackDoubleComboExtra;
       const playerAttackSeekLead =
         useLocomotionCross && rest.isPlayerModel && rest.visualState === "attack"
-          ? Math.max(0, rawPlayerAttackLead - locomotionHandoffFadeSec)
-          : rawPlayerAttackLead;
+          ? Math.max(0, playerAttackFullSeekSec - locomotionHandoffFadeSec)
+          : playerAttackFullSeekSec;
       const rawPlayerHurtLead = playerHurtStartRef.current;
       const playerHurtSeekLead =
         useLocomotionCross && rest.isPlayerModel && (rest.visualState === "hurt" || rest.visualState === "knockdown")
@@ -1225,13 +1238,13 @@ function PositionedGltfSubject(
         !!playerJumpKillRef.current,
       );
       applyMonsterHurtClipContactSync(act, !!rest.isPlayerModel, rest.visualState, monsterHurtStartRef.current);
-      applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackSeekLead, pick);
+      applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackSeekLead);
       if (loops) { act.setLoop(THREE.LoopRepeat, Infinity); act.clampWhenFinished = false; }
       else { act.setLoop(THREE.LoopOnce, 1); act.clampWhenFinished = true; if (onFinishedRef.current) { actForListener = act; mixer.addEventListener("finished", onFin); } }
       if (useLocomotionCross) {
         act.play();
         outgoingLocomotion.crossFadeTo(act, locomotionHandoffFadeSec, false);
-        applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackSeekLead, pick);
+        applyPlayerAttackClipSkillLeadIn(act, !!rest.isPlayerModel, rest.visualState, playerAttackSeekLead);
         applyPlayerHurtClipContactSync(
           act,
           !!rest.isPlayerModel,

@@ -108,8 +108,8 @@ export const MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER: Record<Combat3dStrike
 };
 
 /**
- * Merged player `Double_Combo_Attack`: impact is late in the clip — add this on top of table `attackerLeadInSec` **only**
- * when that clip is selected (`applyPlayerAttackClipSkillLeadIn` in `MonsterModel3D`), so contact reads against the monster.
+ * Merged player `Double_Combo_Attack`: impact is late in the clip — add on top of table `attackerLeadInSec` when that
+ * clip is selected; `MonsterModel3D` folds this into full seek **before** hunt→attack crossfade backoff.
  */
 export const PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC = 0.16;
 
@@ -139,8 +139,8 @@ export const PLAYER_HITS_MONSTER: Record<Combat3dStrikeTier, Record<Combat3dDefe
     hurt: {
       /**
        * Tier leads with **`Jumping_Punch`** — keep base seek **low** so skill strikes read soon after hunt crossfade.
-       * **`Double_Combo_Attack`** adds {@link PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC} in `MonsterModel3D` only
-       * for that clip so the combo hits nearer the monster (default seek was too early in the clip).
+       * **`Double_Combo_Attack`**: {@link PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC} is folded into the seek in
+       * `PositionedGltfSubject` (with hunt→attack fade backoff) so contact reads without a double-beat from wrong timing.
        */
       separationHalf: 0.54,
       attackerLeadInSec: 0.12,
@@ -206,10 +206,17 @@ const MUTUAL_ATTACK_HALF_FLOOR = 0.38;
 /** Hunt-phase walk-in duration for merged 3D — same timing/smoothstep as `Monster3dContactPairLab` connected sequence. */
 export const COMBAT_FACEOFF_APPROACH_DURATION_MS = 2200;
 
-/** Half-distance during idle→strike walk-in (same lerp as `!useStrikeContactSpacing` in `resolveCombat3dFaceOffSeparationHalf`). */
-export function approachPhaseSeparationHalf(rollingApproachBlend: number): number {
+/**
+ * Idle → face lerp to `walkInEndHalf` (world X half **before** skeleton extra — same as contact table rows).
+ */
+export function lerpWalkInSeparationHalf(rollingApproachBlend: number, walkInEndHalf: number): number {
   const t = Math.max(0, Math.min(1, rollingApproachBlend));
-  return COMBAT_IDLE_SEPARATION_HALF * (1 - t) + COMBAT_STRIKE_PICK_SEPARATION_HALF * t;
+  return COMBAT_IDLE_SEPARATION_HALF * (1 - t) + walkInEndHalf * t;
+}
+
+/** Half-distance during idle→strike walk-in using legacy 0.72 end (face-off prefers {@link combatWalkInEndSeparationHalf}). */
+export function approachPhaseSeparationHalf(rollingApproachBlend: number): number {
+  return lerpWalkInSeparationHalf(rollingApproachBlend, COMBAT_STRIKE_PICK_SEPARATION_HALF);
 }
 
 /**
@@ -219,8 +226,9 @@ export function approachPhaseSeparationHalf(rollingApproachBlend: number): numbe
 export function contactJumpStrikeLeadMultiplier(
   rollingApproachBlend: number,
   tightFaceOffSeparationHalf: number,
+  walkInEndHalf: number = COMBAT_STRIKE_PICK_SEPARATION_HALF,
 ): number {
-  const sep = approachPhaseSeparationHalf(rollingApproachBlend);
+  const sep = lerpWalkInSeparationHalf(rollingApproachBlend, walkInEndHalf);
   const wide = COMBAT_IDLE_SEPARATION_HALF;
   if (sep <= tightFaceOffSeparationHalf + 1e-4) return 1;
   if (sep >= wide - 1e-4) return 0;
@@ -228,10 +236,14 @@ export function contactJumpStrikeLeadMultiplier(
 }
 
 /** Monster spell (Jumping_Punch) vs standing player — scales monster attack skip + player hurt sync from approach blend. */
-export function monsterSpellJumpContactLeadMultiplier(rollingApproachBlend: number): number {
+export function monsterSpellJumpContactLeadMultiplier(
+  rollingApproachBlend: number,
+  walkInEndHalf: number = COMBAT_STRIKE_PICK_SEPARATION_HALF,
+): number {
   return contactJumpStrikeLeadMultiplier(
     rollingApproachBlend,
     MONSTER_HITS_PLAYER.spell.hurt.separationHalf,
+    walkInEndHalf,
   );
 }
 
@@ -239,10 +251,14 @@ export function monsterSpellJumpContactLeadMultiplier(rollingApproachBlend: numb
  * Player skill jump vs standing monster — use the **same** tight half as monster spell `Jumping_Punch` (0.4) so
  * approach blend scales lead-in like monster spell; player face-off X uses `PLAYER_HITS_MONSTER.skill.hurt.separationHalf` (wider in-table).
  */
-export function playerSkillJumpContactLeadMultiplier(rollingApproachBlend: number): number {
+export function playerSkillJumpContactLeadMultiplier(
+  rollingApproachBlend: number,
+  walkInEndHalf: number = COMBAT_STRIKE_PICK_SEPARATION_HALF,
+): number {
   return contactJumpStrikeLeadMultiplier(
     rollingApproachBlend,
     MONSTER_HITS_PLAYER.spell.hurt.separationHalf,
+    walkInEndHalf,
   );
 }
 
@@ -277,6 +293,24 @@ export function rowPlayerHitsMonster(
 ): Combat3dContactRow {
   const t = coerceStrikeTier(tier);
   return PLAYER_HITS_MONSTER[t][defenderPoseFromVisual(monsterState)];
+}
+
+/**
+ * Walk-in lerp target at approach blend = 1: align with standing-contact table halves so flipping to `attack`/`hurt`
+ * does not pop the rigs (legacy 0.72 vs ~0.4–0.56 read as a second lunge with root motion). Capped at
+ * {@link COMBAT_STRIKE_PICK_SEPARATION_HALF}.
+ */
+export function combatWalkInEndSeparationHalf(args: {
+  playerAttackVariant?: Combat3dStrikeTier;
+  draculaAttackVariant?: Combat3dStrikeTier;
+  playerVisualState: Monster3DSpriteState;
+  monsterVisualState: Monster3DSpriteState;
+}): number {
+  const pt = coerceStrikeTier(args.playerAttackVariant);
+  const mt = coerceStrikeTier(args.draculaAttackVariant);
+  const p = rowPlayerHitsMonster(pt, args.monsterVisualState).separationHalf;
+  const m = rowMonsterHitsPlayer(mt, args.playerVisualState).separationHalf;
+  return Math.min(COMBAT_STRIKE_PICK_SEPARATION_HALF, Math.max(p, m));
 }
 
 /**
@@ -398,7 +432,13 @@ export function resolveCombat3dFaceOffSeparationHalf(args: Combat3dFaceOffArgs):
   if (!useStrikeContactSpacing) {
     const idle = COMBAT_IDLE_SEPARATION_HALF;
     const t = Math.max(0, Math.min(1, rollingApproachBlend));
-    return idle * (1 - t) + COMBAT_STRIKE_PICK_SEPARATION_HALF * t + sk;
+    const walkEnd = combatWalkInEndSeparationHalf({
+      playerAttackVariant,
+      draculaAttackVariant,
+      playerVisualState,
+      monsterVisualState,
+    });
+    return idle * (1 - t) + walkEnd * t + sk;
   }
 
   const pAtk = playerVisualState === "attack";
@@ -498,6 +538,13 @@ export function resolveCombat3dClipLeads(args: {
 
   if (!isMergedMeshy) return zero;
 
+  const walkInEndHalf = combatWalkInEndSeparationHalf({
+    playerAttackVariant,
+    draculaAttackVariant,
+    playerVisualState,
+    monsterVisualState,
+  });
+
   const mAtk = monsterVisualState === "attack";
   const pAtk = playerVisualState === "attack";
   const pHurt = playerVisualState === "hurt";
@@ -508,7 +555,7 @@ export function resolveCombat3dClipLeads(args: {
     mAtk &&
     !pAtk &&
     playerDefenderPose === "hurt"
-      ? monsterSpellJumpContactLeadMultiplier(rollingApproachBlend)
+      ? monsterSpellJumpContactLeadMultiplier(rollingApproachBlend, walkInEndHalf)
       : 1;
 
   const monsterDefenderPose = defenderPoseFromVisual(monsterVisualState);
@@ -517,7 +564,7 @@ export function resolveCombat3dClipLeads(args: {
     pAtk &&
     !mAtk &&
     monsterDefenderPose === "hurt"
-      ? playerSkillJumpContactLeadMultiplier(rollingApproachBlend)
+      ? playerSkillJumpContactLeadMultiplier(rollingApproachBlend, walkInEndHalf)
       : 1;
 
   let meshyMonsterAttackLeadInSec = 0;

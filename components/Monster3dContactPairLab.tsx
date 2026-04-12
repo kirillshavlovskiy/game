@@ -1094,8 +1094,8 @@ bladeTwistRad: ${twist},
           World X spacing follows <strong style={{ color: "#c8d8e8" }}>Player visual</strong> /{" "}
           <strong style={{ color: "#c8d8e8" }}>Monster visual</strong> in More (and approach slider). Lead-ins and
           hunt→strike fades match <code style={{ color: "#d0c4e8" }}>resolveCombat3dClipLeads</code> for the current
-          pair. Pick a <strong style={{ color: "#c8d8e8" }}>raw clip</strong> below to bypass the state resolver and
-          inspect any animation on the loaded GLBs.
+          pair. Use the <strong style={{ color: "#c8d8e8" }}>raw clip</strong> dropdowns to bypass the state resolver
+          and inspect any animation on the loaded GLBs.
         </p>
         <div
           style={{
@@ -1146,48 +1146,7 @@ bladeTwistRad: ${twist},
         </div>
         {!faceoffClipCatalog ? (
           <p style={{ margin: 0, fontSize: "0.72rem", color: "#8899aa" }}>Loading clip index from GLBs…</p>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div>
-              <div style={{ fontSize: "0.7rem", color: "#7ec8ff", marginBottom: 4 }}>Player ({faceoffClipCatalog.player.length})</div>
-              <pre
-                style={{
-                  margin: 0,
-                  maxHeight: 160,
-                  overflow: "auto",
-                  padding: 8,
-                  borderRadius: 8,
-                  background: "rgba(0,0,0,0.45)",
-                  fontSize: "0.65rem",
-                  color: "#c8c8d8",
-                  lineHeight: 1.35,
-                }}
-              >
-                {faceoffClipCatalog.player.join("\n")}
-              </pre>
-            </div>
-            <div>
-              <div style={{ fontSize: "0.7rem", color: "#7ec8ff", marginBottom: 4 }}>
-                Monster ({faceoffClipCatalog.monster.length})
-              </div>
-              <pre
-                style={{
-                  margin: 0,
-                  maxHeight: 160,
-                  overflow: "auto",
-                  padding: 8,
-                  borderRadius: 8,
-                  background: "rgba(0,0,0,0.45)",
-                  fontSize: "0.65rem",
-                  color: "#c8c8d8",
-                  lineHeight: 1.35,
-                }}
-              >
-                {faceoffClipCatalog.monster.join("\n")}
-              </pre>
-            </div>
-          </div>
-        )}
+        ) : null}
       </details>
 
       <div
