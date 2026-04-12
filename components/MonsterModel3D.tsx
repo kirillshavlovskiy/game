@@ -2299,15 +2299,26 @@ export function CombatScene3D({
   const shortWide = compactCombatViewport && compactCombatShortWide;
   /** Camera Z / FOV / ground use this — must match live combat `width`×`height` props (see `combat3dFaceoffViewport`). */
   const compactAspect = compactCombatViewport ? width / Math.max(1, height) : 1;
+  /**
+   * Very short landscape canvases (extra modal chrome under the GL view) blow up w/h and drove `compactWideT` → 1,
+   * pushing orbit target / ground to the extreme strip preset — pivot sat too high on the torsos. Cap aspect for
+   * camera lerps so “super-wide” pixels still match a tuned framing band (~2.4:1).
+   */
+  const COMPACT_ASPECT_FOR_CAMERA_MAX = 2.42;
+  const compactAspectForCamera = compactCombatViewport
+    ? Math.min(compactAspect, COMPACT_ASPECT_FOR_CAMERA_MAX)
+    : compactAspect;
   /** 0 ≈ portrait / square canvas, 1 ≈ very wide landscape strip (lerp endpoints match former shortWide vs tall). */
   const compactWideT = compactCombatViewport
-    ? Math.min(1, Math.max(0, (compactAspect - 1.45) / 1.15))
+    ? Math.min(1, Math.max(0, (compactAspectForCamera - 1.45) / 1.15))
     : 0;
-  const battleSceneGroundY = compactCombatViewport ? THREE.MathUtils.lerp(0.26, 0.42, compactWideT) : 0;
+  const battleSceneGroundY = compactCombatViewport ? THREE.MathUtils.lerp(0.26, 0.4, compactWideT) : 0;
   /** Extra world Y on the fight `group` only — orbit target stays put so figures read higher in the canvas with air under the feet. */
-  const compactFigureLiftWorld = compactCombatViewport ? 0.09 : 0;
-  /** Single mid-body offset so orbit center matches the pair for every compact size. */
-  const compactOrbitMidBodyOffset = 0.48;
+  const compactFigureLiftWorld = compactCombatViewport ? THREE.MathUtils.lerp(0.09, 0.11, compactWideT) : 0;
+  /** Orbit pivot: slightly lower Y on wide aspects so zoom centers on mid-body, not upper chest. */
+  const compactOrbitMidBodyOffset = compactCombatViewport
+    ? THREE.MathUtils.lerp(0.47, 0.34, compactWideT)
+    : 0;
   const cameraZ = compactCombatViewport ? THREE.MathUtils.lerp(3.28, 2.34, compactWideT) : 5.35;
   const orbitTargetY = compactCombatViewport ? battleSceneGroundY + compactOrbitMidBodyOffset : 0.8;
   const cameraY = compactCombatViewport ? orbitTargetY + 0.36 : 1.0;
