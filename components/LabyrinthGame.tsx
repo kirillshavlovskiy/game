@@ -10609,8 +10609,11 @@ export default function LabyrinthGame() {
                 playerOffhandArmourGlb[headerPi]
               );
               const combatPlayerGlb = getPlayer3DGlb(playerAvatars[headerPi]);
-              /** Phone landscape + merged 3D: wide strip + figures low in frame — extra flex gap and margins so HP bars clear feet. */
-              const landscape3dMobileFaceoffAir =
+              /**
+               * Phone landscape + merged 3D: let a flex **spacer** absorb extra height below the 3D block so HP + Roll/Run
+               * sit toward the modal bottom — not bunched upward from oversized gaps/margins on the canvas.
+               */
+              const landscapeFaceoffPushChromeDown =
                 useCombatLandscapeFaceoff && !!monsterGltfPath && isMobile && isLandscapeCompact;
 
               const playerGltfVisualState: MonsterSpriteState = (() => {
@@ -11244,12 +11247,7 @@ export default function LabyrinthGame() {
                       ...combatLandscapeFaceoffWrapStyle,
                       position: "relative",
                       ...(useCombatLandscapeFaceoff
-                        ? {
-                            flex: 1,
-                            minHeight: 0,
-                            overflow: "hidden",
-                            gap: landscape3dMobileFaceoffAir ? 24 : isMobile ? 10 : 12,
-                          }
+                        ? { flex: 1, minHeight: 0, overflow: "hidden", gap: isMobile ? 6 : 10 }
                         : {}),
                       ...(combatLandscapePostFight
                         ? {
@@ -11266,11 +11264,11 @@ export default function LabyrinthGame() {
                         width: "100%",
                         ...(useCombatLandscapeFaceoff
                           ? {
-                              flex: 1,
+                              flex: landscapeFaceoffPushChromeDown ? "0 1 auto" : 1,
                               minHeight: 0,
                               display: "flex",
                               flexDirection: "column",
-                              justifyContent: "center",
+                              justifyContent: landscapeFaceoffPushChromeDown ? "flex-start" : "center",
                               alignItems: "center",
                             }
                           : {}),
@@ -11343,12 +11341,11 @@ export default function LabyrinthGame() {
                           justifyContent: "center",
                           width: "100%",
                           overflow: "hidden",
-                          marginBottom: landscape3dMobileFaceoffAir
-                            ? 32
-                            : monsterGltfPath && headerMt
+                          marginBottom:
+                            monsterGltfPath && headerMt
                               ? isMobile
-                                ? 18
-                                : 22
+                                ? 14
+                                : 18
                               : isMobile && isLandscapeCompact && useCombatLandscapeFaceoff
                                 ? 8
                                 : combatActiveFitViewport
@@ -11581,6 +11578,9 @@ export default function LabyrinthGame() {
                       </div>
                     </div>
                     </div>
+                    {landscapeFaceoffPushChromeDown ? (
+                      <div style={{ flex: 1, minHeight: 0, width: "100%" }} aria-hidden />
+                    ) : null}
                     <div
                       style={{
                         position: "relative",
@@ -11588,13 +11588,7 @@ export default function LabyrinthGame() {
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
                         gap: "4px 8px",
-                        marginTop: monsterGltfPath && headerMt
-                          ? landscape3dMobileFaceoffAir
-                            ? 40
-                            : isMobile
-                              ? 26
-                              : 30
-                          : 0,
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
                         marginBottom: 2,
                         width: "100%",
                         alignItems: "center",
@@ -12390,13 +12384,7 @@ export default function LabyrinthGame() {
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
                         gap: "4px 8px",
-                        marginTop: monsterGltfPath && headerMt
-                          ? landscape3dMobileFaceoffAir
-                            ? 40
-                            : isMobile
-                              ? 26
-                              : 30
-                          : 0,
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
                         marginBottom: 1,
                         width: "100%",
                         alignItems: "center",

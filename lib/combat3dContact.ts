@@ -5,6 +5,7 @@
  */
 import type { MonsterType } from "@/lib/labyrinth";
 import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
+import { playerAttackClipPriority } from "@/lib/monsterModels3d";
 
 export type Combat3dStrikeTier = "spell" | "skill" | "light";
 export type Combat3dDefenderPose = "hurt" | "knockdown";
@@ -112,6 +113,31 @@ export const MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER: Record<Combat3dStrike
  * clip is selected; `MonsterModel3D` folds this into full seek **before** hunt→attack crossfade backoff.
  */
 export const PLAYER_DOUBLE_COMBO_ATTACK_EXTRA_CLIP_LEAD_IN_SEC = 0.16;
+/**
+ * Tighter face-off half when the **lead** try for spell/skill (dice-rotated order) is `Double_Combo_Attack` — the clip
+ * carries little forward root motion vs `Jumping_Punch`, so table `skill.hurt` half left the drifter short of the monster.
+ */
+export const PLAYER_HITS_MONSTER_DOUBLE_COMBO_SEPARATION_HALF = 0.42;
+
+/**
+ * Pull player↔monster X closer when merged attack try-order (dice-rotated) reaches `Double_Combo_Attack` **before**
+ * `Jumping_Punch` among the first tries — same rule as which clip would win if both exist on the drifter. Spell tier
+ * can also rotate Double_Combo ahead of lunging clips.
+ */
+export function applyDoubleComboFaceOffHalfTweak(
+  separationHalf: number,
+  playerAttackVariant: Combat3dStrikeTier | undefined,
+  playerAttackClipCycleIndex: number | undefined,
+): number {
+  if (playerAttackClipCycleIndex == null) return separationHalf;
+  const v = playerAttackVariant;
+  if (v !== "skill" && v !== "spell") return separationHalf;
+  const order = playerAttackClipPriority(v, playerAttackClipCycleIndex);
+  const head = order.slice(0, 16);
+  const firstLungeOrCombo = head.find((name) => /jumping_punch|double_combo_attack/i.test(name));
+  if (!firstLungeOrCombo || !/double_combo_attack/i.test(firstLungeOrCombo)) return separationHalf;
+  return Math.min(separationHalf, PLAYER_HITS_MONSTER_DOUBLE_COMBO_SEPARATION_HALF);
+}
 
 /** Player swings at monster: tier × (monster hurt | monster knockdown). */
 export const PLAYER_HITS_MONSTER: Record<Combat3dStrikeTier, Record<Combat3dDefenderPose, Combat3dContactRow>> = {
@@ -398,6 +424,8 @@ export interface Combat3dFaceOffArgs {
   draculaAttackVariant?: Combat3dStrikeTier;
   /** When `K` (skeleton), matches `combatFaceOffPositions` extra standoff. */
   monsterType?: MonsterType | null;
+  /** Same as combat `playerAttackClipCycleIndex` (dice face) — tightens X when lead clip is Double_Combo. */
+  playerAttackClipCycleIndex?: number;
 }
 
 /** Same X positions as legacy `combatFaceOffPositions` — driven only by unified matrices + mutual inner half. */
@@ -410,6 +438,7 @@ export function resolveCombat3dFaceOffSeparationHalf(args: Combat3dFaceOffArgs):
     playerAttackVariant,
     draculaAttackVariant,
     monsterType,
+    playerAttackClipCycleIndex,
   } = args;
   const sk = skeletonFaceOffExtraSeparationHalf(monsterType);
 
@@ -482,6 +511,7 @@ export function resolveCombat3dFaceOffSeparationHalf(args: Combat3dFaceOffArgs):
     if (playerAttackVariant === "skill" && monsterVisualState === "recover") {
       h = PLAYER_HITS_MONSTER.spell.hurt.separationHalf;
     }
+    h = applyDoubleComboFaceOffHalfTweak(h, playerAttackVariant, playerAttackClipCycleIndex);
     return h + sk;
   }
 

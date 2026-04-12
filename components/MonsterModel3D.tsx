@@ -21,6 +21,7 @@ import type { MonsterType } from "@/lib/labyrinth";
 import type { StrikeTarget } from "@/lib/combatSystem";
 import type { Monster3DSpriteState } from "@/lib/monsterModels3d";
 import {
+  applyDoubleComboFaceOffHalfTweak,
   COMBAT_STRIKE_PICK_SEPARATION_HALF,
   combatWalkInEndSeparationHalf,
   lerpWalkInSeparationHalf,
@@ -89,6 +90,8 @@ export function combatFaceOffPositions(args: {
   draculaAttackVariant?: "spell" | "skill" | "light";
   /** `K` (skeleton): wider default rail — merged strikes read early at table halves. */
   monsterType?: MonsterType | null;
+  /** Dice-driven rotation of merged player attack try-order — tightens X when lead is Double_Combo_Attack. */
+  playerAttackClipCycleIndex?: number;
 }): { playerPosX: number; monsterPosX: number } {
   const {
     strikePickActive: _strikePickActive,
@@ -99,6 +102,7 @@ export function combatFaceOffPositions(args: {
     playerAttackVariant,
     draculaAttackVariant,
     monsterType,
+    playerAttackClipCycleIndex,
   } = args;
   void _strikePickActive;
   const sk = skeletonFaceOffExtraSeparationHalf(monsterType);
@@ -198,6 +202,7 @@ export function combatFaceOffPositions(args: {
     if (playerAttackVariant === "skill" && monsterVisualState === "recover") {
       h = rowPlayerHitsMonster("spell", "hurt").separationHalf;
     }
+    h = applyDoubleComboFaceOffHalfTweak(h, playerAttackVariant, playerAttackClipCycleIndex);
     h += sk;
     return { playerPosX: -h, monsterPosX: h };
   }
@@ -2369,6 +2374,7 @@ export function CombatScene3D({
         playerAttackVariant,
         draculaAttackVariant,
         monsterType,
+        playerAttackClipCycleIndex,
       }),
     [
       strikePickActive,
@@ -2379,6 +2385,7 @@ export function CombatScene3D({
       playerAttackVariant,
       draculaAttackVariant,
       monsterType,
+      playerAttackClipCycleIndex,
     ]
   );
 
