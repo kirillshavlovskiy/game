@@ -10917,15 +10917,16 @@ export default function LabyrinthGame() {
                 monsterGltfPath &&
                 isLandscapeCompact
                   ? (() => {
-                      const chromeH = 108;
+                      /* Reserve more modal height for title + dice/skills + HP + roll row so WebGL does not run under UI. */
+                      const chromeH = 168;
                       const w = Math.min(
                         COMBAT_MODAL_WIDTH_LANDSCAPE_PX,
                         Math.max(300, Math.round(combatFaceoffInnerW - 20))
                       );
                       const hLabAspect = Math.round(w / 2);
                       const hMax = Math.max(
-                        200,
-                        Math.min(380, Math.round(combatFaceoffInnerH - chromeH))
+                        168,
+                        Math.min(340, Math.round(combatFaceoffInnerH - chromeH))
                       );
                       return { width: w, height: Math.min(hLabAspect, hMax) };
                     })()
@@ -11221,7 +11222,7 @@ export default function LabyrinthGame() {
                       ...combatLandscapeFaceoffWrapStyle,
                       position: "relative",
                       ...(useCombatLandscapeFaceoff
-                        ? { flex: 1, minHeight: 0, overflow: "hidden", gap: isMobile ? 6 : 10 }
+                        ? { flex: 1, minHeight: 0, overflow: "hidden", gap: isMobile ? 10 : 12 }
                         : {}),
                       ...(combatLandscapePostFight
                         ? {
@@ -11236,14 +11237,15 @@ export default function LabyrinthGame() {
                       style={{
                         position: "relative",
                         width: "100%",
-                        /* flex-start + growing 3D slot — vertical center had pulled HP/roll UI up over the WebGL view */
+                        /* space-between: pin 3D to top of this column and HP/roll strip to bottom — avoids centering
+                         * the whole stack (overlap) and avoids flex-growing the WebGL row (which skewed framing). */
                         ...(useCombatLandscapeFaceoff
                           ? {
                               flex: 1,
                               minHeight: 0,
                               display: "flex",
                               flexDirection: "column",
-                              justifyContent: "flex-start",
+                              justifyContent: "space-between",
                               alignItems: "center",
                             }
                           : {}),
@@ -11327,11 +11329,7 @@ export default function LabyrinthGame() {
                                   ? 2
                                   : 4,
                           ...(useCombatLandscapeFaceoff
-                            ? {
-                                flex: "1 1 auto",
-                                minHeight: 0,
-                                justifyContent: "flex-start",
-                              }
+                            ? { flex: "0 0 auto", minHeight: 0 }
                             : {}),
                         }}
                       >
@@ -11419,18 +11417,12 @@ export default function LabyrinthGame() {
                         display: "flex",
                         flexDirection: "column",
                         alignItems: "center",
-                        justifyContent: "flex-start",
+                        justifyContent: "center",
                         width: "100%",
                         flexShrink: 0,
-                        marginTop: useCombatLandscapeFaceoff ? "auto" : undefined,
                         paddingLeft: 4,
                         paddingRight: 4,
-                        paddingTop:
-                          mobileCompactActiveCombat && isLandscapeCompact
-                            ? useCombatLandscapeFaceoff
-                              ? 6
-                              : 0
-                            : undefined,
+                        paddingTop: mobileCompactActiveCombat && isLandscapeCompact ? 0 : undefined,
                         paddingBottom: mobileCompactActiveCombat && isLandscapeCompact ? 0 : undefined,
                         boxSizing: "border-box",
                       }}
