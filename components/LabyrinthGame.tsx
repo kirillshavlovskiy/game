@@ -936,7 +936,7 @@ function BottomDockInventoryIcon({ variant }: { variant: ArtifactIconVariant }) 
 
 /**
  * Rotation (deg) shared by player-centered minimap (CSS applies the negated angle) and compass ticks so N/S/E/W
- * stay aligned with maze north while the ▲ stays upright.
+ * stay aligned with maze north. The active-player ▲ still rotates with `activeFacingAngleDeg` so map-forward matches the pawn.
  */
 function isoMinimapMapRotationDeg(
   bearingAngleDeg: number | null,
@@ -962,7 +962,7 @@ function IsoDockGridMiniMap({
   isoMiniMapPinchStartRef,
   onOpenGrid,
   clipDiameter,
-  /** Move-HUD disc: player stays centered; map rotates so facing points up (no separate ▲ rotation). */
+  /** Move-HUD disc: player stays centered; map rotates with bearing; ▲ uses grid facing so it matches the 3D pawn. */
   playerCenteredRotate = false,
   /** Touch 3D: when set, map rotation follows camera “into view” bearing (smooth orbit); else player facing only. */
   bearingAngleDeg,
@@ -1113,9 +1113,7 @@ function IsoDockGridMiniMap({
                     position: "absolute",
                     left: "50%",
                     top: "50%",
-                    transform: playerCenteredRotate
-                      ? "translate(-50%, -50%)"
-                      : `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
+                    transform: `translate(-50%, -50%) rotate(${activeFacingAngleDeg}deg)`,
                     color: "#062214",
                     fontSize: `${Math.max(9, miniCell * 1.12)}px`,
                     fontWeight: 900,
@@ -11388,7 +11386,7 @@ export default function LabyrinthGame() {
                               top: 0,
                               left: "50%",
                               transform: "translateX(-50%)",
-                              zIndex: 105,
+                              zIndex: 192,
                               width: "min(520px, calc(100% - 12px))",
                               textAlign: "center",
                               padding: "4px 8px",
@@ -11448,244 +11446,25 @@ export default function LabyrinthGame() {
                             aria-hidden
                           />
                         ) : combatArtifactRerollPrompt ? (
+                          /** Layout slot only — dialog is `position:absolute` on the face-off shell so 3D does not shrink. */
                           <div
-                            role="dialog"
-                            aria-label="Dice artifact reroll"
-                            aria-live="polite"
-                            style={{
-                              position: "relative",
-                              zIndex: 100,
-                              width: "100%",
-                              padding: "8px 10px",
-                              boxSizing: "border-box",
-                              borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                              border: "2px solid #aa66ff",
-                              background: "linear-gradient(180deg, rgba(58,32,96,0.55) 0%, rgba(20,12,32,0.95) 100%)",
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: 6,
-                              flexShrink: 0,
-                              maxHeight: 280,
-                              overflowY: "auto",
-                            }}
-                          >
-                            <span
-                              style={{
-                                fontSize: "0.72rem",
-                                color: "#e8ddff",
-                                lineHeight: 1.3,
-                                textAlign: "center",
-                              }}
-                            >
-                              🎲 <strong>Roll again?</strong> Spend <strong>1 Dice</strong> — one reroll only; the new strike
-                              replaces the first, then HP updates.
-                            </span>
-                            {lastCombatStrikeDiceFace != null &&
-                            lastCombatStrikeDiceFace >= 1 &&
-                            lastCombatStrikeDiceFace <= 6 ? (
-                              <span
-                                style={{
-                                  fontSize: "0.72rem",
-                                  fontWeight: 800,
-                                  color: "#00ff88",
-                                  letterSpacing: "0.04em",
-                                  lineHeight: 1.2,
-                                  textAlign: "center",
-                                  textShadow: "0 0 12px rgba(0, 255, 136, 0.35)",
-                                }}
-                                aria-label={`Last strike roll ${lastCombatStrikeDiceFace}`}
-                              >
-                                Last roll: {COMBAT_STRIKE_DICE_FACE_CHARS[lastCombatStrikeDiceFace - 1]}{" "}
-                                <span style={{ fontWeight: 700, opacity: 0.95 }}>({lastCombatStrikeDiceFace})</span>
-                              </span>
-                            ) : null}
-                            <div
-                              style={{
-                                display: "flex",
-                                flexDirection: isMobile ? "column" : "row",
-                                gap: 6,
-                                width: "100%",
-                              }}
-                            >
-                              <button
-                                type="button"
-                                onClick={handleCombatArtifactRerollDecline}
-                                style={{
-                                  ...buttonStyle,
-                                  flex: 1,
-                                  fontSize: "0.72rem",
-                                  padding: "6px 8px",
-                                  background: "#2a2a32",
-                                  color: "#ddd",
-                                  border: "1px solid #555",
-                                  borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                  fontWeight: 700,
-                                }}
-                              >
-                                No — keep first roll
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleCombatArtifactRerollAccept}
-                                style={{
-                                  ...buttonStyle,
-                                  flex: 1,
-                                  fontSize: "0.72rem",
-                                  padding: "6px 8px",
-                                  background: "#3a2060",
-                                  color: "#e8ddff",
-                                  border: "2px solid #aa66ff",
-                                  borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                  fontWeight: 700,
-                                }}
-                              >
-                                Yes — roll again
-                              </button>
-                            </div>
-                          </div>
-                        ) : rolling ? (
-                          <div
-                            className="combat-dice"
                             style={{
                               width: "100%",
-                              minWidth: 0,
                               minHeight: landscapeFaceoffDiceViewportH,
-                              height: combatStrikePickButtonsDuringRoll ? "auto" : landscapeFaceoffDiceViewportH,
-                              maxHeight: combatStrikePickButtonsDuringRoll ? "none" : landscapeFaceoffDiceViewportH,
                               flexShrink: 0,
-                              boxSizing: "border-box",
-                              background: "linear-gradient(145deg, #1a1a24 0%, #0d0d12 100%)",
-                              borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                              overflow: "hidden",
-                              display: "flex",
-                              flexDirection: "column",
-                              border: "2px solid #ffcc00",
-                              boxShadow: "inset 0 0 24px rgba(255,204,0,0.12)",
                             }}
-                          >
-                            <div
-                              style={{
-                                flex: combatStrikePickButtonsDuringRoll ? "1 1 auto" : 1,
-                                minHeight: combatStrikePickButtonsDuringRoll ? Math.max(72, landscapeFaceoffDiceViewportH - 108) : 0,
-                                width: "100%",
-                                display: "flex",
-                                flexDirection: "column",
-                              }}
-                            >
-                              <Dice3D
-                                ref={combatDiceRef}
-                                onRollComplete={handleCombatRollComplete}
-                                disabled={rolling}
-                                fitContainer
-                                hideHint
-                              />
-                            </div>
-                            {combatStrikePickButtonsDuringRoll ? (
-                              <div
-                                style={{
-                                  flexShrink: 0,
-                                  width: "100%",
-                                  padding: "6px 4px 8px",
-                                  boxSizing: "border-box",
-                                  borderTop: "1px solid rgba(255,204,0,0.28)",
-                                  display: "flex",
-                                  flexDirection: "column",
-                                  gap: 6,
-                                  alignItems: "center",
-                                }}
-                              >
-                                <span
-                                  style={{
-                                    fontSize: "0.68rem",
-                                    color: "#c8c8d0",
-                                    textAlign: "center",
-                                    lineHeight: 1.35,
-                                  }}
-                                  aria-live="polite"
-                                >
-                                  Pick head, body, or legs (or <strong>1</strong> / <strong>2</strong> / <strong>3</strong>) <strong>before the strike die
-                                  locks in</strong>. Aiming after the roll has finished does not count — whiff = <strong>heavy</strong> damage.
-                                </span>
-                                <div style={{ display: "flex", flexDirection: "row", gap: 6, width: "100%", maxWidth: 480 }}>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStrikeTargetPick("head")}
-                                    style={{
-                                      ...buttonStyle,
-                                      flex: 1,
-                                      fontSize: "0.72rem",
-                                      padding: "8px 4px",
-                                      background: "linear-gradient(180deg, rgba(180,40,40,0.5) 0%, rgba(90,15,15,0.85) 100%)",
-                                      color: "#ffcccc",
-                                      border: "2px solid rgba(255,100,100,0.6)",
-                                      borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                      fontWeight: 700,
-                                      display: "flex",
-                                      flexDirection: "column",
-                                      alignItems: "center",
-                                      gap: 2,
-                                      lineHeight: 1.2,
-                                    }}
-                                  >
-                                    <span style={{ fontSize: "1.1rem" }}>💀</span>
-                                    <span>Head</span>
-                                    <span style={{ fontSize: "0.6rem", opacity: 0.75, fontWeight: 500 }}>ATK+2 / DEF+2</span>
-                                    <span style={{ fontSize: "0.58rem", opacity: 0.6, fontWeight: 400 }}>High Risk [1]</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStrikeTargetPick("body")}
-                                    style={{
-                                      ...buttonStyle,
-                                      flex: 1,
-                                      fontSize: "0.72rem",
-                                      padding: "8px 4px",
-                                      background: "linear-gradient(180deg, rgba(180,140,20,0.45) 0%, rgba(80,60,10,0.85) 100%)",
-                                      color: "#ffeeaa",
-                                      border: "2px solid rgba(255,204,0,0.55)",
-                                      borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                      fontWeight: 700,
-                                      display: "flex",
-                                      flexDirection: "column",
-                                      alignItems: "center",
-                                      gap: 2,
-                                      lineHeight: 1.2,
-                                    }}
-                                  >
-                                    <span style={{ fontSize: "1.1rem" }}>🛡️</span>
-                                    <span>Body</span>
-                                    <span style={{ fontSize: "0.6rem", opacity: 0.75, fontWeight: 500 }}>Balanced</span>
-                                    <span style={{ fontSize: "0.58rem", opacity: 0.6, fontWeight: 400 }}>Standard [2]</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStrikeTargetPick("legs")}
-                                    style={{
-                                      ...buttonStyle,
-                                      flex: 1,
-                                      fontSize: "0.72rem",
-                                      padding: "8px 4px",
-                                      background: "linear-gradient(180deg, rgba(30,140,60,0.45) 0%, rgba(10,70,25,0.85) 100%)",
-                                      color: "#bbffcc",
-                                      border: "2px solid rgba(80,200,100,0.55)",
-                                      borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
-                                      fontWeight: 700,
-                                      display: "flex",
-                                      flexDirection: "column",
-                                      alignItems: "center",
-                                      gap: 2,
-                                      lineHeight: 1.2,
-                                    }}
-                                  >
-                                    <span style={{ fontSize: "1.1rem" }}>🦵</span>
-                                    <span>Legs</span>
-                                    <span style={{ fontSize: "0.6rem", opacity: 0.75, fontWeight: 500 }}>ATK+1 / DEF-1</span>
-                                    <span style={{ fontSize: "0.58rem", opacity: 0.6, fontWeight: 400 }}>Safe [3]</span>
-                                  </button>
-                                </div>
-                              </div>
-                            ) : null}
-                          </div>
+                            aria-hidden
+                          />
+                        ) : rolling ? (
+                          /** Dice + strike picks render in a centered overlay so the 3D face-off column keeps default height. */
+                          <div
+                            style={{
+                              width: "100%",
+                              minHeight: landscapeFaceoffDiceViewportH,
+                              flexShrink: 0,
+                            }}
+                            aria-hidden
+                          />
                         ) : combatState ? (
                           <div
                             style={{
@@ -11935,6 +11714,280 @@ export default function LabyrinthGame() {
                         </span>
                       ) : null}
                     </div>
+                    {combatArtifactRerollPrompt && !combatLandscapePostFight ? (
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          zIndex: 200,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          padding:
+                            "max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px))",
+                          boxSizing: "border-box",
+                          background: "rgba(0,0,0,0.55)",
+                        }}
+                      >
+                        <div
+                          role="dialog"
+                          aria-modal="true"
+                          aria-label="Dice artifact reroll"
+                          aria-live="polite"
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            width: COMBAT_LANDSCAPE_CENTER_COL_WIDTH_REROLL,
+                            maxWidth: "min(92vw, calc(100% - 20px))",
+                            padding: "10px 12px",
+                            boxSizing: "border-box",
+                            borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                            border: "2px solid #aa66ff",
+                            background: "linear-gradient(180deg, rgba(58,32,96,0.92) 0%, rgba(20,12,32,0.98) 100%)",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 8,
+                            flexShrink: 0,
+                            maxHeight: "min(72vh, 340px)",
+                            overflowY: "auto",
+                            boxShadow: "0 12px 40px rgba(0,0,0,0.65)",
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: "0.72rem",
+                              color: "#e8ddff",
+                              lineHeight: 1.3,
+                              textAlign: "center",
+                            }}
+                          >
+                            🎲 <strong>Roll again?</strong> Spend <strong>1 Dice</strong> — one reroll only; the new strike
+                            replaces the first, then HP updates.
+                          </span>
+                          {lastCombatStrikeDiceFace != null &&
+                          lastCombatStrikeDiceFace >= 1 &&
+                          lastCombatStrikeDiceFace <= 6 ? (
+                            <span
+                              style={{
+                                fontSize: "0.72rem",
+                                fontWeight: 800,
+                                color: "#00ff88",
+                                letterSpacing: "0.04em",
+                                lineHeight: 1.2,
+                                textAlign: "center",
+                                textShadow: "0 0 12px rgba(0, 255, 136, 0.35)",
+                              }}
+                              aria-label={`Last strike roll ${lastCombatStrikeDiceFace}`}
+                            >
+                              Last roll: {COMBAT_STRIKE_DICE_FACE_CHARS[lastCombatStrikeDiceFace - 1]}{" "}
+                              <span style={{ fontWeight: 700, opacity: 0.95 }}>({lastCombatStrikeDiceFace})</span>
+                            </span>
+                          ) : null}
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: isMobile ? "column" : "row",
+                              gap: 6,
+                              width: "100%",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={handleCombatArtifactRerollDecline}
+                              style={{
+                                ...buttonStyle,
+                                flex: 1,
+                                fontSize: "0.72rem",
+                                padding: "6px 8px",
+                                background: "#2a2a32",
+                                color: "#ddd",
+                                border: "1px solid #555",
+                                borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                                fontWeight: 700,
+                              }}
+                            >
+                              No — keep first roll
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCombatArtifactRerollAccept}
+                              style={{
+                                ...buttonStyle,
+                                flex: 1,
+                                fontSize: "0.72rem",
+                                padding: "6px 8px",
+                                background: "#3a2060",
+                                color: "#e8ddff",
+                                border: "2px solid #aa66ff",
+                                borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                                fontWeight: 700,
+                              }}
+                            >
+                              Yes — roll again
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                    {rolling && !combatArtifactRerollPrompt && !combatLandscapePostFight ? (
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          zIndex: 188,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          padding:
+                            "max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px))",
+                          boxSizing: "border-box",
+                          pointerEvents: "none",
+                        }}
+                      >
+                        <div
+                          className="combat-dice"
+                          role="group"
+                          aria-label="Strike die roll"
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            pointerEvents: "auto",
+                            width: COMBAT_LANDSCAPE_CENTER_COL_WIDTH,
+                            maxWidth: "min(92vw, calc(100% - 20px))",
+                            maxHeight: "min(78vh, 480px)",
+                            overflowY: "auto",
+                            boxSizing: "border-box",
+                            background: "linear-gradient(145deg, #1a1a24 0%, #0d0d12 100%)",
+                            borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                            display: "flex",
+                            flexDirection: "column",
+                            border: "2px solid #ffcc00",
+                            boxShadow: "0 12px 40px rgba(0,0,0,0.55), inset 0 0 24px rgba(255,204,0,0.12)",
+                          }}
+                        >
+                          <div
+                            style={{
+                              flex: combatStrikePickButtonsDuringRoll ? "1 1 auto" : 1,
+                              minHeight: combatStrikePickButtonsDuringRoll ? Math.max(72, landscapeFaceoffDiceViewportH - 108) : landscapeFaceoffDiceViewportH,
+                              width: "100%",
+                              display: "flex",
+                              flexDirection: "column",
+                            }}
+                          >
+                            <Dice3D
+                              ref={combatDiceRef}
+                              onRollComplete={handleCombatRollComplete}
+                              disabled={rolling}
+                              fitContainer
+                              hideHint
+                            />
+                          </div>
+                          {combatStrikePickButtonsDuringRoll ? (
+                            <div
+                              style={{
+                                flexShrink: 0,
+                                width: "100%",
+                                padding: "6px 4px 8px",
+                                boxSizing: "border-box",
+                                borderTop: "1px solid rgba(255,204,0,0.28)",
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 6,
+                                alignItems: "center",
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: "0.68rem",
+                                  color: "#c8c8d0",
+                                  textAlign: "center",
+                                  lineHeight: 1.35,
+                                }}
+                                aria-live="polite"
+                              >
+                                Pick head, body, or legs (or <strong>1</strong> / <strong>2</strong> / <strong>3</strong>) <strong>before the strike die locks
+                                in</strong>. Aiming after the roll has finished does not count — whiff = <strong>heavy</strong> damage.
+                              </span>
+                              <div style={{ display: "flex", flexDirection: "row", gap: 6, width: "100%", maxWidth: 480 }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleStrikeTargetPick("head")}
+                                  style={{
+                                    ...buttonStyle,
+                                    flex: 1,
+                                    fontSize: "0.72rem",
+                                    padding: "8px 4px",
+                                    background: "linear-gradient(180deg, rgba(180,40,40,0.5) 0%, rgba(90,15,15,0.85) 100%)",
+                                    color: "#ffcccc",
+                                    border: "2px solid rgba(255,100,100,0.6)",
+                                    borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                                    fontWeight: 700,
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    alignItems: "center",
+                                    gap: 2,
+                                    lineHeight: 1.2,
+                                  }}
+                                >
+                                  <span style={{ fontSize: "1.1rem" }}>💀</span>
+                                  <span>Head</span>
+                                  <span style={{ fontSize: "0.6rem", opacity: 0.75, fontWeight: 500 }}>ATK+2 / DEF+2</span>
+                                  <span style={{ fontSize: "0.58rem", opacity: 0.6, fontWeight: 400 }}>High Risk [1]</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleStrikeTargetPick("body")}
+                                  style={{
+                                    ...buttonStyle,
+                                    flex: 1,
+                                    fontSize: "0.72rem",
+                                    padding: "8px 4px",
+                                    background: "linear-gradient(180deg, rgba(180,140,20,0.45) 0%, rgba(80,60,10,0.85) 100%)",
+                                    color: "#ffeeaa",
+                                    border: "2px solid rgba(255,204,0,0.55)",
+                                    borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                                    fontWeight: 700,
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    alignItems: "center",
+                                    gap: 2,
+                                    lineHeight: 1.2,
+                                  }}
+                                >
+                                  <span style={{ fontSize: "1.1rem" }}>🛡️</span>
+                                  <span>Body</span>
+                                  <span style={{ fontSize: "0.6rem", opacity: 0.75, fontWeight: 500 }}>Balanced</span>
+                                  <span style={{ fontSize: "0.58rem", opacity: 0.6, fontWeight: 400 }}>Standard [2]</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleStrikeTargetPick("legs")}
+                                  style={{
+                                    ...buttonStyle,
+                                    flex: 1,
+                                    fontSize: "0.72rem",
+                                    padding: "8px 4px",
+                                    background: "linear-gradient(180deg, rgba(30,140,60,0.45) 0%, rgba(10,70,25,0.85) 100%)",
+                                    color: "#bbffcc",
+                                    border: "2px solid rgba(80,200,100,0.55)",
+                                    borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
+                                    fontWeight: 700,
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    alignItems: "center",
+                                    gap: 2,
+                                    lineHeight: 1.2,
+                                  }}
+                                >
+                                  <span style={{ fontSize: "1.1rem" }}>🦵</span>
+                                  <span>Legs</span>
+                                  <span style={{ fontSize: "0.6rem", opacity: 0.75, fontWeight: 500 }}>ATK+1 / DEF-1</span>
+                                  <span style={{ fontSize: "0.58rem", opacity: 0.6, fontWeight: 400 }}>Safe [3]</span>
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                   ) : (
                   <div style={combatVersusGridStyleEffective}>

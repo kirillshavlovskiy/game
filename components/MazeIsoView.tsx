@@ -530,33 +530,53 @@ function FloorTiles({
 /* ------------------------------------------------------------------ */
 /*  Walls                                                              */
 /* ------------------------------------------------------------------ */
-function WallBlocks({
-  grid, mapWidth, mapHeight,
+/** Chebyshev distance — walls this close to the player fade so they do not fully occlude the avatar. */
+const NEAR_PLAYER_WALL_FADE_CHEBYSHEV_R = 2;
+const NEAR_PLAYER_WALL_OPACITY = 0.42;
+
+function WallInstances({
+  wallCells,
+  wallSideTex,
+  surfaceOpacity,
 }: {
-  grid: string[][]; mapWidth: number; mapHeight: number;
+  wallCells: Array<[number, number]>;
+  wallSideTex: THREE.Texture;
+  surfaceOpacity: number;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
-  const wallSideTex = useTexture(MAZE_ISO_WALL_SIDE_TEXTURE);
-  useEffect(() => {
-    wallSideTex.wrapS = wallSideTex.wrapT = THREE.RepeatWrapping;
-    wallSideTex.repeat.set(0.5, 0.5);
-  }, [wallSideTex]);
-
-  const wallCells = useMemo(() => {
-    const cells: Array<[number, number]> = [];
-    for (let y = 0; y < mapHeight; y++)
-      for (let x = 0; x < mapWidth; x++)
-        if (grid[y]?.[x] === WALL) cells.push([x, y]);
-    return cells;
-  }, [grid, mapWidth, mapHeight]);
+  const transparent = surfaceOpacity < 1 - 1e-6;
 
   const wallMaterials = useMemo(() => {
-    const sideMat = new THREE.MeshStandardMaterial({ map: wallSideTex, roughness: 0.9, metalness: 0, color: "#7a6a5a" });
-    const sideMatDark = new THREE.MeshStandardMaterial({ map: wallSideTex, roughness: 0.9, metalness: 0, color: "#5a4a3a" });
-    // Keep top faces permanently darker than side walls in low-light areas.
-    const topMat = new THREE.MeshBasicMaterial({ map: wallSideTex, color: "#2f2722" });
+    const sideMat = new THREE.MeshStandardMaterial({
+      map: wallSideTex,
+      roughness: 0.9,
+      metalness: 0,
+      color: "#7a6a5a",
+      transparent,
+      opacity: surfaceOpacity,
+    });
+    const sideMatDark = new THREE.MeshStandardMaterial({
+      map: wallSideTex,
+      roughness: 0.9,
+      metalness: 0,
+      color: "#5a4a3a",
+      transparent,
+      opacity: surfaceOpacity,
+    });
+    const topMat = new THREE.MeshBasicMaterial({
+      map: wallSideTex,
+      color: "#2f2722",
+      transparent,
+      opacity: transparent ? surfaceOpacity : 1,
+    });
     return [sideMat, sideMatDark, topMat, topMat, sideMat, sideMatDark];
-  }, [wallSideTex]);
+  }, [wallSideTex, surfaceOpacity, transparent]);
+
+  useEffect(() => {
+    return () => {
+      wallMaterials.forEach((m) => m.dispose());
+    };
+  }, [wallMaterials]);
 
   useEffect(() => {
     const mesh = meshRef.current;
@@ -572,6 +592,8 @@ function WallBlocks({
     mesh.computeBoundingSphere();
   }, [wallCells]);
 
+  if (wallCells.length === 0) return null;
+
   return (
     <instancedMesh
       ref={meshRef}
@@ -582,6 +604,58 @@ function WallBlocks({
     >
       <boxGeometry args={[WALL_SIZE, WALL_HEIGHT, WALL_SIZE]} />
     </instancedMesh>
+  );
+}
+
+function WallBlocks({
+  grid,
+  mapWidth,
+  mapHeight,
+  playerX,
+  playerY,
+}: {
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+  playerX: number;
+  playerY: number;
+}) {
+  const wallSideTex = useTexture(MAZE_ISO_WALL_SIDE_TEXTURE);
+  useEffect(() => {
+    wallSideTex.wrapS = wallSideTex.wrapT = THREE.RepeatWrapping;
+    wallSideTex.repeat.set(0.5, 0.5);
+  }, [wallSideTex]);
+
+  const wallCells = useMemo(() => {
+    const cells: Array<[number, number]> = [];
+    for (let y = 0; y < mapHeight; y++)
+      for (let x = 0; x < mapWidth; x++)
+        if (grid[y]?.[x] === WALL) cells.push([x, y]);
+    return cells;
+  }, [grid, mapWidth, mapHeight]);
+
+  const { farCells, nearCells } = useMemo(() => {
+    const far: Array<[number, number]> = [];
+    const near: Array<[number, number]> = [];
+    const r = NEAR_PLAYER_WALL_FADE_CHEBYSHEV_R;
+    for (const c of wallCells) {
+      const [x, y] = c;
+      const d = Math.max(Math.abs(x - playerX), Math.abs(y - playerY));
+      if (d <= r) near.push(c);
+      else far.push(c);
+    }
+    return { farCells: far, nearCells: near };
+  }, [wallCells, playerX, playerY]);
+
+  return (
+    <>
+      {farCells.length > 0 ? (
+        <WallInstances wallCells={farCells} wallSideTex={wallSideTex} surfaceOpacity={1} />
+      ) : null}
+      {nearCells.length > 0 ? (
+        <WallInstances wallCells={nearCells} wallSideTex={wallSideTex} surfaceOpacity={NEAR_PLAYER_WALL_OPACITY} />
+      ) : null}
+    </>
   );
 }
 
@@ -3486,7 +3560,7 @@ function MazeScene({
         <MazeArtifactPickups pickups={artifactPickups ?? []} />
         <MazeWorldFeaturePickups items={worldFeaturePickups ?? []} />
       </Suspense>
-      <WallBlocks grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} />
+      <WallBlocks grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} playerX={playerX} playerY={playerY} />
       <Suspense fallback={null}>
         <SpiderWebMazeMeshInstances
           grid={grid}
