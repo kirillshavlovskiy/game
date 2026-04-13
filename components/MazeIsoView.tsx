@@ -2271,7 +2271,7 @@ function applyManualOrbitFromDelta(
   const offset = camera.position.clone().sub(target);
   const spherical = new THREE.Spherical().setFromVector3(offset);
   spherical.theta -= dxPx * 0.005;
-  spherical.phi = Math.max(0.2, Math.min(Math.PI / 2.2, spherical.phi - dyPx * 0.005));
+  spherical.phi = Math.max(0.2, Math.min(Math.PI / 2.2, spherical.phi + dyPx * 0.005));
   offset.setFromSpherical(spherical);
   camera.position.copy(target).add(offset);
   camera.lookAt(target);
@@ -2529,7 +2529,7 @@ function CameraController({
       if (dg > 180) dg -= 360;
       if (dg < -180) dg += 360;
       if (Math.abs(dg) > 55 || Math.abs(db) > 55) return;
-      applyManualOrbitFromDelta(camera, controlsRef, dg * 4, db * 4, hasManualCameraRef, manualOffsetRef);
+      applyManualOrbitFromDelta(camera, controlsRef, dg * 4, -db * 4, hasManualCameraRef, manualOffsetRef);
     };
     window.addEventListener("deviceorientation", onOrient, true);
     return () => window.removeEventListener("deviceorientation", onOrient, true);
