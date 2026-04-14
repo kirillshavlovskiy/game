@@ -11068,7 +11068,7 @@ export default function LabyrinthGame() {
                       minHeight: 34,
                       height: "auto",
                       padding: "4px 8px",
-                      background: "rgba(0,0,0,0.45)",
+                      background: "rgba(12,10,18,0.88)",
                       borderRadius: COMBAT_ROLL_UI_RADIUS_PX,
                       border: "1px solid rgba(170,102,255,0.45)",
                       boxSizing: "border-box",
@@ -11247,7 +11247,12 @@ export default function LabyrinthGame() {
                       ...combatLandscapeFaceoffWrapStyle,
                       position: "relative",
                       ...(useCombatLandscapeFaceoff
-                        ? { flex: 1, minHeight: 0, overflow: "hidden", gap: isMobile ? 6 : 10 }
+                        ? {
+                            flex: 1,
+                            minHeight: 0,
+                            overflow: "hidden",
+                            gap: isMobile ? 6 : monsterGltfPath && headerMt ? 18 : 10,
+                          }
                         : {}),
                       ...(combatLandscapePostFight
                         ? {
@@ -11268,7 +11273,10 @@ export default function LabyrinthGame() {
                               minHeight: 0,
                               display: "flex",
                               flexDirection: "column",
-                              justifyContent: landscapeFaceoffPushChromeDown ? "flex-start" : "center",
+                              justifyContent:
+                                landscapeFaceoffPushChromeDown || (monsterGltfPath && headerMt)
+                                  ? "flex-start"
+                                  : "center",
                               alignItems: "center",
                             }
                           : {}),
@@ -11345,7 +11353,9 @@ export default function LabyrinthGame() {
                             monsterGltfPath && headerMt
                               ? isMobile
                                 ? 14
-                                : 18
+                                : useCombatLandscapeFaceoff
+                                  ? 28
+                                  : 18
                               : isMobile && isLandscapeCompact && useCombatLandscapeFaceoff
                                 ? 8
                                 : combatActiveFitViewport
@@ -11584,14 +11594,14 @@ export default function LabyrinthGame() {
                     <div
                       style={{
                         position: "relative",
-                        zIndex: 2,
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
                         gap: "4px 8px",
-                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 32 : 42) : 0,
                         marginBottom: 2,
                         width: "100%",
                         alignItems: "center",
+                        flexShrink: 0,
                       }}
                     >
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
@@ -12379,15 +12389,15 @@ export default function LabyrinthGame() {
                     <div
                       style={{
                         position: "relative",
-                        zIndex: 2,
                         gridColumn: "1 / -1",
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
                         gap: "4px 8px",
-                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 22 : 26) : 0,
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 32 : 42) : 0,
                         marginBottom: 1,
                         width: "100%",
                         alignItems: "center",
+                        flexShrink: 0,
                       }}
                     >
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
