@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import "@fontsource/creepster";
+import { ClientLogIngest } from "@/components/ClientLogIngest";
 import { CrazyGamesSdk } from "@/components/CrazyGamesSdk";
 import { MAZE_FLOOR_TEXTURE, MAZE_LITE_TEXTURES, MAZE_NOISE_TEXTURE, MAZE_WALL_TEXTURE } from "@/lib/mazeCellTheme";
 import "./globals.css";
@@ -66,6 +67,7 @@ export default function RootLayout({
         <Script src="https://sdk.crazygames.com/crazygames-sdk-v3.js" strategy="beforeInteractive" />
       </head>
       <body>
+        <ClientLogIngest />
         <CrazyGamesSdk />
         {children}
       </body>
