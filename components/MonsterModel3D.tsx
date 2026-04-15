@@ -2344,7 +2344,7 @@ export function CombatScene3D({
     : 0;
   const battleSceneGroundY = compactCombatViewport ? THREE.MathUtils.lerp(0.26, 0.4, compactWideT) : 0;
   /** Extra world Y on the fight `group` only — orbit target stays put so figures read higher in the canvas with air under the feet. */
-  const compactFigureLiftWorld = compactCombatViewport ? THREE.MathUtils.lerp(0.09, 0.11, compactWideT) : 0;
+  const compactFigureLiftWorld = compactCombatViewport ? THREE.MathUtils.lerp(0.16, 0.2, compactWideT) : 0;
   /** Orbit pivot: slightly lower Y on wide aspects so zoom centers on mid-body, not upper chest. */
   const compactOrbitMidBodyOffset = compactCombatViewport
     ? THREE.MathUtils.lerp(0.47, 0.34, compactWideT)

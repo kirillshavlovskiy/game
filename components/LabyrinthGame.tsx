@@ -714,6 +714,8 @@ const COMBAT_MODAL_WIDTH_LANDSCAPE_PX = 920;
 const COMBAT_LANDSCAPE_SPRITE_PX = 172;
 /** Landscape center column: dice viewport + skills panel share this min height budget */
 const COMBAT_LANDSCAPE_CENTER_DICE_MAX_H = 128;
+/** Merged 3D: min gap between WebGL and HP row when the center strip has no toast/last-roll (empty flex was collapsing). */
+const COMBAT_FACEOFF_3D_HP_CLEARANCE_MIN_PX = 132;
 /** Wider clamp so dice/skills use horizontal space between portraits (vw-heavy: short landscape height no longer caps width as aggressively as min(32vw,40vh)) */
 const COMBAT_LANDSCAPE_CENTER_COL_WIDTH = "clamp(160px, min(44vw, 56vh), 340px)";
 /** No `vh` in the middle term — short landscape height must not narrow the dice reroll dialog. */
@@ -11251,7 +11253,7 @@ export default function LabyrinthGame() {
                             flex: 1,
                             minHeight: 0,
                             overflow: "hidden",
-                            gap: isMobile ? 6 : monsterGltfPath && headerMt ? 18 : 10,
+                            gap: isMobile ? 6 : monsterGltfPath && headerMt ? 24 : 10,
                           }
                         : {}),
                       ...(combatLandscapePostFight
@@ -11352,10 +11354,10 @@ export default function LabyrinthGame() {
                           marginBottom:
                             monsterGltfPath && headerMt
                               ? isMobile
-                                ? 14
+                                ? 18
                                 : useCombatLandscapeFaceoff
-                                  ? 28
-                                  : 18
+                                  ? 44
+                                  : 22
                               : isMobile && isLandscapeCompact && useCombatLandscapeFaceoff
                                 ? 8
                                 : combatActiveFitViewport
@@ -11509,6 +11511,16 @@ export default function LabyrinthGame() {
                               width: "100%",
                               gap: 5,
                               minWidth: 0,
+                              ...(monsterGltfPath && headerMt
+                                ? {
+                                    minHeight: Math.max(
+                                      landscapeFaceoffDiceViewportH,
+                                      COMBAT_FACEOFF_3D_HP_CLEARANCE_MIN_PX,
+                                    ),
+                                    justifyContent: "flex-start",
+                                    paddingTop: 4,
+                                  }
+                                : {}),
                             }}
                           >
                             {lastCombatStrikeDiceFace != null &&
@@ -11597,7 +11609,7 @@ export default function LabyrinthGame() {
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
                         gap: "4px 8px",
-                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 32 : 42) : 0,
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 44 : 58) : 0,
                         marginBottom: 2,
                         width: "100%",
                         alignItems: "center",
@@ -12263,7 +12275,7 @@ export default function LabyrinthGame() {
                             flex: "1 1 auto",
                             minHeight: 0,
                             overflow: "hidden",
-                            marginBottom: isMobile ? 14 : 18,
+                            marginBottom: isMobile ? 20 : 32,
                           }}
                         >
                           <CombatScene3D
@@ -12393,7 +12405,7 @@ export default function LabyrinthGame() {
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
                         gap: "4px 8px",
-                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 32 : 42) : 0,
+                        marginTop: monsterGltfPath && headerMt ? (isMobile ? 44 : 58) : 0,
                         marginBottom: 1,
                         width: "100%",
                         alignItems: "center",
