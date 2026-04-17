@@ -61,13 +61,13 @@ const ARTIFACT_PATHS: Record<ArtifactIconVariant, string> = {
   torch: "artifacts/torch.PNG",
   trap: "artifacts/trap.PNG",
   holySword: "artifacts/holy-sword.png",
-  holyCross: "artifacts/holy-cross.PNG",
+  holyCross: "artifacts/holy-cross.png",
   dragonFuryAxe: "artifacts/holy-sword.png",
   eternalFrostblade: "artifacts/holy-sword.png",
   zweihandhammer: "artifacts/holy-sword.png",
-  azureDragonShield: "artifacts/holy-cross.PNG",
-  nordicShield: "artifacts/holy-cross.PNG",
-  wardShield: "artifacts/holy-cross.PNG",
+  azureDragonShield: "artifacts/holy-cross.png",
+  nordicShield: "artifacts/holy-cross.png",
+  wardShield: "artifacts/holy-cross.png",
   artifact: "artifacts/diamond.png",
 };
 

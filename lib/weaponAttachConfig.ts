@@ -168,9 +168,9 @@ const WEAPON_ATTACH_POSE_BY_URL: Readonly<Record<string, WeaponAttachPosePartial
     extraEulerRad: [3.3161255787892263, 0.4363323129985824, 1.4835298641951802],
     bladeTwistRad: 0,
   },
-  /** Warden Shield — per-mesh grip / Euler */
+  /** Warden Shield (`wardShield` / base shield stack) — per-mesh grip / Euler */
   [publicAssetPath("models/armour/Meshy_AI_shield_0403170046_texture.glb")]: {
-    gripPositionLocal: [-0.208, 0.044, -0.14],
+    gripPositionLocal: [0.054, 0.298, 0.072],
     extraEulerRad: [3.4033920413889422, 0.4363323129985824, 1.5707963267948966],
     bladeTwistRad: 0,
   },
