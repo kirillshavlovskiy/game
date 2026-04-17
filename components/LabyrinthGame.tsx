@@ -3509,6 +3509,15 @@ export default function LabyrinthGame() {
       cancelAnimationFrame(combat3dApproachRafRef.current);
     };
   }, [combat3dApproachEligible, rolling]);
+  /**
+   * `resolveCombat3dClipLeads` must assume **full walk-in** whenever dice are not rolling — if the roll ends before
+   * the RAF lerp reaches 1, `combat3dApproachBlend` can still be below 1 for a frame and spell/skill lead multipliers
+   * stay “wide approach” while world X already switched to the strike branch.
+   */
+  const combat3dApproachBlendForClipLeads =
+    combatMonsterStrike3d && combatState != null && combatResult == null && !rolling
+      ? 1
+      : combat3dApproachBlend;
   /** Head-body-legs row only when not using 3D tap-to-aim (no duplicate controls). */
   const combatStrikePickButtonsDuringRoll =
     combatState != null &&
@@ -10755,7 +10764,7 @@ export default function LabyrinthGame() {
                 draculaAttackVariant: monsterDraculaVariantForCombat3d,
                 playerAttackVariant: playerAttackVariantForClipLeads,
                 playerFatalJumpKill: playerFatalJumpKill3d,
-                rollingApproachBlend: combat3dApproachBlend,
+                rollingApproachBlend: combat3dApproachBlendForClipLeads,
               });
               const playerAttackClipLeadInSecFor3d = combat3dClipLeads.meshyPlayerAttackLeadInSec;
               /** Per-tier hunt→attack overlap — `PLAYER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER` via `resolveCombat3dClipLeads`. */

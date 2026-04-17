@@ -65,8 +65,12 @@ export const MONSTER_HITS_PLAYER: Record<Combat3dStrikeTier, Record<Combat3dDefe
       separationHalf: 0.52,
       /** Small skip so non-jump strikes near contact; was 0 + 1.16 defender (player deep in hurt while monster at t≈0). */
       attackerLeadInSec: 0.22,
-      /** Nearer spell (0.28) — pairs with short hunt→hurt handoff so the flinch reads on the strike beat. */
-      defenderReactionLeadInSec: 0.28,
+      /**
+       * Must exceed {@link MONSTER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER.skill} (0.32): merged hunt→hurt subtracts
+       * that fade from this seek (`MonsterModel3D`). At 0.28 the clamp hit 0 — player stayed on pre-flinch hurt frames
+       * while the skill attack was already past its 0.22s seek, so the reaction read late when the monster won net.
+       */
+      defenderReactionLeadInSec: 0.4,
     },
     knockdown: {
       separationHalf: 0.42,
@@ -325,6 +329,10 @@ export function rowPlayerHitsMonster(
  * Walk-in lerp target at approach blend = 1: align with standing-contact table halves so flipping to `attack`/`hurt`
  * does not pop the rigs (legacy 0.72 vs ~0.4–0.56 read as a second lunge with root motion). Capped at
  * {@link COMBAT_STRIKE_PICK_SEPARATION_HALF}.
+ *
+ * Uses the **mean** of the two one-way contact halves (not `max`): `max(p,m)` staged the rigs wider than e.g. a
+ * monster spell win (`m` only), so at strike the scene jumped **inward** when only that row applied — the modal looked
+ * “unresolved” from the dice walk-in distance.
  */
 export function combatWalkInEndSeparationHalf(args: {
   playerAttackVariant?: Combat3dStrikeTier;
@@ -336,7 +344,8 @@ export function combatWalkInEndSeparationHalf(args: {
   const mt = coerceStrikeTier(args.draculaAttackVariant);
   const p = rowPlayerHitsMonster(pt, args.monsterVisualState).separationHalf;
   const m = rowMonsterHitsPlayer(mt, args.playerVisualState).separationHalf;
-  return Math.min(COMBAT_STRIKE_PICK_SEPARATION_HALF, Math.max(p, m));
+  const mean = (p + m) * 0.5;
+  return Math.min(COMBAT_STRIKE_PICK_SEPARATION_HALF, mean);
 }
 
 /**
