@@ -3510,11 +3510,11 @@ export default function LabyrinthGame() {
     };
   }, [combat3dApproachEligible, rolling]);
   /**
-   * `resolveCombat3dClipLeads` must assume **full walk-in** whenever dice are not rolling — if the roll ends before
-   * the RAF lerp reaches 1, `combat3dApproachBlend` can still be below 1 for a frame and spell/skill lead multipliers
-   * stay “wide approach” while world X already switched to the strike branch.
+   * Merged 3D: same approach value for **clip lead math** and **`CombatScene3D` world walk-in** — if the roll ends
+   * before the RAF lerp reaches 1, `combat3dApproachBlend` can stay below 1 for a frame while spacing/footers already
+   * advanced; forcing 1 while dice are not rolling keeps leads and face-off X aligned (notably on mobile landscape).
    */
-  const combat3dApproachBlendForClipLeads =
+  const combat3dApproachBlendFor3d =
     combatMonsterStrike3d && combatState != null && combatResult == null && !rolling
       ? 1
       : combat3dApproachBlend;
@@ -10764,7 +10764,7 @@ export default function LabyrinthGame() {
                 draculaAttackVariant: monsterDraculaVariantForCombat3d,
                 playerAttackVariant: playerAttackVariantForClipLeads,
                 playerFatalJumpKill: playerFatalJumpKill3d,
-                rollingApproachBlend: combat3dApproachBlendForClipLeads,
+                rollingApproachBlend: combat3dApproachBlendFor3d,
               });
               const playerAttackClipLeadInSecFor3d = combat3dClipLeads.meshyPlayerAttackLeadInSec;
               /** Per-tier hunt→attack overlap — `PLAYER_HUNT_TO_ATTACK_CROSSFADE_SEC_BY_TIER` via `resolveCombat3dClipLeads`. */
@@ -11470,7 +11470,7 @@ export default function LabyrinthGame() {
                           strikePickActive={combatStrikePick3dDuringRoll}
                           onStrikeTargetPick={handleStrikeTargetPick}
                           onOneShotAnimationFinished={combat3dOneShotFinished}
-                          rollingApproachBlend={combat3dApproachBlend}
+                          rollingApproachBlend={combat3dApproachBlendFor3d}
                           faceOffAnimationSyncKey={combat3dFaceOffSyncKey}
                           combatSceneSessionKey={combat3dInstanceKey}
                           orbitMinDistance={0.48}
@@ -12451,10 +12451,11 @@ export default function LabyrinthGame() {
                             draculaHurtStrikeZone={draculaHurtStrikeZoneFor3d}
                             draculaLoopAngrySkill01={draculaLossMenaceLoop3d}
                             compactCombatViewport
+                            compactCombatShortWide={isMobile && isLandscapeCompact}
                             strikePickActive={combatStrikePick3dDuringRoll}
                             onStrikeTargetPick={handleStrikeTargetPick}
                             onOneShotAnimationFinished={combat3dOneShotFinished}
-                            rollingApproachBlend={combat3dApproachBlend}
+                            rollingApproachBlend={combat3dApproachBlendFor3d}
                             faceOffAnimationSyncKey={combat3dFaceOffSyncKey}
                             combatSceneSessionKey={combat3dInstanceKey}
                             orbitMinDistance={0.48}

@@ -330,9 +330,8 @@ export function rowPlayerHitsMonster(
  * does not pop the rigs (legacy 0.72 vs ~0.4–0.56 read as a second lunge with root motion). Capped at
  * {@link COMBAT_STRIKE_PICK_SEPARATION_HALF}.
  *
- * Uses the **mean** of the two one-way contact halves (not `max`): `max(p,m)` staged the rigs wider than e.g. a
- * monster spell win (`m` only), so at strike the scene jumped **inward** when only that row applied — the modal looked
- * “unresolved” from the dice walk-in distance.
+ * Blend **`max(p,m)`** (safest for player lunges) with **`(p+m)/2`** (reduces inward snap when the resolved strike
+ * uses the tighter one-way row). Pure mean skewed the contact lab the other way; this split keeps both readable.
  */
 export function combatWalkInEndSeparationHalf(args: {
   playerAttackVariant?: Combat3dStrikeTier;
@@ -344,8 +343,10 @@ export function combatWalkInEndSeparationHalf(args: {
   const mt = coerceStrikeTier(args.draculaAttackVariant);
   const p = rowPlayerHitsMonster(pt, args.monsterVisualState).separationHalf;
   const m = rowMonsterHitsPlayer(mt, args.playerVisualState).separationHalf;
+  const hi = Math.max(p, m);
   const mean = (p + m) * 0.5;
-  return Math.min(COMBAT_STRIKE_PICK_SEPARATION_HALF, mean);
+  const blended = hi * 0.78 + mean * 0.22;
+  return Math.min(COMBAT_STRIKE_PICK_SEPARATION_HALF, blended);
 }
 
 /**
