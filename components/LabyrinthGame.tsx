@@ -8722,6 +8722,9 @@ export default function LabyrinthGame() {
     isMobile && combatState !== null && combatResult === null;
   /** Live fight: modal + face-off use viewport height and collapsed lower slot (desktop + mobile). */
   const combatActiveFitViewport = useCombatLandscapeFaceoff;
+  /** Phone landscape live fight — bottom chrome flush to modal (same intent as in-faceoff `combatMobileLsChromeTight`). */
+  const combatMobileLandscapeLiveFit =
+    isMobile && isLandscapeCompact && useCombatLandscapeFaceoff;
   /** Full monster hint for dismissible ℹ popover (all layouts). */
   const combatMonsterHintFullText =
     lab && combatState && !combatResult
@@ -10241,7 +10244,10 @@ export default function LabyrinthGame() {
                     minHeight: 0,
                     ...(isMobile
                       ? {
-                          paddingBottom: "max(14px, calc(0.35rem + env(safe-area-inset-bottom, 0px)))",
+                          paddingBottom:
+                            combatActiveFitViewport && isLandscapeCompact
+                              ? "max(2px, env(safe-area-inset-bottom, 0px))"
+                              : "max(14px, calc(0.35rem + env(safe-area-inset-bottom, 0px)))",
                           boxSizing: "border-box" as const,
                         }
                       : {}),
@@ -11275,15 +11281,17 @@ export default function LabyrinthGame() {
                             minHeight: 0,
                             overflow: "hidden",
                             gap:
-                              isMobile && monsterGltfPath && headerMt
-                                ? isLandscapeCompact
-                                  ? 14
-                                  : 8
-                                : isMobile
-                                  ? 6
-                                  : monsterGltfPath && headerMt
-                                    ? 24
-                                    : 10,
+                              combatMobileLsChromeTight && !combatLandscapePostFight
+                                ? 4
+                                : isMobile && monsterGltfPath && headerMt
+                                  ? isLandscapeCompact
+                                    ? 14
+                                    : 8
+                                  : isMobile
+                                    ? 6
+                                    : monsterGltfPath && headerMt
+                                      ? 24
+                                      : 10,
                           }
                         : {}),
                       ...(combatLandscapePostFight
@@ -11548,14 +11556,20 @@ export default function LabyrinthGame() {
                               gap: 5,
                               minWidth: 0,
                               ...(monsterGltfPath && headerMt
-                                ? {
-                                    minHeight: Math.max(
-                                      landscapeFaceoffDiceViewportH,
-                                      combatFaceoff3dHpClearancePx,
-                                    ),
-                                    justifyContent: "flex-start",
-                                    paddingTop: 4,
-                                  }
+                                ? combatMobileLsChromeTight && !combatToast
+                                  ? {
+                                      minHeight: 0,
+                                      justifyContent: "flex-start",
+                                      paddingTop: 0,
+                                    }
+                                  : {
+                                      minHeight: Math.max(
+                                        landscapeFaceoffDiceViewportH,
+                                        combatFaceoff3dHpClearancePx,
+                                      ),
+                                      justifyContent: "flex-start",
+                                      paddingTop: 4,
+                                    }
                                 : {}),
                             }}
                           >
@@ -11617,6 +11631,9 @@ export default function LabyrinthGame() {
                       </div>
                     </div>
                     </div>
+                    {combatMobileLsChromeTight && useCombatLandscapeFaceoff && !combatLandscapePostFight ? (
+                      <div style={{ flex: 1, minHeight: 0, width: "100%" }} aria-hidden />
+                    ) : null}
                     {landscapeFaceoffPushChromeDown &&
                     !(combatMobileLsChromeTight && useCombatLandscapeFaceoff && !combatLandscapePostFight) ? (
                       <div style={{ flex: 1, minHeight: 0, width: "100%" }} aria-hidden />
@@ -11626,10 +11643,21 @@ export default function LabyrinthGame() {
                         position: "relative",
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
-                        gap: "4px 8px",
+                        gap: combatMobileLsChromeTight ? "4px 6px" : "4px 8px",
+                        width: "100%",
+                        alignItems: "center",
+                        ...(combatMobileLsChromeTight
+                          ? {
+                              maxWidth: `min(100%, ${combatScene3dWidthFaceoff}px)`,
+                              marginLeft: "auto",
+                              marginRight: "auto",
+                            }
+                          : {}),
                         marginTop:
                           combatMobileLsChromeTight && useCombatLandscapeFaceoff && !combatLandscapePostFight
-                            ? "auto"
+                            ? monsterGltfPath && headerMt
+                              ? 6
+                              : 0
                             : monsterGltfPath && headerMt
                               ? isMobile
                                 ? isLandscapeCompact
@@ -11637,9 +11665,7 @@ export default function LabyrinthGame() {
                                   : 54
                                 : 58
                               : 0,
-                        marginBottom: combatMobileLsChromeTight ? 10 : 2,
-                        width: "100%",
-                        alignItems: "center",
+                        marginBottom: combatMobileLsChromeTight ? 4 : 2,
                         flexShrink: 0,
                       }}
                     >
@@ -11651,9 +11677,7 @@ export default function LabyrinthGame() {
                               style={{
                                 ...combatHpBarUnderlineTrack,
                                 width: "100%",
-                                maxWidth: combatMobileLsChromeTight
-                                  ? COMBAT_LANDSCAPE_HP_BAR_MAX_W_PX
-                                  : "100%",
+                                maxWidth: combatMobileLsChromeTight ? COMBAT_LANDSCAPE_HP_BAR_MAX_W_PX : "100%",
                               }}
                             >
                               <div
@@ -11693,9 +11717,7 @@ export default function LabyrinthGame() {
                               style={{
                                 ...combatHpBarUnderlineTrack,
                                 width: "100%",
-                                maxWidth: combatMobileLsChromeTight
-                                  ? COMBAT_LANDSCAPE_HP_BAR_MAX_W_PX
-                                  : "100%",
+                                maxWidth: combatMobileLsChromeTight ? COMBAT_LANDSCAPE_HP_BAR_MAX_W_PX : "100%",
                               }}
                             >
                               <div
@@ -11840,8 +11862,8 @@ export default function LabyrinthGame() {
                         </button>
                       </div>
                     ) : null}
-                    <div style={{ textAlign: "center", minHeight: 8 }}>
-                      {combatState && !combatResult && headerSurpriseVisible && !rolling ? (
+                    {combatState && !combatResult && headerSurpriseVisible && !rolling ? (
+                      <div style={{ textAlign: "center" }}>
                         <span
                           style={{
                             fontSize: "0.58rem",
@@ -11859,8 +11881,8 @@ export default function LabyrinthGame() {
                                 ? "Surprise: attack"
                                 : "Surprise: angry"}
                         </span>
-                      ) : null}
-                    </div>
+                      </div>
+                    ) : null}
                     {combatArtifactRerollPrompt && !combatLandscapePostFight ? (
                       <div
                         style={{
