@@ -3277,7 +3277,7 @@ export default function LabyrinthGame() {
     draculaAttackSegment?: "spell" | "skill" | "light";
     /** Post-strike HP for Dracula light-hit tier clips — stable across stagger flush so hurt anim does not restart. */
     draculaHurt3dHp?: { hp: number; maxHp: number };
-    /** True when this monster hit is lethal and used the **spell** clip (e.g. Jumping_Punch) — player 3D uses `Shot_and_Fall_Backward`. */
+    /** True when this merged-3D monster hit is lethal — player 3D hurt uses the fatal fall clip list (not only spell-tier). */
     playerFatalJumpKill?: boolean;
     /** Aim committed during the strike roll — merged monster `hurt` + player `hurt` clip selection in `CombatScene3D`. */
     strikeTargetPick?: StrikeTarget;
@@ -3428,6 +3428,11 @@ export default function LabyrinthGame() {
   const combatContinuesAfterRollRef = useRef(false);
   /** True when player died in combat — skip setCombatState(null) so modal stays open with defeat result */
   const playerDefeatedInCombatRef = useRef(false);
+  /**
+   * Staggered strike lab commit: monster attack clip can end before HP flushes — without this, `hurt`→`ready`
+   * makes the player mirror idle (standing) while waiting for the defeat commit.
+   */
+  const pendingPlayerLethalFromMonsterStrikeRef = useRef(false);
   /** Set inside flushSync(setLab) when combat applies HP damage — player index for avatar border flash after sync. */
   const pendingPlayerDamageHighlightIndexRef = useRef<number | null>(null);
   const combatUseShieldRef = useRef(true);
@@ -4717,6 +4722,7 @@ export default function LabyrinthGame() {
 
     function applyPost(resolveResult: CombatResult) {
       combatStrikeIsRerollRef.current = false;
+      pendingPlayerLethalFromMonsterStrikeRef.current = false;
       const c = combatStateRef.current;
       if (!c) return;
       const labSnap = labRef.current;
@@ -4879,10 +4885,15 @@ export default function LabyrinthGame() {
       const playerFatalJumpKill =
         merged3dSpellSegmentMonster &&
         strikePortrait === "monsterHit" &&
-        draculaAttackSegment === "spell" &&
         !result.won &&
         !fatalGlancingKill &&
         !shieldWouldAbsorb &&
+        missDmgPre > 0 &&
+        playerHpBeforeRoll - missDmgPre <= 0;
+      const playerWillDieOnThisStrikeCommit =
+        strikePortrait === "monsterHit" &&
+        !shieldWouldAbsorb &&
+        !fatalGlancingKill &&
         missDmgPre > 0 &&
         playerHpBeforeRoll - missDmgPre <= 0;
 
@@ -4940,6 +4951,9 @@ export default function LabyrinthGame() {
 
         if (playerDefeatedInCombatRef.current) {
           combatLog("POST-setLab: player defeated — clear combatState so defeat UI + next player roll work");
+          combatStateRef.current = null;
+          combatFooterSnapshotRef.current = null;
+          pendingPlayerLethalFromMonsterStrikeRef.current = false;
           playerDefeatedInCombatRef.current = false;
           setCombatUseShield(true);
           setCombatUseDiceBonus(true);
@@ -4949,6 +4963,7 @@ export default function LabyrinthGame() {
           return;
         }
 
+        pendingPlayerLethalFromMonsterStrikeRef.current = false;
         const fromStagger = combatPostLabFromStaggerRef.current;
         combatPostLabFromStaggerRef.current = false;
 
@@ -5054,6 +5069,7 @@ export default function LabyrinthGame() {
           }
           setCombatStrikeHpHold(null);
           setRolling(false);
+          pendingPlayerLethalFromMonsterStrikeRef.current = false;
           return;
         }
       flushSync(() => {
@@ -5290,6 +5306,7 @@ export default function LabyrinthGame() {
       };
 
       if (staggerLabCommitMs > 0) {
+        if (playerWillDieOnThisStrikeCommit) pendingPlayerLethalFromMonsterStrikeRef.current = true;
         combatPostLabFromStaggerRef.current = true;
         setCombatStrikeHpHold({
           monsterHp: Math.min(maxHpM, Math.max(0, mon?.hp ?? maxHpM)),
@@ -6015,7 +6032,11 @@ export default function LabyrinthGame() {
     setCombatRecoveryPhase((p) => {
       const sp = combatFooterSnapshotRef.current?.strikePortrait;
       if (sp === "defeated") return "ready";
-      if (p === "hurt") return sp === "playerHitHeavy" ? "recover" : "ready";
+      if (p === "hurt") {
+        if (sp === "playerHitHeavy") return "recover";
+        if (sp === "monsterHit" && pendingPlayerLethalFromMonsterStrikeRef.current) return "hurt";
+        return "ready";
+      }
       if (p === "recover") return "ready";
       return p;
     });
