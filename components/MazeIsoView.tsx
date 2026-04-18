@@ -2342,6 +2342,18 @@ function CameraController({
   /** Smoothed grid (dx,dy) for auto camera offset — eases orbit when facing/turn changes instead of snapping. */
   const smoothFollowDirRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 1 });
 
+  /** Reused every frame — avoids allocating `new Vector3()` while the player moves (GC stutter on mobile). */
+  const camScratchRef = useRef({
+    desiredTarget: new THREE.Vector3(),
+    autoCameraPos: new THREE.Vector3(),
+    autoOffset: new THREE.Vector3(),
+    desiredOffset: new THREE.Vector3(),
+    desiredCameraPos: new THREE.Vector3(),
+    toPawn: new THREE.Vector3(),
+    toB: new THREE.Vector3(),
+    toBD: new THREE.Vector3(),
+  });
+
   /** Teleport destination picking: allow orbit / minimap ring so the player can inspect beacons; slingshot pull still locks. */
   const lockCameraToAutoFraming = catapultMode && catapultLockCameraForPull;
 
@@ -2585,7 +2597,8 @@ function CameraController({
     const pz = playerY * CS;
     const mapSpan = Math.max(8, mapWidth, mapHeight);
     const lookY = catapultMode ? CATAPULT_LOOK_AT_Y : CAM_LOOK_AT_Y;
-    const desiredTarget = new THREE.Vector3(px, lookY, pz);
+    const camS = camScratchRef.current;
+    const desiredTarget = camS.desiredTarget.set(px, lookY, pz);
 
     let followDist: number;
     let followHeight: number;
@@ -2616,12 +2629,8 @@ function CameraController({
     sy /= slen;
     smoothFollowDirRef.current = { dx: sx, dy: sy };
 
-    const autoCameraPos = new THREE.Vector3(
-      px - sx * followDist,
-      followHeight,
-      pz - sy * followDist
-    );
-    const autoOffset = autoCameraPos.clone().sub(desiredTarget);
+    const autoCameraPos = camS.autoCameraPos.set(px - sx * followDist, followHeight, pz - sy * followDist);
+    const autoOffset = camS.autoOffset.copy(autoCameraPos).sub(desiredTarget);
 
     const prevPosForMove = prevPlayerPosRef.current;
     const movedFar = Math.hypot(playerX - prevPosForMove.x, playerY - prevPosForMove.y) > 1.01;
@@ -2638,8 +2647,8 @@ function CameraController({
 
     const desiredOffset =
       hasManualCameraRef.current && manualOffsetRef.current && !lockCameraToAutoFraming
-        ? manualOffsetRef.current.clone()
-        : autoOffset.clone();
+        ? camS.desiredOffset.copy(manualOffsetRef.current)
+        : camS.desiredOffset.copy(autoOffset);
 
     if (
       !touchCameraBootstrappedRef.current &&
@@ -2727,7 +2736,7 @@ function CameraController({
       }
       ctrl.target.lerp(desiredTarget, posLerp);
       // Keep a stable camera offset from the current target to prevent tilt drift.
-      const desiredCameraPos = ctrl.target.clone().add(desiredOffset);
+      const desiredCameraPos = camS.desiredCameraPos.copy(ctrl.target).add(desiredOffset);
       camera.position.lerp(desiredCameraPos, rotLerp);
       transitionBlendRef.current = Math.max(0, transitionBlend * 0.9 - 0.012);
       ctrl.update();
@@ -2744,7 +2753,7 @@ function CameraController({
         (touchUi && (dragRef.current != null || hasManualCameraRef.current)) ||
         (!touchUi && dragRef.current != null));
     if (cameraDrivesFacingGrid) {
-      const toPawn = new THREE.Vector3().subVectors(ctrl.target, camera.position);
+      const toPawn = camS.toPawn.subVectors(ctrl.target, camera.position);
       toPawn.y = 0;
       const hLen = toPawn.length();
       if (hLen > 1e-4) {
@@ -2768,7 +2777,7 @@ function CameraController({
 
     /* Mini-map: continuous bearing matches 3D orbit (touch drag, right-drag desktop, mini-map ring, etc.). */
     if (!lockCameraToAutoFraming && onIsoCameraBearingDegRef.current) {
-      const toB = new THREE.Vector3().subVectors(ctrl.target, camera.position);
+      const toB = camS.toB.subVectors(ctrl.target, camera.position);
       toB.y = 0;
       const hB = toB.length();
       if (hB > 1e-4) {
@@ -2798,7 +2807,7 @@ function CameraController({
       else if (!onIsoCameraBearingDegRef.current) {
         bearingDiag = "blocked_noParentCallback_isGridOrUnwired";
       } else {
-        const toBD = new THREE.Vector3().subVectors(ctrl.target, camera.position);
+        const toBD = camS.toBD.subVectors(ctrl.target, camera.position);
         toBD.y = 0;
         hBLen = toBD.length();
         bearingDiag = hBLen <= 1e-4 ? "blocked_degenerateCameraRay" : "emitting_ok";
