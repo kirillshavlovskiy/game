@@ -13325,7 +13325,7 @@ export default function LabyrinthGame() {
                   mazeMapView === "iso" && catapultIsoPhase === "pull" ? catapultAimClient : null
                 }
                 catapultTrajectoryPreview={catapultTrajectoryPreview}
-                catapultLockCameraForPull={mazeMapView !== "iso" || catapultIsoPhase === "pull"}
+                catapultLockCameraForPull={mazeMapView !== "iso"}
                 magicPortalPreviewOptions={isoMagicPortalPreviewOptions}
                 teleportSourceType={teleportPicker?.sourceType ?? null}
                 focusVersion={currentPlayer}

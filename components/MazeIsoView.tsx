@@ -450,8 +450,71 @@ const WALL_HEIGHT = 3.25;
 const MAZE_ROTATING_PICKUP_MAX_DIM = CS * 0.34;
 /** Magic portal teleport ring: span the walkable cell (corridor) in XZ — no spin, floor-scale only. */
 const MAZE_MAGIC_TELEPORT_RING_HORIZ_SPAN = CS * 0.98;
-/** Static yaw so the ring aligns with the corridor (mesh authored axis). */
-const MAZE_MAGIC_TELEPORT_RING_YAW = Math.PI / 2;
+
+/** Corridor tangent in grid coords (dx east, dy north → world +Z); null if cell unusable. */
+function corridorTangentGrid(
+  grid: string[][],
+  mapWidth: number,
+  mapHeight: number,
+  cx: number,
+  cy: number,
+): { dx: number; dy: number } | null {
+  const isWallCell = (x: number, y: number) => grid[y]?.[x] === WALL;
+  const walkable = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < mapWidth && y < mapHeight && !isWallCell(x, y);
+
+  if (!walkable(cx, cy)) return null;
+
+  const n: Array<{ dx: number; dy: number }> = [];
+  if (walkable(cx + 1, cy)) n.push({ dx: 1, dy: 0 });
+  if (walkable(cx - 1, cy)) n.push({ dx: -1, dy: 0 });
+  if (walkable(cx, cy + 1)) n.push({ dx: 0, dy: 1 });
+  if (walkable(cx, cy - 1)) n.push({ dx: 0, dy: -1 });
+
+  if (n.length === 0) return null;
+
+  for (let i = 0; i < n.length; i++) {
+    for (let j = i + 1; j < n.length; j++) {
+      const a = n[i]!;
+      const b = n[j]!;
+      if (a.dx === -b.dx && a.dy === -b.dy) {
+        return { dx: a.dx, dy: a.dy };
+      }
+    }
+  }
+
+  if (n.length === 1) {
+    return { dx: n[0]!.dx, dy: n[0]!.dy };
+  }
+
+  let sx = 0;
+  let sy = 0;
+  for (const d of n) {
+    sx += d.dx;
+    sy += d.dy;
+  }
+  const len = Math.hypot(sx, sy);
+  if (len > 1e-6) {
+    return { dx: sx / len, dy: sy / len };
+  }
+
+  return { dx: 1, dy: 0 };
+}
+
+/** Y rotation so the ring’s span is perpendicular to the corridor (same atan2(dx,dy) basis as wall props). */
+function mazeMagicTeleportFloorYawRad(
+  grid: string[][],
+  mapWidth: number,
+  mapHeight: number,
+  cx: number,
+  cy: number,
+): number {
+  const t = corridorTangentGrid(grid, mapWidth, mapHeight, cx, cy);
+  if (!t) return 0;
+  const spanDx = -t.dy;
+  const spanDy = t.dx;
+  return Math.atan2(spanDx, spanDy);
+}
 /** Spider web GLB: scale to span corridor (one cell) and wall height. */
 const SPIDER_WEB_TUNNEL_WIDTH = CS * 1.06;
 const SPIDER_WEB_TUNNEL_HEIGHT = WALL_HEIGHT * 0.98;
@@ -1955,12 +2018,25 @@ function MazeArtifactPickups({
   );
 }
 
-function MazeWorldFeaturePickups({ items }: { items: Array<{ x: number; y: number; url: string }> }) {
+function MazeWorldFeaturePickups({
+  items,
+  grid,
+  mapWidth,
+  mapHeight,
+}: {
+  items: Array<{ x: number; y: number; url: string }>;
+  grid: string[][];
+  mapWidth: number;
+  mapHeight: number;
+}) {
   if (!items.length) return null;
   return (
     <>
       {items.map((p) => {
         const isMagicTeleport = p.url === MAZE_WORLD_FEATURE_MAGIC_TELEPORT_GLB;
+        const magicYaw = isMagicTeleport
+          ? mazeMagicTeleportFloorYawRad(grid, mapWidth, mapHeight, p.x, p.y)
+          : 0;
         return (
           <RotatingArtifactGlbPickup
             key={`${p.x},${p.y},${p.url}`}
@@ -1969,7 +2045,7 @@ function MazeWorldFeaturePickups({ items }: { items: Array<{ x: number; y: numbe
             url={p.url}
             spin={!isMagicTeleport}
             maxHorizSpan={isMagicTeleport ? MAZE_MAGIC_TELEPORT_RING_HORIZ_SPAN : undefined}
-            staticRotationY={isMagicTeleport ? MAZE_MAGIC_TELEPORT_RING_YAW : 0}
+            staticRotationY={isMagicTeleport ? magicYaw : 0}
           />
         );
       })}
@@ -1994,6 +2070,8 @@ function MazeSetPieces({
   const wallProps = useMemo(() => {
     const out: Array<{
       x: number; y: number; z: number; yaw: number;
+      openDx: number;
+      openDy: number;
       type: "portal" | "door" | "grille" | "sign";
       cellX: number; cellY: number; seed: number;
     }> = [];
@@ -2016,6 +2094,8 @@ function MazeSetPieces({
           y: t === "portal" ? 1.18 : t === "door" ? 1.22 : 1.42,
           z: y * CS + s.dy * CS * 0.506,
           yaw: Math.atan2(s.dx, s.dy),
+          openDx: s.dx,
+          openDy: s.dy,
           type: t,
           cellX: x,
           cellY: y,
@@ -2054,17 +2134,29 @@ function MazeSetPieces({
         if (fog > 0.14) return null;
         const near = Math.hypot(p.cellX - playerX, p.cellY - playerY) <= 6.2;
         if (p.type === "portal") {
+          const corridorCellX = p.cellX + p.openDx;
+          const corridorCellY = p.cellY + p.openDy;
+          const floorSpanYaw = mazeMagicTeleportFloorYawRad(
+            grid,
+            mapWidth,
+            mapHeight,
+            corridorCellX,
+            corridorCellY,
+          );
+          const portalTwist = floorSpanYaw - p.yaw;
           return (
             <group key={`portal-${i}`} position={[p.x, p.y, p.z]} rotation={[0, p.yaw, 0]}>
-              <mesh castShadow receiveShadow>
-                <torusGeometry args={[0.45, 0.08, 10, 22]} />
-                <meshStandardMaterial color="#1f1a22" metalness={0.35} roughness={0.55} />
-              </mesh>
-              <mesh position={[0, 0, -0.03]} renderOrder={3}>
-                <circleGeometry args={[0.36, 24]} />
-                <meshBasicMaterial color="#8d6cff" transparent opacity={0.45} />
-              </mesh>
-              {near && <pointLight position={[0, 0, 0.05]} color="#8c68ff" intensity={0.48} distance={2.2} decay={2.5} />}
+              <group rotation={[0, portalTwist, 0]}>
+                <mesh castShadow receiveShadow>
+                  <torusGeometry args={[0.45, 0.08, 10, 22]} />
+                  <meshStandardMaterial color="#1f1a22" metalness={0.35} roughness={0.55} />
+                </mesh>
+                <mesh position={[0, 0, -0.03]} renderOrder={3}>
+                  <circleGeometry args={[0.36, 24]} />
+                  <meshBasicMaterial color="#8d6cff" transparent opacity={0.45} />
+                </mesh>
+                {near && <pointLight position={[0, 0, 0.05]} color="#8c68ff" intensity={0.48} distance={2.2} decay={2.5} />}
+              </group>
             </group>
           );
         }
@@ -3666,7 +3758,12 @@ function MazeScene({
       <HorrorCornerRelics grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
       <Suspense fallback={null}>
         <MazeArtifactPickups pickups={artifactPickups ?? []} />
-        <MazeWorldFeaturePickups items={worldFeaturePickups ?? []} />
+        <MazeWorldFeaturePickups
+          items={worldFeaturePickups ?? []}
+          grid={grid}
+          mapWidth={mapWidth}
+          mapHeight={mapHeight}
+        />
       </Suspense>
       <WallBlocks grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} playerX={playerX} playerY={playerY} />
       <Suspense fallback={null}>
