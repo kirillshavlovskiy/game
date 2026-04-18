@@ -700,8 +700,6 @@ const COMBAT_STRIKE_LAB_COMMIT_DELAY_MS_MERGED_MESHY_3D = 3200;
 /** 2D combat portraits only need short pose beats between rolls (`MonsterModel3D` uses mixer `finished` when 3D is on). */
 const COMBAT_RECOVERY_HURT_MS_2D = 450;
 const COMBAT_RECOVERY_RECOVER_MS_2D = 550;
-/** Post-win banner: 2D short beat before "defeated" pose. */
-const COMBAT_VICTORY_HURT_TO_DEFEATED_MS_2D = 1400;
 /** Drop duplicate Three.js `finished` / restart bursts so we do not skip the recover phase in one frame. */
 const COMBAT_3D_CLIP_FINISH_DEBOUNCE_MS = 120;
 
@@ -4163,7 +4161,9 @@ export default function LabyrinthGame() {
     rollingRef.current = rolling;
   }, [rolling]);
 
-  // Victory phase: 2D uses a short hurt beat then defeated sprite. 3D merged monsters already played kill + fall on the last strike — stay on `defeated` only (no second hurt→fall sequence on the result screen).
+  // Victory phase: once the encounter is over, always use `defeated` for the loser (monster) on the result screen.
+  // A delayed “hurt → defeated” beat used to hold a standing hurt pose for ~1.4s and read as an extra animation
+  // (and as two upright figures before the fall). The strike already played during the encounter; skip that beat.
   useEffect(() => {
     if (combatState) {
       setCombatVictoryPhase("hurt");
@@ -4173,17 +4173,7 @@ export default function LabyrinthGame() {
       setCombatVictoryPhase("hurt");
       return;
     }
-    const use3dVictory =
-      isMonster3DEnabled() &&
-      combatResult.monsterType != null &&
-      getMonsterGltfPath(combatResult.monsterType, "idle") != null;
-    if (use3dVictory) {
-      setCombatVictoryPhase("defeated");
-      return;
-    }
-    setCombatVictoryPhase("hurt");
-    const t = setTimeout(() => setCombatVictoryPhase("defeated"), COMBAT_VICTORY_HURT_TO_DEFEATED_MS_2D);
-    return () => clearTimeout(t);
+    setCombatVictoryPhase("defeated");
   }, [combatState, combatResult?.won, combatResult?.monsterType]);
 
   // Focus/scroll to current player marker when turn changes or after rolling (dice modal closes)
@@ -10209,7 +10199,8 @@ export default function LabyrinthGame() {
               ? {
                   alignItems: "stretch" as const,
                   justifyContent: isMobile && !isLandscapeCompact ? ("flex-start" as const) : ("center" as const),
-                  overflowY: "hidden",
+                  /** Desktop: allow scroll when face-off + 3D chrome is taller than the viewport; else Roll/Run stay clipped with no pointer target. */
+                  overflowY: isMobile ? ("hidden" as const) : ("auto" as const),
                   WebkitOverflowScrolling: "touch" as const,
                 }
               : isLandscapeCompact && !isMobile
@@ -10258,7 +10249,7 @@ export default function LabyrinthGame() {
                     ? "calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px)"
                 : undefined,
               minHeight: 0,
-              overflowY: combatActiveFitViewport ? "hidden" : "auto",
+              overflowY: combatActiveFitViewport && isMobile ? "hidden" : "auto",
               WebkitOverflowScrolling: "touch",
               ...(isMobile && !isLandscapeCompact
                 ? {
@@ -10694,10 +10685,11 @@ export default function LabyrinthGame() {
                    *
                    * Once `combatState` clears, `handleCombatRecoveryClipFinished` no longer runs (it requires an active
                    * encounter), so phase can stay `"hurt"` — that would keep the finisher looping under the bonus UI.
-                   * Post-win modal: always idle; the killing blow already played during the encounter.
+                   * Post-win: use `angry` (merged rigs: menace / aggro loop) — not neutral `idle`, so we do not show two
+                   * upright relaxed figures beside a defeated body; the finisher already played during the encounter.
                    */
                   case "defeated":
-                    if (!combatState && combatResult?.won) return "idle";
+                    if (!combatState && combatResult?.won) return "angry";
                     return combatRecoveryPhase === "hurt" ? "attack" : "idle";
                   case "recover": return "idle";
                   case "rolling": return "rolling";
@@ -10705,6 +10697,7 @@ export default function LabyrinthGame() {
                 }
               })();
               const playerAttackVariant: "spell" | "skill" | "light" | undefined = (() => {
+                if (!combatState && combatResult?.won) return undefined;
                 const st = playerGltfVisualState as string;
                 if (
                   st === "idle" ||
