@@ -2832,8 +2832,10 @@ function CameraController({
     // Keep manual camera adjustment persistent while following the player.
     // Reset: explicit reset, turn/facing change, teleport/catapult framing, or a touch step to a new tile.
 
-    // Auto-follow current player and orient behind movement direction unless user is actively rotating.
-    if (!rotateMode && !dragRef.current && !orbitRingGesture) {
+    /* Auto-follow: always pan the orbit target toward the player even during canvas / minimap orbit gestures.
+     * Otherwise mobile multitouch (move joystick + look on the other side) leaves ctrl.target behind while the
+     * pawn moves. Manual orbit is preserved by re-applying the offset vector after the target moves. */
+    if (!rotateMode) {
       const transitionBlend = transitionBlendRef.current;
       let posLerp = THREE.MathUtils.lerp(CAM_POS_LERP, 0.42, transitionBlend);
       let rotLerp = THREE.MathUtils.lerp(CAM_ROT_LERP, 0.34, transitionBlend);
@@ -2841,11 +2843,27 @@ function CameraController({
         posLerp = Math.max(posLerp, 0.46);
         rotLerp = Math.max(rotLerp, 0.44);
       }
-      ctrl.target.lerp(desiredTarget, posLerp);
-      // Keep a stable camera offset from the current target to prevent tilt drift.
-      const desiredCameraPos = ctrl.target.clone().add(desiredOffset);
-      camera.position.lerp(desiredCameraPos, rotLerp);
-      transitionBlendRef.current = Math.max(0, transitionBlend * 0.9 - 0.012);
+
+      const orbitLookGesture = !!(dragRef.current || orbitRingGesture);
+
+      if (!lockCameraToAutoFraming) {
+        ctrl.target.lerp(desiredTarget, posLerp);
+      }
+
+      if (
+        orbitLookGesture &&
+        hasManualCameraRef.current &&
+        manualOffsetRef.current &&
+        !lockCameraToAutoFraming
+      ) {
+        const off = manualOffsetRef.current.clone();
+        camera.position.copy(ctrl.target).add(off);
+        manualOffsetRef.current.copy(off);
+      } else {
+        const desiredCameraPos = ctrl.target.clone().add(desiredOffset);
+        camera.position.lerp(desiredCameraPos, rotLerp);
+        transitionBlendRef.current = Math.max(0, transitionBlend * 0.9 - 0.012);
+      }
       ctrl.update();
     }
 
