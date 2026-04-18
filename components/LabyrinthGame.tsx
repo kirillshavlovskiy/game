@@ -10199,8 +10199,8 @@ export default function LabyrinthGame() {
               ? {
                   alignItems: "stretch" as const,
                   justifyContent: isMobile && !isLandscapeCompact ? ("flex-start" as const) : ("center" as const),
-                  /** Desktop: allow scroll when face-off + 3D chrome is taller than the viewport; else Roll/Run stay clipped with no pointer target. */
-                  overflowY: isMobile ? ("hidden" as const) : ("auto" as const),
+                  /** Portrait / desktop: face-off stacks tall — must scroll; hidden here clipped Roll/Run (landscape often fit without scroll). */
+                  overflowY: "auto" as const,
                   WebkitOverflowScrolling: "touch" as const,
                 }
               : isLandscapeCompact && !isMobile
@@ -10249,7 +10249,7 @@ export default function LabyrinthGame() {
                     ? "calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px)"
                 : undefined,
               minHeight: 0,
-              overflowY: combatActiveFitViewport && isMobile ? "hidden" : "auto",
+              overflowY: "auto",
               WebkitOverflowScrolling: "touch",
               ...(isMobile && !isLandscapeCompact
                 ? {
@@ -11257,7 +11257,8 @@ export default function LabyrinthGame() {
                       : { flexShrink: 0 }),
                     textAlign: "center",
                     paddingTop: isLandscapeCompact ? 0 : mobileCompactActiveCombat ? 0 : 2,
-                    overflow: combatActiveFitViewport ? "hidden" : "visible",
+                    /** Do not clip — hidden made Roll/Run unreachable when face-off column exceeded flex slot (portrait + desktop). */
+                    overflow: "visible",
                     display: "flex",
                     flexDirection: "column",
                     alignItems: "stretch",
@@ -11307,7 +11308,8 @@ export default function LabyrinthGame() {
                         ? {
                             flex: 1,
                             minHeight: 0,
-                            overflow: "hidden",
+                            overflowX: "hidden",
+                            overflowY: "visible",
                             gap:
                               combatMobileLsChromeTight && !combatLandscapePostFight
                                 ? 4
