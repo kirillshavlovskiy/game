@@ -4176,6 +4176,12 @@ export default function LabyrinthGame() {
     setCombatVictoryPhase("defeated");
   }, [combatState, combatResult?.won, combatResult?.monsterType]);
 
+  /** Win + encounter closed: recovery phase must not stay `"hurt"` (clip-finished handler only runs during live combat). */
+  useEffect(() => {
+    if (combatState || !combatResult?.won) return;
+    setCombatRecoveryPhase("ready");
+  }, [combatState, combatResult?.won]);
+
   // Focus/scroll to current player marker when turn changes or after rolling (dice modal closes)
   useEffect(() => {
     if (winner !== null || !lab || lab.eliminatedPlayers.has(currentPlayer)) return;
@@ -10516,16 +10522,9 @@ export default function LabyrinthGame() {
               const headerSurpriseVisible =
                 !!combatState && !combatResult && combatHasRolledRef.current;
               const inActiveFight = !!combatState;
-              /** 3D win: use `defeated` immediately — `combatVictoryPhase` lags one frame behind useEffect and briefly showed `hurt` (alive) after lab flush. */
-              const postFight3dMonsterWin =
-                !inActiveFight &&
-                !!combatResult?.won &&
-                headerMt != null &&
-                isMonster3DEnabled() &&
-                getMonsterGltfPath(headerMt, "idle") != null;
-              const combatVictoryPhaseForSprites: "hurt" | "defeated" = postFight3dMonsterWin
-                ? "defeated"
-                : combatVictoryPhase;
+              /** Win: always show the defeated loser immediately — `combatVictoryPhase` useEffect runs after paint and used to flash standing `hurt`. */
+              const combatVictoryPhaseForSprites: "hurt" | "defeated" =
+                combatResult?.won === true ? "defeated" : combatVictoryPhase;
               /** Between rolls: calm idle (full HP) or recover (wounded). Surprise stance only drives rolling pose + combat math — not the static portrait between strikes. */
               const headerMonsterCombatState: MonsterSpriteState = (() => {
                 if (inActiveFight && headerMt) {
@@ -10821,14 +10820,18 @@ export default function LabyrinthGame() {
                 getMonsterGltfPath(combatState.monsterType, "idle") != null
                   ? handleCombatRecoveryClipFinished
                   : undefined;
+              /** Same session string in-fight and post-fight so CombatScene3D does not remount when `combatState` clears. */
+              const combatEncounterSessionKey =
+                combatResult?.combatEncounterKey ??
+                (combatState != null
+                  ? `${combatState.sessionId}-${combatState.monsterIndex}-${combatState.monsterType}-${combatState.playerIndex}`
+                  : null);
               const combat3dInstanceKey =
-                headerMt != null
-                  ? combatState != null
-                    ? `c3d-${combatState.sessionId}-${combatState.monsterIndex}-${headerMt}-${headerPi}`
-                    : combatResult?.combatEncounterKey != null
-                      ? `c3d-${combatResult.combatEncounterKey}`
-                      : `c3d-post-${headerPi}-${headerMt}`
-                  : "c3d";
+                headerMt != null && combatEncounterSessionKey != null
+                  ? `c3d-${combatEncounterSessionKey}`
+                  : headerMt != null
+                    ? `c3d-post-${headerPi}-${headerMt}`
+                    : "c3d";
               let monsterMaxHp = 1;
               let monsterCurHp = 1;
               if (headerMt) {
@@ -11067,6 +11070,33 @@ export default function LabyrinthGame() {
                * Omit `gltfVisualState` / `playerGltfVisualState` — including them bumps the key on every beat and disables
                * hunt→strike crossfades in `PositionedGltfSubject` (`syncKeyBump` blocks `locomotionHandoffToStrike`).
                */
+              /**
+               * Post-combat (`!combatState && combatResult`): footer snapshot is cleared after a few seconds — if sync key
+               * embeds strikePortrait / rolls / hurt HP, the key bumps and merged rigs replay clips (looks like “another
+               * animation”). Freeze footer-derived segments while the outcome modal is open.
+               */
+              const postCombatFaceoffFreeze = !combatState && combatResult != null;
+              const strikePortraitForFaceSync = postCombatFaceoffFreeze
+                ? "postCombat"
+                : combatFooterSnapshot?.strikePortrait ?? "noFooter";
+              const playerRollForFaceSync = postCombatFaceoffFreeze
+                ? "postCombat"
+                : combatFooterSnapshot?.playerRoll != null
+                  ? String(combatFooterSnapshot.playerRoll)
+                  : "";
+              const strikeTargetPickForFaceSync = postCombatFaceoffFreeze
+                ? "postCombat"
+                : combatFooterSnapshot?.strikeTargetPick ?? "";
+              const draculaHurtHpStrForFaceSync = postCombatFaceoffFreeze
+                ? "postCombat"
+                : draculaHurtHpFor3d
+                  ? `${draculaHurtHpFor3d.hp}/${draculaHurtHpFor3d.maxHp}`
+                  : "hurtHpX";
+              const fatalJumpForFaceSync = postCombatFaceoffFreeze
+                ? "fjX"
+                : playerFatalJumpKill3d
+                  ? "fj1"
+                  : "fj0";
               const combat3dFaceOffSyncKey =
                 isMonster3DEnabled() && monsterGltfPath && headerMt
                   ? [
@@ -11078,13 +11108,11 @@ export default function LabyrinthGame() {
                       monsterDraculaVariantForCombat3d ?? "na",
                       playerAttackVariantForClipLeads ?? "na",
                       combatStrikePick3dDuringRoll ? "sp1" : "sp0",
-                      draculaHurtHpFor3d
-                        ? `${draculaHurtHpFor3d.hp}/${draculaHurtHpFor3d.maxHp}`
-                        : "hurtHpX",
-                      playerFatalJumpKill3d ? "fj1" : "fj0",
-                      combatFooterSnapshot?.strikePortrait ?? "noFooter",
-                      combatFooterSnapshot?.playerRoll != null ? String(combatFooterSnapshot.playerRoll) : "",
-                      combatFooterSnapshot?.strikeTargetPick ?? "",
+                      draculaHurtHpStrForFaceSync,
+                      fatalJumpForFaceSync,
+                      strikePortraitForFaceSync,
+                      playerRollForFaceSync,
+                      strikeTargetPickForFaceSync,
                       String(playerAttackClipCycleIndexFor3d),
                       combatWeaponPath ?? "",
                       combatOffhandArmourPath ?? "",
@@ -11105,7 +11133,7 @@ export default function LabyrinthGame() {
                   <div
                     style={{
                       position: "relative",
-                      zIndex: 1,
+                      zIndex: 0,
                       display: "flex",
                       flexDirection: "row",
                       alignItems: "center",
@@ -11553,6 +11581,7 @@ export default function LabyrinthGame() {
                               minWidth: 0,
                               minHeight: 0,
                               flexShrink: 0,
+                              pointerEvents: "none",
                             }}
                             aria-hidden
                           />
@@ -11563,6 +11592,7 @@ export default function LabyrinthGame() {
                               width: "100%",
                               minHeight: landscapeFaceoffDiceViewportH,
                               flexShrink: 0,
+                              pointerEvents: "none",
                             }}
                             aria-hidden
                           />
@@ -11573,6 +11603,7 @@ export default function LabyrinthGame() {
                               width: "100%",
                               minHeight: landscapeFaceoffDiceViewportH,
                               flexShrink: 0,
+                              pointerEvents: "none",
                             }}
                             aria-hidden
                           />
@@ -11654,6 +11685,7 @@ export default function LabyrinthGame() {
                             width: "100%",
                               minHeight: landscapeFaceoffDiceViewportH,
                               flexShrink: 0,
+                              pointerEvents: "none",
                             }}
                             aria-hidden
                           />
@@ -11662,11 +11694,17 @@ export default function LabyrinthGame() {
                     </div>
                     </div>
                     {combatMobileLsChromeTight && useCombatLandscapeFaceoff && !combatLandscapePostFight ? (
-                      <div style={{ flex: 1, minHeight: 0, width: "100%" }} aria-hidden />
+                      <div
+                        style={{ flex: 1, minHeight: 0, width: "100%", pointerEvents: "none" }}
+                        aria-hidden
+                      />
                     ) : null}
                     {landscapeFaceoffPushChromeDown &&
                     !(combatMobileLsChromeTight && useCombatLandscapeFaceoff && !combatLandscapePostFight) ? (
-                      <div style={{ flex: 1, minHeight: 0, width: "100%" }} aria-hidden />
+                      <div
+                        style={{ flex: 1, minHeight: 0, width: "100%", pointerEvents: "none" }}
+                        aria-hidden
+                      />
                     ) : null}
                     <div
                       style={{
@@ -11827,6 +11865,10 @@ export default function LabyrinthGame() {
                           boxSizing: "border-box",
                           flexShrink: 0,
                           flexWrap: "nowrap",
+                          position: "relative",
+                          /** Above Skills strip (`z-index: 0`) so overflow / paint order never eats Roll / Run taps. Below rerollbackdrop (200) + rolling dice layer (188). */
+                          zIndex: 40,
+                          pointerEvents: "auto",
                         }}
                       >
                         <button
