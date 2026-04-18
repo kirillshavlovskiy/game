@@ -3467,8 +3467,6 @@ export default function LabyrinthGame() {
   const [combat3dApproachBlend, setCombat3dApproachBlend] = useState(1);
   const combat3dApproachSessionRef = useRef(0);
   const combat3dApproachRafRef = useRef(0);
-  /** Throttle React updates during walk-in — 60 setState/s was melting low-end phones while `CombatScene3D` stayed `frameloop="always"`. */
-  const combat3dApproachLastEmitMsRef = useRef(0);
 
   useEffect(() => {
     combat3dApproachSessionRef.current += 1;
@@ -3493,21 +3491,14 @@ export default function LabyrinthGame() {
     }
 
     setCombat3dApproachBlend(0);
-    combat3dApproachLastEmitMsRef.current = 0;
     const t0 = performance.now();
     const durationMs = COMBAT_FACEOFF_APPROACH_DURATION_MS;
-    const minEmitGapMs = isMobile ? 48 : 20;
     const tick = (now: number) => {
       if (combat3dApproachSessionRef.current !== session) return;
       const linear = Math.min(1, (now - t0) / durationMs);
       const u = linear * linear * (3 - 2 * linear);
-      const done = u >= 1 - 1e-6;
-      const elapsedEmit = now - combat3dApproachLastEmitMsRef.current;
-      if (done || elapsedEmit >= minEmitGapMs) {
-        combat3dApproachLastEmitMsRef.current = now;
-        setCombat3dApproachBlend(done ? 1 : u);
-      }
-      if (!done) {
+      setCombat3dApproachBlend(u);
+      if (u < 1) {
         combat3dApproachRafRef.current = requestAnimationFrame(tick);
       }
     };
@@ -3517,7 +3508,7 @@ export default function LabyrinthGame() {
       combat3dApproachSessionRef.current += 1;
       cancelAnimationFrame(combat3dApproachRafRef.current);
     };
-  }, [combat3dApproachEligible, rolling, isMobile]);
+  }, [combat3dApproachEligible, rolling]);
   /**
    * Merged 3D: same approach value for **clip lead math** and **`CombatScene3D` world walk-in** — if the roll ends
    * before the RAF lerp reaches 1, `combat3dApproachBlend` can stay below 1 for a frame while spacing/footers already
@@ -11476,7 +11467,6 @@ export default function LabyrinthGame() {
                           draculaLoopAngrySkill01={draculaLossMenaceLoop3d}
                           compactCombatViewport
                           compactCombatShortWide={isMobile && isLandscapeCompact}
-                          mobilePerformanceMode={isMobile}
                           strikePickActive={combatStrikePick3dDuringRoll}
                           onStrikeTargetPick={handleStrikeTargetPick}
                           onOneShotAnimationFinished={combat3dOneShotFinished}
@@ -12462,7 +12452,6 @@ export default function LabyrinthGame() {
                             draculaLoopAngrySkill01={draculaLossMenaceLoop3d}
                             compactCombatViewport
                             compactCombatShortWide={isMobile && isLandscapeCompact}
-                            mobilePerformanceMode={isMobile}
                             strikePickActive={combatStrikePick3dDuringRoll}
                             onStrikeTargetPick={handleStrikeTargetPick}
                             onOneShotAnimationFinished={combat3dOneShotFinished}
