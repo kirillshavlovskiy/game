@@ -614,6 +614,8 @@ function WallBlocks({
 
   const opaqueRef = useRef<THREE.InstancedMesh>(null);
   const fadeRef = useRef<THREE.InstancedMesh>(null);
+  /** Start high so the first `useFrame` triggers an initial bounding sphere (then every 10th frame). */
+  const wallOccluderBsphereFrameRef = useRef(9);
   const dummy = useMemo(() => new THREE.Object3D(), []);
 
   useLayoutEffect(() => {
@@ -713,8 +715,12 @@ function WallBlocks({
     fMesh.count = fi;
     oMesh.instanceMatrix.needsUpdate = true;
     fMesh.instanceMatrix.needsUpdate = true;
-    oMesh.computeBoundingSphere();
-    fMesh.computeBoundingSphere();
+    /** Full `computeBoundingSphere` every frame was a major mobile CPU sink (100s of instances × 2 meshes). */
+    wallOccluderBsphereFrameRef.current += 1;
+    if (wallOccluderBsphereFrameRef.current % 10 === 0) {
+      oMesh.computeBoundingSphere();
+      fMesh.computeBoundingSphere();
+    }
   });
 
   if (maxCount === 0) return null;
@@ -929,6 +935,7 @@ function PlayerMarker({
   playerOffhandArmourGltfPath,
   isoCombatPlayerCue,
   playerJumpPulseVersion = 0,
+  touchUi = false,
 }: {
   playerX: number;
   playerY: number;
@@ -944,6 +951,8 @@ function PlayerMarker({
     fatalJump: boolean;
   } | null;
   playerJumpPulseVersion?: number;
+  /** Fewer bbox samples + hysteresis on locomotion state — avoids animation mixer churn on phones. */
+  touchUi?: boolean;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const modelAnchorRef = useRef<THREE.Group>(null);
@@ -1017,12 +1026,26 @@ function PlayerMarker({
       setCombatPlayback(null);
     }
     const attacking = inCombatClip;
-    const next: "idle" | "hunt" | "attack" = attacking ? "attack" : (transit > 0.06 ? "hunt" : "idle");
+    /** Hysteresis: single-threshold idle/hunt flipped every frame near the cutoff → `PlayerAvatar3D` effect rerun + mixer churn. */
+    const huntEnter = touchUi ? 0.082 : 0.07;
+    const huntExit = touchUi ? 0.038 : 0.045;
+    let next: "idle" | "hunt" | "attack";
+    if (attacking) {
+      next = "attack";
+    } else {
+      const vs = visualStateRef.current;
+      const baseline = vs === "attack" ? "idle" : vs;
+      if (baseline === "idle") {
+        next = transit > huntEnter ? "hunt" : "idle";
+      } else {
+        next = transit < huntExit ? "idle" : "hunt";
+      }
+    }
     if (next !== visualStateRef.current) {
       visualStateRef.current = next;
       setVisualState(next);
     }
-    if (!attacking && transit > 0.06) {
+    if (!attacking && transit > huntEnter * 0.72) {
       const gx = targetPos.current.x - groupRef.current.position.x;
       const gz = targetPos.current.z - groupRef.current.position.z;
       const glen = Math.hypot(gx, gz);
@@ -1051,7 +1074,7 @@ function PlayerMarker({
         locomotionAxisRef.current = axis;
         setLocomotionAxis(axis);
       }
-    } else if (!attacking && transit <= 0.06 && locomotionAxisRef.current !== "forward") {
+    } else if (!attacking && transit <= huntExit && locomotionAxisRef.current !== "forward") {
       locomotionAxisRef.current = "forward";
       setLocomotionAxis("forward");
     }
@@ -1059,7 +1082,8 @@ function PlayerMarker({
     if (modelAnchor) {
       groundBoxFrameRef.current += 1;
       const moving = transit > 0.045;
-      if (moving || groundBoxFrameRef.current % 5 === 0) {
+      const bboxStride = touchUi ? 14 : 5;
+      if (moving || groundBoxFrameRef.current % bboxStride === 0) {
         groundBox.setFromObject(modelAnchor);
         const desiredMinY = FLOOR_Y + 0.015;
         const neededLift = Math.max(0, desiredMinY - groundBox.min.y);
@@ -2342,18 +2366,6 @@ function CameraController({
   /** Smoothed grid (dx,dy) for auto camera offset — eases orbit when facing/turn changes instead of snapping. */
   const smoothFollowDirRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 1 });
 
-  /** Reused every frame — avoids allocating `new Vector3()` while the player moves (GC stutter on mobile). */
-  const camScratchRef = useRef({
-    desiredTarget: new THREE.Vector3(),
-    autoCameraPos: new THREE.Vector3(),
-    autoOffset: new THREE.Vector3(),
-    desiredOffset: new THREE.Vector3(),
-    desiredCameraPos: new THREE.Vector3(),
-    toPawn: new THREE.Vector3(),
-    toB: new THREE.Vector3(),
-    toBD: new THREE.Vector3(),
-  });
-
   /** Teleport destination picking: allow orbit / minimap ring so the player can inspect beacons; slingshot pull still locks. */
   const lockCameraToAutoFraming = catapultMode && catapultLockCameraForPull;
 
@@ -2597,8 +2609,7 @@ function CameraController({
     const pz = playerY * CS;
     const mapSpan = Math.max(8, mapWidth, mapHeight);
     const lookY = catapultMode ? CATAPULT_LOOK_AT_Y : CAM_LOOK_AT_Y;
-    const camS = camScratchRef.current;
-    const desiredTarget = camS.desiredTarget.set(px, lookY, pz);
+    const desiredTarget = new THREE.Vector3(px, lookY, pz);
 
     let followDist: number;
     let followHeight: number;
@@ -2629,8 +2640,12 @@ function CameraController({
     sy /= slen;
     smoothFollowDirRef.current = { dx: sx, dy: sy };
 
-    const autoCameraPos = camS.autoCameraPos.set(px - sx * followDist, followHeight, pz - sy * followDist);
-    const autoOffset = camS.autoOffset.copy(autoCameraPos).sub(desiredTarget);
+    const autoCameraPos = new THREE.Vector3(
+      px - sx * followDist,
+      followHeight,
+      pz - sy * followDist
+    );
+    const autoOffset = autoCameraPos.clone().sub(desiredTarget);
 
     const prevPosForMove = prevPlayerPosRef.current;
     const movedFar = Math.hypot(playerX - prevPosForMove.x, playerY - prevPosForMove.y) > 1.01;
@@ -2647,8 +2662,8 @@ function CameraController({
 
     const desiredOffset =
       hasManualCameraRef.current && manualOffsetRef.current && !lockCameraToAutoFraming
-        ? camS.desiredOffset.copy(manualOffsetRef.current)
-        : camS.desiredOffset.copy(autoOffset);
+        ? manualOffsetRef.current.clone()
+        : autoOffset.clone();
 
     if (
       !touchCameraBootstrappedRef.current &&
@@ -2736,7 +2751,7 @@ function CameraController({
       }
       ctrl.target.lerp(desiredTarget, posLerp);
       // Keep a stable camera offset from the current target to prevent tilt drift.
-      const desiredCameraPos = camS.desiredCameraPos.copy(ctrl.target).add(desiredOffset);
+      const desiredCameraPos = ctrl.target.clone().add(desiredOffset);
       camera.position.lerp(desiredCameraPos, rotLerp);
       transitionBlendRef.current = Math.max(0, transitionBlend * 0.9 - 0.012);
       ctrl.update();
@@ -2753,7 +2768,7 @@ function CameraController({
         (touchUi && (dragRef.current != null || hasManualCameraRef.current)) ||
         (!touchUi && dragRef.current != null));
     if (cameraDrivesFacingGrid) {
-      const toPawn = camS.toPawn.subVectors(ctrl.target, camera.position);
+      const toPawn = new THREE.Vector3().subVectors(ctrl.target, camera.position);
       toPawn.y = 0;
       const hLen = toPawn.length();
       if (hLen > 1e-4) {
@@ -2777,7 +2792,7 @@ function CameraController({
 
     /* Mini-map: continuous bearing matches 3D orbit (touch drag, right-drag desktop, mini-map ring, etc.). */
     if (!lockCameraToAutoFraming && onIsoCameraBearingDegRef.current) {
-      const toB = camS.toB.subVectors(ctrl.target, camera.position);
+      const toB = new THREE.Vector3().subVectors(ctrl.target, camera.position);
       toB.y = 0;
       const hB = toB.length();
       if (hB > 1e-4) {
@@ -2807,7 +2822,7 @@ function CameraController({
       else if (!onIsoCameraBearingDegRef.current) {
         bearingDiag = "blocked_noParentCallback_isGridOrUnwired";
       } else {
-        const toBD = camS.toBD.subVectors(ctrl.target, camera.position);
+        const toBD = new THREE.Vector3().subVectors(ctrl.target, camera.position);
         toBD.y = 0;
         hBLen = toBD.length();
         bearingDiag = hBLen <= 1e-4 ? "blocked_degenerateCameraRay" : "emitting_ok";
@@ -3683,6 +3698,7 @@ function MazeScene({
         playerOffhandArmourGltfPath={playerOffhandArmourGltfPath}
         isoCombatPlayerCue={isoCombatPlayerCue}
         playerJumpPulseVersion={playerJumpPulseVersion}
+        touchUi={touchUi}
       />
       {magicPortalPreviewOptions &&
         magicPortalPreviewOptions.length > 0 &&
