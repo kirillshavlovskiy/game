@@ -10691,8 +10691,13 @@ export default function LabyrinthGame() {
                    * Lethal strike: monster plays defeat / fall during `combatRecoveryPhase === "hurt"`.
                    * Player must show the finisher (attack) in that same beat — not idle “watching” the fall.
                    * After the clip finishes we jump to `ready` (see `handleCombatRecoveryClipFinished`); then idle is correct.
+                   *
+                   * Once `combatState` clears, `handleCombatRecoveryClipFinished` no longer runs (it requires an active
+                   * encounter), so phase can stay `"hurt"` — that would keep the finisher looping under the bonus UI.
+                   * Post-win modal: always idle; the killing blow already played during the encounter.
                    */
                   case "defeated":
+                    if (!combatState && combatResult?.won) return "idle";
                     return combatRecoveryPhase === "hurt" ? "attack" : "idle";
                   case "recover": return "idle";
                   case "rolling": return "rolling";
@@ -12701,7 +12706,7 @@ export default function LabyrinthGame() {
                 onPointerDown={(e) => e.stopPropagation()}
               >
                 <div
-                  key={`co-${combatResult.playerIndex ?? 0}-${combatResult.monsterType ?? "?"}-${combatResult.won ? "w" : "l"}-${pendingCombatBonusPick ? (bonusLootRevealed ? "br1" : "br0") : "nb"}`}
+                  key={`co-${combatResult.playerIndex ?? 0}-${combatResult.monsterType ?? "?"}-${combatResult.won ? "w" : "l"}-${pendingCombatBonusPick ? "bp" : "nb"}`}
                   className="combat-outcome-center-card"
                   role="dialog"
                   aria-modal="true"
