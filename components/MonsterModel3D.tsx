@@ -2033,6 +2033,11 @@ export interface CombatScene3DProps {
   /** Lab: if present and the name exists on the rig, play this clip instead of the state resolver. */
   playerDebugClipName?: string | null;
   monsterDebugClipName?: string | null;
+  /**
+   * Touch devices: cap WebGL pixel ratio + lighter GL hints. Combat canvas uses `frameloop="always"` for smooth
+   * skeletal clips — uncapped Retina DPR keeps the GPU saturated and animations read as progressive lag after thermal throttle.
+   */
+  mobilePerformanceMode?: boolean;
 }
 
 /** Contact lab: list clips from both GLBs (shared `useGLTF` cache with the fighters). */
@@ -2314,6 +2319,7 @@ export function CombatScene3D({
   onFaceoffClipCatalog,
   playerDebugClipName = null,
   monsterDebugClipName = null,
+  mobilePerformanceMode = false,
 }: CombatScene3DProps) {
   const [webglRestoreGeneration, setWebglRestoreGeneration] = useState(0);
   const bumpWebglCombatCanvas = useCallback(() => {
@@ -2493,8 +2499,12 @@ export function CombatScene3D({
           verticalAlign: "top",
         }}
         frameloop="always"
-        dpr={[1, 2]}
-        gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
+        dpr={mobilePerformanceMode ? 1 : [1, 2]}
+        gl={{
+          alpha: true,
+          antialias: !mobilePerformanceMode,
+          powerPreference: mobilePerformanceMode ? "default" : "high-performance",
+        }}
         camera={{ position: [0, cameraY, cameraZ], fov, near: 0.1, far: 80 }}
         onCreated={() => invalidate()}
       >
