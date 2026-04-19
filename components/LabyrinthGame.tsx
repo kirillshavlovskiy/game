@@ -105,6 +105,7 @@ import {
   COMBAT_FACEOFF_APPROACH_DURATION_MS,
   resolveCombat3dClipLeads,
 } from "@/lib/combat3dContact";
+import { buildCombat3dFaceOffSyncKey } from "@/lib/combatFaceoffSyncKey";
 import { combatFaceoff3dCanvasHeightDesktopPx } from "@/lib/combat3dFaceoffViewport";
 import Dice3D, { Dice3DRef } from "@/components/Dice3D";
 import MazeIsoView, {
@@ -11070,53 +11071,35 @@ export default function LabyrinthGame() {
                * Omit `gltfVisualState` / `playerGltfVisualState` — including them bumps the key on every beat and disables
                * hunt→strike crossfades in `PositionedGltfSubject` (`syncKeyBump` blocks `locomotionHandoffToStrike`).
                */
-              /**
-               * Post-combat (`!combatState && combatResult`): footer snapshot is cleared after a few seconds — if sync key
-               * embeds strikePortrait / rolls / hurt HP, the key bumps and merged rigs replay clips (looks like “another
-               * animation”). Freeze footer-derived segments while the outcome modal is open.
-               */
+              /** Outcome / bonus modal: freeze entire sync tail via `buildCombat3dFaceOffSyncKey` (see lib). */
               const postCombatFaceoffFreeze = !combatState && combatResult != null;
-              const strikePortraitForFaceSync = postCombatFaceoffFreeze
-                ? "postCombat"
-                : combatFooterSnapshot?.strikePortrait ?? "noFooter";
-              const playerRollForFaceSync = postCombatFaceoffFreeze
-                ? "postCombat"
-                : combatFooterSnapshot?.playerRoll != null
-                  ? String(combatFooterSnapshot.playerRoll)
-                  : "";
-              const strikeTargetPickForFaceSync = postCombatFaceoffFreeze
-                ? "postCombat"
-                : combatFooterSnapshot?.strikeTargetPick ?? "";
-              const draculaHurtHpStrForFaceSync = postCombatFaceoffFreeze
-                ? "postCombat"
-                : draculaHurtHpFor3d
-                  ? `${draculaHurtHpFor3d.hp}/${draculaHurtHpFor3d.maxHp}`
-                  : "hurtHpX";
-              const fatalJumpForFaceSync = postCombatFaceoffFreeze
-                ? "fjX"
-                : playerFatalJumpKill3d
-                  ? "fj1"
-                  : "fj0";
               const combat3dFaceOffSyncKey =
                 isMonster3DEnabled() && monsterGltfPath && headerMt
-                  ? [
-                      combatState != null
-                        ? `live-${combatState.sessionId}-${combatState.monsterIndex}`
-                        : `post-${String(combatResult?.monsterType ?? "?")}-${headerPi}`,
-                      headerMt,
-                      String(headerPi),
-                      monsterDraculaVariantForCombat3d ?? "na",
-                      playerAttackVariantForClipLeads ?? "na",
-                      combatStrikePick3dDuringRoll ? "sp1" : "sp0",
-                      draculaHurtHpStrForFaceSync,
-                      fatalJumpForFaceSync,
-                      strikePortraitForFaceSync,
-                      playerRollForFaceSync,
-                      strikeTargetPickForFaceSync,
-                      String(playerAttackClipCycleIndexFor3d),
-                      combatWeaponPath ?? "",
-                      combatOffhandArmourPath ?? "",
-                    ].join("|")
+                  ? buildCombat3dFaceOffSyncKey({
+                      sessionPrefix:
+                        combatEncounterSessionKey != null
+                          ? `enc-${combatEncounterSessionKey}`
+                          : combatState != null
+                            ? `live-${combatState.sessionId}-${combatState.monsterIndex}-${headerMt}-${headerPi}`
+                            : `post-${String(combatResult?.monsterType ?? "?")}-${headerPi}`,
+                      monsterType: headerMt,
+                      playerIndex: headerPi,
+                      postCombatFreeze: postCombatFaceoffFreeze,
+                      monsterDraculaVariant: monsterDraculaVariantForCombat3d,
+                      playerAttackVariantForClipLeads,
+                      combatStrikePickDuringRoll: combatStrikePick3dDuringRoll,
+                      draculaHurtHpStr: draculaHurtHpFor3d
+                        ? `${draculaHurtHpFor3d.hp}/${draculaHurtHpFor3d.maxHp}`
+                        : "hurtHpX",
+                      fatalJumpSegment: playerFatalJumpKill3d ? "fj1" : "fj0",
+                      strikePortrait: combatFooterSnapshot?.strikePortrait ?? "noFooter",
+                      playerRoll:
+                        combatFooterSnapshot?.playerRoll != null ? String(combatFooterSnapshot.playerRoll) : "",
+                      strikeTargetPick: combatFooterSnapshot?.strikeTargetPick ?? "",
+                      playerAttackClipCycleIndex: playerAttackClipCycleIndexFor3d,
+                      combatWeaponPath: combatWeaponPath ?? "",
+                      combatOffhandArmourPath: combatOffhandArmourPath ?? "",
+                    })
                   : undefined;
               /** Landscape: skills/artifacts in the center column; roll + retreat under HP bars (pre–e26e59e4 layout). */
               const renderLandscapeFaceoffSkillsPanel = (): React.ReactNode => {

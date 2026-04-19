@@ -2460,8 +2460,16 @@ export function CombatScene3D({
   }, [armourOffhandGltfPath]);
 
   /** Roster + optional session so Canvas / orbit reset when a new fight reuses the same GLB paths (cached rig pose + dolly). */
-  const sceneAnchorKey = `${monsterType ?? "?"}|${monsterGltfPath}|${playerGltfPath}|${armourGltfPath ?? ""}|${armourOffhandGltfPath ?? ""}|${combatSceneSessionKey ?? ""}|sw${shortWide ? 1 : 0}`;
-  const canvasKey = `meshy-combat-${width}--${sceneAnchorKey}--wg${webglRestoreGeneration}`;
+  /**
+   * Roster + session: remount when GLBs or encounter change — **not** `width` / `shortWide` (layout reflow must not
+   * destroy the WebGL context or every clip restarts from t=0). `shortWide` still drives camera lerps via props.
+   */
+  const sceneAnchorKey = `${monsterType ?? "?"}|${monsterGltfPath}|${playerGltfPath}|${armourGltfPath ?? ""}|${armourOffhandGltfPath ?? ""}|${combatSceneSessionKey ?? ""}`;
+  /**
+   * Omit pixel `width` — combat modal chrome changes canvas size after the strike; embedding width remounted the whole
+   * Canvas and replayed merged clips (see `lib/combatFaceoffSyncKey.ts`).
+   */
+  const canvasKey = `meshy-combat--${sceneAnchorKey}--wg${webglRestoreGeneration}`;
   const initialCombatCamera = useMemo(
     (): readonly [number, number, number] => [0, cameraY, cameraZ],
     [cameraY, cameraZ],

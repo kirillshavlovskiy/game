@@ -10,6 +10,7 @@ import {
   type FaceoffClipCatalog,
 } from "@/components/MonsterModel3D";
 import { COMBAT_FACEOFF_APPROACH_DURATION_MS, resolveCombat3dClipLeads } from "@/lib/combat3dContact";
+import { buildContactPairLabFaceOffSyncKey } from "@/lib/combatFaceoffSyncKey";
 import {
   draculaAttackVariantFromStrikeTarget,
   getMonsterGltfPathForReference,
@@ -424,27 +425,29 @@ export function Monster3dContactPairLab() {
    */
   const faceOffAnimationSyncKey = useMemo(
     () =>
-      [
+      buildContactPairLabFaceOffSyncKey({
         monsterType,
         playerVariant,
         monsterVariant,
-        strikePick ? "1" : "0",
-        showMonsterHurtTier ? `${hurtHp}/${hurtMax}` : "x",
-        fatalJump ? "1" : "0",
-        String(replayNonce),
+        strikePick,
+        showMonsterHurtTier,
+        hurtHp,
+        hurtMax,
+        fatalJump,
+        replayNonce,
         draculaHurtAim,
         draculaMonsterAttackAim,
         playerHurtClipSource,
-        labPlayerWeaponGlb ?? "",
-        labPlayerOffhandGlb ?? "",
+        labPlayerWeaponGlb: labPlayerWeaponGlb ?? "",
+        labPlayerOffhandGlb: labPlayerOffhandGlb ?? "",
         labWeaponHand,
         labBladeTwistPreset,
-        labExtraEulerDeg.join(","),
-        labGripPosM.join(","),
+        labExtraEulerCsv: labExtraEulerDeg.join(","),
+        labGripPosCsv: labGripPosM.join(","),
         labOffhandBladeTwistPreset,
-        labOffhandExtraEulerDeg.join(","),
-        labOffhandGripPosM.join(","),
-      ].join("|"),
+        labOffhandExtraEulerCsv: labOffhandExtraEulerDeg.join(","),
+        labOffhandGripPosCsv: labOffhandGripPosM.join(","),
+      }),
     [
       monsterType,
       playerVariant,
