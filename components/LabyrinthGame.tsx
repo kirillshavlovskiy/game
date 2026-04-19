@@ -10684,11 +10684,11 @@ export default function LabyrinthGame() {
                    *
                    * Once `combatState` clears, `handleCombatRecoveryClipFinished` no longer runs (it requires an active
                    * encounter), so phase can stay `"hurt"` — that would keep the finisher looping under the bonus UI.
-                   * Post-win: use `angry` (merged rigs: menace / aggro loop) — not neutral `idle`, so we do not show two
-                   * upright relaxed figures beside a defeated body; the finisher already played during the encounter.
+                   * Post-win: stay on `attack` — switching to angry/idle runs a **second** full clip after the finisher.
+                   * Same visual state also keeps `faceOffAnimationSyncKey` / paired sync stable (no variant flip bump).
                    */
                   case "defeated":
-                    if (!combatState && combatResult?.won) return "angry";
+                    if (!combatState && combatResult?.won) return "attack";
                     return combatRecoveryPhase === "hurt" ? "attack" : "idle";
                   case "recover": return "idle";
                   case "rolling": return "rolling";
