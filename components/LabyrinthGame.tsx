@@ -6892,18 +6892,33 @@ export default function LabyrinthGame() {
   // Game starts only when user clicks Start in the start modal
 
   const MONSTER_MOVE_INTERVAL_MS = 2500;
+  /** Defer heavy clone + `moveMonsters` off the interval callback so input/paint can run first (mobile jank). */
+  const MONSTER_MOVE_IDLE_TIMEOUT_MS = 200;
 
   useEffect(() => {
     if (!lab || winner !== null) return;
-    const id = setInterval(() => {
-      // Freeze all monster AI while any combat UI/encounter is active (including result modal or multi-roll fight)
+    let scheduledMonsterWorkId: number | undefined;
+    let scheduledViaIdleCallback = false;
+    const clearScheduledMonsterWork = () => {
+      if (scheduledMonsterWorkId === undefined) return;
+      if (scheduledViaIdleCallback && typeof cancelIdleCallback === "function") {
+        cancelIdleCallback(scheduledMonsterWorkId);
+      } else {
+        window.clearTimeout(scheduledMonsterWorkId);
+      }
+      scheduledMonsterWorkId = undefined;
+    };
+
+    const runMonsterMoveTick = () => {
+      scheduledMonsterWorkId = undefined;
+      // Re-check refs immediately before clone (state may have changed during idle wait).
       if (combatStateRef.current) return;
       if (pendingCombatOfferRef.current) return;
       if (combatResultRef.current) return;
       if (combatContinuesAfterRollRef.current) return;
       if (teleportPickerRef.current || catapultPickerRef.current || passThroughMagicRef.current) return;
       if (gamePausedRef.current) return;
-      if (movesLeftRef.current <= 0) return; // No monster activity until player has rolled and has moves
+      if (movesLeftRef.current <= 0) return;
       setLab((prev) => {
         if (!prev || winnerRef.current !== null || combatStateRef.current) return prev;
         if (pendingCombatOfferRef.current) return prev;
@@ -6972,8 +6987,32 @@ export default function LabyrinthGame() {
         }
         return next;
       });
+    };
+
+    const id = setInterval(() => {
+      // Freeze all monster AI while any combat UI/encounter is active (including result modal or multi-roll fight)
+      if (combatStateRef.current) return;
+      if (pendingCombatOfferRef.current) return;
+      if (combatResultRef.current) return;
+      if (combatContinuesAfterRollRef.current) return;
+      if (teleportPickerRef.current || catapultPickerRef.current || passThroughMagicRef.current) return;
+      if (gamePausedRef.current) return;
+      if (movesLeftRef.current <= 0) return; // No monster activity until player has rolled and has moves
+      clearScheduledMonsterWork();
+      if (typeof requestIdleCallback === "function") {
+        scheduledViaIdleCallback = true;
+        scheduledMonsterWorkId = requestIdleCallback(runMonsterMoveTick, {
+          timeout: MONSTER_MOVE_IDLE_TIMEOUT_MS,
+        });
+      } else {
+        scheduledViaIdleCallback = false;
+        scheduledMonsterWorkId = window.setTimeout(runMonsterMoveTick, 0);
+      }
     }, MONSTER_MOVE_INTERVAL_MS);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      clearScheduledMonsterWork();
+    };
   }, [lab?.width, lab?.height, lab?.numPlayers, winner, combatState, releaseSinglePlayerEncounterShell]);
 
   /** Stable across monster moves so the turn-advance delay timer is not reset every lab tick */
@@ -11367,7 +11406,10 @@ export default function LabyrinthGame() {
                           : {}),
                         }}
                       >
-                    {combatAutoHintVisible && combatMonsterHintFullText && !combatResult && (
+                    {combatAutoHintVisible &&
+                      combatMonsterHintFullText &&
+                      !combatResult &&
+                      !(isMobile && monsterGltfPath && headerMt) && (
                         <div
                           style={{
                           position: "absolute",
@@ -11500,8 +11542,9 @@ export default function LabyrinthGame() {
                               }}
                             />
                           }
+                          lowPowerWebGl={isMobile}
                         />
-                        {rolling && !combatArtifactRerollPrompt ? (
+                        {rolling && !combatArtifactRerollPrompt && !isMobile ? (
                           <div
                             style={{
                               position: "absolute",
@@ -12059,10 +12102,10 @@ export default function LabyrinthGame() {
                           inset: 0,
                           zIndex: 188,
                           display: "flex",
-                          alignItems: "center",
+                          alignItems: "flex-end",
                           justifyContent: "center",
                           padding:
-                            "max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px))",
+                            `max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(${isMobile ? 100 : 56}px, calc(env(safe-area-inset-bottom, 0px) + ${isMobile ? 88 : 40}px)) max(10px, env(safe-area-inset-left, 0px))`,
                           boxSizing: "border-box",
                           pointerEvents: "none",
                         }}
@@ -12118,18 +12161,20 @@ export default function LabyrinthGame() {
                                 alignItems: "center",
                               }}
                             >
-                              <span
-                                style={{
-                                  fontSize: "0.68rem",
-                                  color: "#c8c8d0",
-                                  textAlign: "center",
-                                  lineHeight: 1.35,
-                                }}
-                                aria-live="polite"
-                              >
-                                Pick head, body, or legs (or <strong>1</strong> / <strong>2</strong> / <strong>3</strong>) <strong>before the strike die locks
-                                in</strong>. Aiming after the roll has finished does not count — whiff = <strong>heavy</strong> damage.
-                              </span>
+                              {!isMobile ? (
+                                <span
+                                  style={{
+                                    fontSize: "0.68rem",
+                                    color: "#c8c8d0",
+                                    textAlign: "center",
+                                    lineHeight: 1.35,
+                                  }}
+                                  aria-live="polite"
+                                >
+                                  Pick head, body, or legs (or <strong>1</strong> / <strong>2</strong> / <strong>3</strong>) <strong>before the strike die locks
+                                  in</strong>. Aiming after the roll has finished does not count — whiff = <strong>heavy</strong> damage.
+                                </span>
+                              ) : null}
                               <div style={{ display: "flex", flexDirection: "row", gap: 6, width: "100%", maxWidth: 480 }}>
                                 <button
                                   type="button"
@@ -12391,7 +12436,10 @@ export default function LabyrinthGame() {
                         width: "100%",
                       }}
                     >
-                      {combatAutoHintVisible && combatMonsterHintFullText && !combatResult && (
+                      {combatAutoHintVisible &&
+                        combatMonsterHintFullText &&
+                        !combatResult &&
+                        !(isMobile && monsterGltfPath && headerMt) && (
                         <div
                           style={{
                             position: "absolute",
@@ -12505,8 +12553,9 @@ export default function LabyrinthGame() {
                                 }}
                               />
                             }
+                            lowPowerWebGl={isMobile}
                           />
-                          {rolling && !combatArtifactRerollPrompt ? (
+                          {rolling && !combatArtifactRerollPrompt && !isMobile ? (
                             <div
                               style={{
                                 position: "absolute",

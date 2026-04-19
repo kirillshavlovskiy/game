@@ -2033,6 +2033,11 @@ export interface CombatScene3DProps {
   /** Lab: if present and the name exists on the rig, play this clip instead of the state resolver. */
   playerDebugClipName?: string | null;
   monsterDebugClipName?: string | null;
+  /**
+   * Mobile: cap canvas DPR and disable MSAA to cut fill-rate / shader cost (same idea as maze `touchUi` dpr `[1,1]`).
+   * Does not change animation logic; `frameloop` stays `always` for skeletal mixers.
+   */
+  lowPowerWebGl?: boolean;
 }
 
 /** Contact lab: list clips from both GLBs (shared `useGLTF` cache with the fighters). */
@@ -2314,6 +2319,7 @@ export function CombatScene3D({
   onFaceoffClipCatalog,
   playerDebugClipName = null,
   monsterDebugClipName = null,
+  lowPowerWebGl = false,
 }: CombatScene3DProps) {
   const [webglRestoreGeneration, setWebglRestoreGeneration] = useState(0);
   const bumpWebglCombatCanvas = useCallback(() => {
@@ -2501,8 +2507,12 @@ export function CombatScene3D({
           verticalAlign: "top",
         }}
         frameloop="always"
-        dpr={[1, 2]}
-        gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
+        dpr={lowPowerWebGl ? ([1, 1] as const) : ([1, 2] as const)}
+        gl={{
+          alpha: true,
+          antialias: !lowPowerWebGl,
+          powerPreference: "high-performance",
+        }}
         camera={{ position: [0, cameraY, cameraZ], fov, near: 0.1, far: 80 }}
         onCreated={() => invalidate()}
       >

@@ -64,7 +64,11 @@ export default function RootLayout({
          * No npm package: HTML5 v3 is browser-only; `CrazyGamesSdk` reads `window.CrazyGames.SDK` after load.
          * Offline / self-host fallback: vendor to `public/crazygames-sdk-v3.js` and point `src` at `./crazygames-sdk-v3.js`.
          */}
-        <Script src="https://sdk.crazygames.com/crazygames-sdk-v3.js" strategy="beforeInteractive" />
+        {/**
+         * `afterInteractive` avoids blocking the main thread during first paint; `CrazyGamesSdk` polls until
+         * `window.CrazyGames.SDK` exists then calls `init()` (see components/CrazyGamesSdk.tsx).
+         */}
+        <Script src="https://sdk.crazygames.com/crazygames-sdk-v3.js" strategy="afterInteractive" />
       </head>
       <body>
         <ClientLogIngest />

@@ -4453,35 +4453,37 @@ const MazeIsoView = forwardRef(function MazeIsoView(
       ) : null}
       {combatActive && (
         <>
-          {/* Top-center combat hint */}
-          <div
-            style={{
-              position: "absolute",
-              top: "max(12px, env(safe-area-inset-top, 0px))",
-              left: "50%",
-              transform: "translateX(-50%)",
-              zIndex: 20,
-              pointerEvents: "none",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 4,
-              background: "rgba(6,8,14,0.82)",
-              border: "1px solid rgba(143,216,255,0.5)",
-              borderRadius: 12,
-              padding: "8px 16px",
-              boxShadow: "0 8px 28px rgba(0,0,0,0.5)",
-            }}
-          >
-            <div style={{ fontSize: "0.82rem", color: "#bde9ff", fontWeight: 700 }}>
-              {combatRolling ? "Rolling..." : "Tap to roll strike"}
-            </div>
-            {combatRollFace != null && (
-              <div style={{ fontSize: "0.9rem", color: "#ffdca8" }}>
-                d6 result: <strong>{combatRollFace}</strong>
+          {/* Top-center combat hint — hidden on touch UI so it does not cover the 3D fight; roll via dock / side buttons. */}
+          {!touchUi ? (
+            <div
+              style={{
+                position: "absolute",
+                top: "max(12px, env(safe-area-inset-top, 0px))",
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 20,
+                pointerEvents: "none",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 4,
+                background: "rgba(6,8,14,0.82)",
+                border: "1px solid rgba(143,216,255,0.5)",
+                borderRadius: 12,
+                padding: "8px 16px",
+                boxShadow: "0 8px 28px rgba(0,0,0,0.5)",
+              }}
+            >
+              <div style={{ fontSize: "0.82rem", color: "#bde9ff", fontWeight: 700 }}>
+                {combatRolling ? "Rolling..." : "Tap to roll strike"}
               </div>
-            )}
-          </div>
+              {combatRollFace != null && (
+                <div style={{ fontSize: "0.9rem", color: "#ffdca8" }}>
+                  d6 result: <strong>{combatRollFace}</strong>
+                </div>
+              )}
+            </div>
+          ) : null}
           {/* Left-side combat action buttons */}
           <div
             style={{

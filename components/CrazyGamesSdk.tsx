@@ -19,6 +19,7 @@ function whenPageFullyLoaded(cb: () => void) {
 
 /**
  * Loads and initializes the CrazyGames HTML5 v3 SDK, then reports loading and gameplay events.
+ * The script tag in `app/layout.tsx` uses `afterInteractive`; this effect retries until `window.CrazyGames.SDK` exists.
  *
  * Before `init()`, `SDK.environment` is `"uninitialized"`. After `init()`, it becomes `"local"`,
  * `"crazygames"`, or `"disabled"`. On hosts that are not localhost / 127.0.0.1 / CrazyGames,
