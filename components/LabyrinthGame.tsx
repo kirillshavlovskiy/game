@@ -677,7 +677,8 @@ function draculaPlayerHitHurt3dFooterExtra(
       monsterType !== "Z" &&
       monsterType !== "G" &&
       monsterType !== "S" &&
-      monsterType !== "L") ||
+      monsterType !== "L" &&
+      monsterType !== "O") ||
     (strikePortrait !== "playerHit" && strikePortrait !== "playerHitHeavy")
   ) {
     return {};
@@ -4855,7 +4856,8 @@ export default function LabyrinthGame() {
             combat.monsterType === "Z" ||
             combat.monsterType === "G" ||
             combat.monsterType === "S" ||
-            combat.monsterType === "L"
+            combat.monsterType === "L" ||
+            combat.monsterType === "O"
           ) {
             draculaAttackSegment = draculaStrikeAttackVariantRef.current;
             {
@@ -4878,7 +4880,8 @@ export default function LabyrinthGame() {
         combat.monsterType === "Z" ||
         combat.monsterType === "G" ||
         combat.monsterType === "S" ||
-        combat.monsterType === "L";
+        combat.monsterType === "L" ||
+        combat.monsterType === "O";
       /**
        * Lethal strike on the monster only set `strikePortrait === "defeated"` — `draculaAttackSegment`
        * stayed unset (e.g. dice-6 instant kill skips strike target). Player 3D maps monster defeated →
@@ -4933,7 +4936,8 @@ export default function LabyrinthGame() {
           combat.monsterType === "Z" ||
           combat.monsterType === "G" ||
           combat.monsterType === "S" ||
-          combat.monsterType === "L")
+          combat.monsterType === "L" ||
+          combat.monsterType === "O")
           ? COMBAT_STRIKE_LAB_COMMIT_DELAY_MS_MERGED_MESHY_3D
           : isMonster3DEnabled()
             ? COMBAT_STRIKE_LAB_COMMIT_DELAY_MS
@@ -12098,14 +12102,18 @@ export default function LabyrinthGame() {
                     {rolling && !combatArtifactRerollPrompt && !combatLandscapePostFight ? (
                       <div
                         style={{
+                          /** Bottom strip only — `inset:0` + tall inner `flex:1` kept the card growing upward over the 3D face-off (desktop). */
                           position: "absolute",
-                          inset: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
                           zIndex: 188,
                           display: "flex",
-                          alignItems: "flex-end",
                           justifyContent: "center",
-                          padding:
-                            `max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(${isMobile ? 100 : 56}px, calc(env(safe-area-inset-bottom, 0px) + ${isMobile ? 88 : 40}px)) max(10px, env(safe-area-inset-left, 0px))`,
+                          alignItems: "center",
+                          padding: `0 max(10px, env(safe-area-inset-right, 0px)) max(${
+                            isMobile ? 100 : 72
+                          }px, calc(env(safe-area-inset-bottom, 0px) + ${isMobile ? 88 : 52}px)) max(10px, env(safe-area-inset-left, 0px))`,
                           boxSizing: "border-box",
                           pointerEvents: "none",
                         }}
@@ -12119,7 +12127,8 @@ export default function LabyrinthGame() {
                             pointerEvents: "auto",
                             width: COMBAT_LANDSCAPE_CENTER_COL_WIDTH,
                             maxWidth: "min(92vw, calc(100% - 20px))",
-                            maxHeight: "min(78vh, 480px)",
+                            maxHeight: isMobile ? "min(78vh, 480px)" : "min(52vh, 400px)",
+                            flexShrink: 0,
                             overflowY: "auto",
                             boxSizing: "border-box",
                             background: "linear-gradient(145deg, #1a1a24 0%, #0d0d12 100%)",
@@ -12132,8 +12141,10 @@ export default function LabyrinthGame() {
                         >
                           <div
                             style={{
-                              flex: combatStrikePickButtonsDuringRoll ? "1 1 auto" : 1,
-                              minHeight: combatStrikePickButtonsDuringRoll ? Math.max(72, landscapeFaceoffDiceViewportH - 108) : landscapeFaceoffDiceViewportH,
+                              flex: "0 1 auto",
+                              minHeight: combatStrikePickButtonsDuringRoll
+                                ? Math.max(72, landscapeFaceoffDiceViewportH - 108)
+                                : landscapeFaceoffDiceViewportH,
                               width: "100%",
                               display: "flex",
                               flexDirection: "column",
