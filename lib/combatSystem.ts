@@ -60,7 +60,6 @@ const BONUS_REWARDS: MonsterBonusReward[] = [
   { type: "storedArtifact", kind: "nordicShield", amount: 1 },
   { type: "storedArtifact", kind: "wardShield", amount: 1 },
   { type: "bomb", amount: 1 },
-  { type: "shield", amount: 1 },
   { type: "jump", amount: 1 },
   { type: "catapult", amount: 1 },
 ];

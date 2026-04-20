@@ -10,6 +10,8 @@ const P = publicAssetPath("models/armour/");
 const MAZE_P = publicAssetPath("models/maze-collectibles/");
 
 export const COLLECTIBLE_ARTIFACT_GLB_BY_KIND = {
+  /** Holy sword — use the Celestial Blade; it is the reference tuning baseline in weaponAttachConfig.ts, so no per-GLB pose override is required. */
+  holySword: `${P}Meshy_AI_Celestial_Blade_0329003028_texture.glb`,
   dragonFuryAxe: `${P}Meshy_AI_Dragon_Fury_Axe_0403170000_texture.glb`,
   eternalFrostblade: `${P}Meshy_AI_Eternal_Frostblade_0403174010_texture.glb`,
   zweihandhammer: `${P}Meshy_AI_Zweihandhammer_Doppe_0403170009_texture.glb`,
@@ -22,6 +24,7 @@ export const COLLECTIBLE_ARTIFACT_GLB_BY_KIND = {
 export const ARTIFACT_KIND_VISUAL_GLB: Partial<Record<StoredArtifactKind, string>> = {
   /** Base shield stack artifact — same visual as warden shield pickup (off-hand in 3D). */
   shield: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.wardShield,
+  holySword: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.holySword,
   dragonFuryAxe: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.dragonFuryAxe,
   eternalFrostblade: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.eternalFrostblade,
   zweihandhammer: COLLECTIBLE_ARTIFACT_GLB_BY_KIND.zweihandhammer,
