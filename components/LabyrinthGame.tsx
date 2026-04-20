@@ -7733,6 +7733,11 @@ export default function LabyrinthGame() {
     setTeleportPicker({ playerIndex: currentPlayer, from: [cp.x, cp.y], options, sourceType: "magic" });
   }, [lab, cp, currentPlayer, combatState, pendingCombatOffer, winner, teleportPicker, catapultPicker]);
 
+  /** “Not now” for the magic-portal prompt: suppress the offer everywhere until the player steps off the cell (or ends the turn). Without this, collapsing one dock leaves other render sites showing the same prompt. */
+  const deferMagicPortal = useCallback(() => {
+    setSuppressMagicPortalUntilMove(true);
+  }, []);
+
   const openSlingshotFromDock = useCallback(() => {
     if (gamePausedRef.current) return;
     if (!lab || !cp || combatState || pendingCombatOffer || winner !== null) return;
@@ -13789,6 +13794,7 @@ export default function LabyrinthGame() {
                                 slingshotCellAvailable={slingshotCellAvailable}
                                 cp={cp}
                                 openSlingshotFromDock={openSlingshotFromDock}
+                                onDeferMagicPortal={deferMagicPortal}
                                 catapultDragRef={catapultDragRef}
                                 setCatapultMode={setCatapultMode}
                                 setCatapultPicker={setCatapultPicker}
@@ -14272,6 +14278,7 @@ export default function LabyrinthGame() {
                               slingshotCellAvailable={slingshotCellAvailable}
                               cp={cp}
                               openSlingshotFromDock={openSlingshotFromDock}
+                              onDeferMagicPortal={deferMagicPortal}
                               onDismissContextPrompt={
                                 isMobile ? () => setMobileDockExpanded(false) : undefined
                               }
@@ -15147,6 +15154,7 @@ export default function LabyrinthGame() {
                 slingshotCellAvailable={slingshotCellAvailable}
                 cp={cp}
                 openSlingshotFromDock={openSlingshotFromDock}
+                onDeferMagicPortal={deferMagicPortal}
                 onDismissContextPrompt={() => setMobileDockExpanded(false)}
                 catapultDragRef={catapultDragRef}
                 setCatapultMode={setCatapultMode}
@@ -15313,6 +15321,7 @@ export default function LabyrinthGame() {
                 slingshotCellAvailable={slingshotCellAvailable}
                 cp={cp}
                 openSlingshotFromDock={openSlingshotFromDock}
+                onDeferMagicPortal={deferMagicPortal}
                 onDismissContextPrompt={() => setMobileDockExpanded(false)}
                 catapultDragRef={catapultDragRef}
                 setCatapultMode={setCatapultMode}
@@ -15566,6 +15575,7 @@ export default function LabyrinthGame() {
                     slingshotCellAvailable={slingshotCellAvailable}
                     cp={cp}
                     openSlingshotFromDock={openSlingshotFromDock}
+                    onDeferMagicPortal={deferMagicPortal}
                     onDismissContextPrompt={() => setMobileDockExpanded(false)}
                     catapultDragRef={catapultDragRef}
                     setCatapultMode={setCatapultMode}
@@ -15691,6 +15701,7 @@ export default function LabyrinthGame() {
                         slingshotCellAvailable={slingshotCellAvailable}
                         cp={cp}
                         openSlingshotFromDock={openSlingshotFromDock}
+                        onDeferMagicPortal={deferMagicPortal}
                         onDismissContextPrompt={() => setDesktopControlsCollapsed(false)}
                         catapultDragRef={catapultDragRef}
                         setCatapultMode={setCatapultMode}
@@ -16092,6 +16103,7 @@ export default function LabyrinthGame() {
                         slingshotCellAvailable={slingshotCellAvailable}
                         cp={cp}
                         openSlingshotFromDock={openSlingshotFromDock}
+                        onDeferMagicPortal={deferMagicPortal}
                         catapultDragRef={catapultDragRef}
                         setCatapultMode={setCatapultMode}
                         setCatapultPicker={setCatapultPicker}
@@ -17579,6 +17591,7 @@ function IsoBottomContextPanels({
   cp,
   openSlingshotFromDock,
   onDismissContextPrompt,
+  onDeferMagicPortal,
   catapultDragRef,
   setCatapultMode,
   setCatapultPicker,
@@ -17608,6 +17621,8 @@ function IsoBottomContextPanels({
   openSlingshotFromDock: () => void;
   /** Optional (e.g. mobile): “Not now” collapses dock / defers without acting. */
   onDismissContextPrompt?: () => void;
+  /** Magic-portal specific “Not now”: must suppress the offer until the player moves off the cell, otherwise other render sites keep showing the prompt. */
+  onDeferMagicPortal?: () => void;
   catapultDragRef: MutableRefObject<{ startX: number; startY: number; cellX: number; cellY: number } | null>;
   setCatapultMode: (v: boolean) => void;
   setCatapultPicker: (v: null) => void;
@@ -17919,10 +17934,13 @@ function IsoBottomContextPanels({
           >
             Use magic portal
           </button>
-            {onDismissContextPrompt ? (
+            {onDeferMagicPortal || onDismissContextPrompt ? (
               <button
                 type="button"
-                onClick={onDismissContextPrompt}
+                onClick={() => {
+                  onDeferMagicPortal?.();
+                  onDismissContextPrompt?.();
+                }}
                 style={{
                   ...buttonStyle,
                   background: "#2a2830",

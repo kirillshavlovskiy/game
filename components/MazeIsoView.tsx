@@ -527,7 +527,7 @@ function corridorTangentGrid(
   return { dx: 1, dy: 0 };
 }
 
-/** Y rotation so the ring’s span is perpendicular to the corridor (same atan2(dx,dy) basis as wall props). */
+/** Y rotation whose forward axis aligns with the corridor span (perpendicular to the corridor direction). Same atan2(dx,dy) basis as wall props. Callers may add ±π/2 when they need the object’s long axis to instead sit across the corridor. */
 function mazeMagicTeleportFloorYawRad(
   grid: string[][],
   mapWidth: number,
@@ -2175,7 +2175,7 @@ function MazeWorldFeaturePickups({
       {items.map((p) => {
         const isMagicTeleport = p.url === MAZE_WORLD_FEATURE_MAGIC_TELEPORT_GLB;
         const magicYaw = isMagicTeleport
-          ? mazeMagicTeleportFloorYawRad(grid, mapWidth, mapHeight, p.x, p.y)
+          ? mazeMagicTeleportFloorYawRad(grid, mapWidth, mapHeight, p.x, p.y) + Math.PI / 2
           : 0;
         return (
           <RotatingArtifactGlbPickup
