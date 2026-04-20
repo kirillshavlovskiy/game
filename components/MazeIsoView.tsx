@@ -2,8 +2,10 @@
 
 import {
   Suspense,
+  createContext,
   forwardRef,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useImperativeHandle,
@@ -309,6 +311,30 @@ function CanvasContextBridge({
     cameraRef.current = camera;
     glDomRef.current = gl.domElement;
   });
+  return null;
+}
+
+/**
+ * Paired with `gl.shadowMap.autoUpdate = false` (set in the `Canvas.onCreated`).
+ * Rebuild shadow maps exactly when the player moves to a new tile or a new map loads.
+ * Also do a one-shot rebuild on mount / after a dimension change so the first render
+ * is correct. Avoids per-frame GPU shadow-map rewrites while walking.
+ */
+function ShadowUpdateOnPlayerCell({
+  playerX,
+  playerY,
+  mapWidth,
+  mapHeight,
+}: {
+  playerX: number;
+  playerY: number;
+  mapWidth: number;
+  mapHeight: number;
+}) {
+  const { gl } = useThree();
+  useEffect(() => {
+    gl.shadowMap.needsUpdate = true;
+  }, [gl, playerX, playerY, mapWidth, mapHeight]);
   return null;
 }
 
@@ -679,6 +705,8 @@ function WallBlocks({
   const fadeRef = useRef<THREE.InstancedMesh>(null);
   /** Start high so the first `useFrame` triggers an initial bounding sphere (then every 10th frame). */
   const wallOccluderBsphereFrameRef = useRef(9);
+  /** Dirty-key for the occlusion rewrite: camera + player grid cell, quantized. */
+  const wallOccluderLastKeyRef = useRef<string>("");
   const dummy = useMemo(() => new THREE.Object3D(), []);
 
   useLayoutEffect(() => {
@@ -748,41 +776,61 @@ function WallBlocks({
 
     const cx = camera.position.x;
     const cz = camera.position.z;
-    const px = pg.x * CS;
-    const pz = pg.y * CS;
-    const m = WALL_OCCLUDER_BBOX_MARGIN;
-    const segMinX = Math.min(cx, px) - m;
-    const segMaxX = Math.max(cx, px) + m;
-    const segMinZ = Math.min(cz, pz) - m;
-    const segMaxZ = Math.max(cz, pz) + m;
+    /**
+     * Dirty-key: the occluder assignment only depends on the camera position and the player
+     * grid cell (walls are static). Quantize camera XZ to ~1/4 tile so tiny follow-cam
+     * wobble doesn't force a full rewrite + `needsUpdate` every frame. Player is already
+     * on the grid so `pg.x | pg.y` is exact.
+     * Before this guard: ~N wall cells × 2 meshes were rewritten every frame even when
+     * camera/player hadn't effectively moved — a major mobile CPU sink.
+     */
+    const qStep = CS * 0.25;
+    const cxq = Math.round(cx / qStep);
+    const czq = Math.round(cz / qStep);
+    const key = `${pg.x},${pg.y}|${cxq},${czq}`;
+    const keyChanged = key !== wallOccluderLastKeyRef.current;
 
-    let oi = 0;
-    let fi = 0;
-    for (let i = 0; i < cells.length; i++) {
-      const [wx, wy] = cells[i];
-      const wxw = wx * CS;
-      const wzw = wy * CS;
-      let occludes = false;
-      if (wxw >= segMinX && wxw <= segMaxX && wzw >= segMinZ && wzw <= segMaxZ) {
-        occludes = wallCellOccludesPlayerFromCameraXZ(wx, wy, cx, cz, pg.x, pg.y);
+    if (keyChanged) {
+      wallOccluderLastKeyRef.current = key;
+      const px = pg.x * CS;
+      const pz = pg.y * CS;
+      const m = WALL_OCCLUDER_BBOX_MARGIN;
+      const segMinX = Math.min(cx, px) - m;
+      const segMaxX = Math.max(cx, px) + m;
+      const segMinZ = Math.min(cz, pz) - m;
+      const segMaxZ = Math.max(cz, pz) + m;
+
+      let oi = 0;
+      let fi = 0;
+      for (let i = 0; i < cells.length; i++) {
+        const [wx, wy] = cells[i];
+        const wxw = wx * CS;
+        const wzw = wy * CS;
+        let occludes = false;
+        if (wxw >= segMinX && wxw <= segMaxX && wzw >= segMinZ && wzw <= segMaxZ) {
+          occludes = wallCellOccludesPlayerFromCameraXZ(wx, wy, cx, cz, pg.x, pg.y);
+        }
+        dummy.position.set(wx * CS, FLOOR_Y + WALL_HEIGHT / 2, wy * CS);
+        dummy.updateMatrix();
+        if (occludes) {
+          fMesh.setMatrixAt(fi++, dummy.matrix);
+        } else {
+          oMesh.setMatrixAt(oi++, dummy.matrix);
+        }
       }
-      dummy.position.set(wx * CS, FLOOR_Y + WALL_HEIGHT / 2, wy * CS);
-      dummy.updateMatrix();
-      if (occludes) {
-        fMesh.setMatrixAt(fi++, dummy.matrix);
-      } else {
-        oMesh.setMatrixAt(oi++, dummy.matrix);
-      }
+      oMesh.count = oi;
+      fMesh.count = fi;
+      oMesh.instanceMatrix.needsUpdate = true;
+      fMesh.instanceMatrix.needsUpdate = true;
     }
-    oMesh.count = oi;
-    fMesh.count = fi;
-    oMesh.instanceMatrix.needsUpdate = true;
-    fMesh.instanceMatrix.needsUpdate = true;
-    /** Full `computeBoundingSphere` every frame was a major mobile CPU sink (100s of instances × 2 meshes). */
-    wallOccluderBsphereFrameRef.current += 1;
-    if (wallOccluderBsphereFrameRef.current % 10 === 0) {
-      oMesh.computeBoundingSphere();
-      fMesh.computeBoundingSphere();
+
+    /** Bounding sphere only when we actually wrote instance matrices this frame. */
+    if (keyChanged) {
+      wallOccluderBsphereFrameRef.current += 1;
+      if (wallOccluderBsphereFrameRef.current % 10 === 0) {
+        oMesh.computeBoundingSphere();
+        fMesh.computeBoundingSphere();
+      }
     }
   });
 
@@ -1126,7 +1174,16 @@ function PlayerMarker({
           const rightDot = vx * (-fy) + vz * fx;
           const adf = Math.abs(forwardDot);
           const adr = Math.abs(rightDot);
-          if (adf >= adr) {
+          /**
+           * Hysteresis on locomotion axis: near the 45° boundary the axis used to flip every
+           * frame → PlayerAvatar3D effect rerun → mixer crossfade churn during a normal walk.
+           * Require 15% dominance to switch, and keep "forward/back" sticky when already set
+           * (forward walk is the common case and small sideways drift shouldn't flip to strafe).
+           */
+          const prev = locomotionAxisRef.current;
+          const prevIsForward = prev === "forward" || prev === "back";
+          const forwardDominant = prevIsForward ? adf * 1.15 >= adr : adf >= adr * 1.15;
+          if (forwardDominant) {
             axis = forwardDot >= 0 ? "forward" : "back";
           } else {
             axis = rightDot >= 0 ? "right" : "left";
@@ -1145,16 +1202,23 @@ function PlayerMarker({
     if (modelAnchor) {
       groundBoxFrameRef.current += 1;
       const moving = transit > 0.045;
-      const bboxStride = touchUi ? 14 : 5;
-      if (moving || groundBoxFrameRef.current % bboxStride === 0) {
+      /**
+       * Ground-lift from skinned mesh bbox: `setFromObject` traverses the full rig and is one
+       * of the heaviest per-frame calls. Stride it aggressively — motion smoothing from the
+       * `Math.max(groundLiftRef.current * 0.9, neededLift)` blend means intermediate frames
+       * look identical. While moving we still want it slightly more often (clips can dip
+       * feet below the floor), but not every frame.
+       */
+      const bboxStride = moving
+        ? (touchUi ? 8 : 3)
+        : (touchUi ? 20 : 8);
+      if (groundBoxFrameRef.current % bboxStride === 0) {
         groundBox.setFromObject(modelAnchor);
         const desiredMinY = FLOOR_Y + 0.015;
         const neededLift = Math.max(0, desiredMinY - groundBox.min.y);
         groundLiftRef.current = Math.max(groundLiftRef.current * 0.9, neededLift);
-        modelAnchor.position.y = groundLiftRef.current;
-      } else {
-        modelAnchor.position.y = groundLiftRef.current;
       }
+      modelAnchor.position.y = groundLiftRef.current;
     }
   });
 
@@ -1264,6 +1328,90 @@ function WallTorchDormantFlame() {
   );
 }
 
+/**
+ * Shared flicker registry: every `WallTorchIgnited` registers its refs here on mount and a
+ * single `useFrame` in `WallTorches` iterates the set. Previously each ignited torch created
+ * its own R3F subscriber + closure — at 10–40 torches that meant 10–40 subscribers called per
+ * frame. With one driver it's just a single Set iteration.
+ */
+type TorchFlickerEntry = {
+  seed: number;
+  flameOuter: React.RefObject<THREE.Mesh | null>;
+  flameInner: React.RefObject<THREE.Mesh | null>;
+  flameWisp: React.RefObject<THREE.Mesh | null>;
+  flameHalo: React.RefObject<THREE.Mesh | null>;
+  ember: React.RefObject<THREE.Mesh | null>;
+  flameLight: React.RefObject<THREE.PointLight | null>;
+  flameFillLight: React.RefObject<THREE.PointLight | null>;
+};
+
+const TorchFlickerContext = createContext<Set<TorchFlickerEntry> | null>(null);
+
+function applyTorchFlicker(entry: TorchFlickerEntry, elapsed: number) {
+  const t = elapsed * 7.5 + entry.seed * 3.1;
+  const pulse = 0.92 + Math.sin(t) * 0.12 + Math.sin(t * 1.93) * 0.05;
+  const flicker = 0.84 + Math.sin(t * 1.37) * 0.13 + Math.sin(t * 3.9) * 0.08;
+  const swayX = Math.sin(t * 0.45) * 0.02;
+  const swayZ = Math.cos(t * 0.37) * 0.015;
+  const FLAME_BASE_Y = TORCH_FLAME_BASE_Y;
+  const FLAME_Z = TORCH_FLAME_Z;
+
+  const fo = entry.flameOuter.current;
+  if (fo) {
+    fo.scale.set(1, Math.max(0.75, pulse), 1);
+    fo.position.x = swayX;
+    fo.position.y = FLAME_BASE_Y + 0.11 + pulse * 0.01;
+    fo.position.z = FLAME_Z + swayZ;
+  }
+  const fi = entry.flameInner.current;
+  if (fi) {
+    fi.scale.set(1, Math.max(0.8, pulse * 0.95), 1);
+    fi.position.x = swayX * 0.7;
+    fi.position.y = FLAME_BASE_Y + 0.085 + pulse * 0.008;
+    fi.position.z = FLAME_Z + swayZ * 0.7;
+  }
+  const fw = entry.flameWisp.current;
+  if (fw) {
+    fw.scale.set(1, Math.max(0.72, pulse * 1.05), 1);
+    fw.position.x = -swayX * 0.85;
+    fw.position.y = FLAME_BASE_Y + 0.125 + pulse * 0.012;
+    fw.position.z = FLAME_Z + 0.01 - swayZ * 0.5;
+  }
+  const fh = entry.flameHalo.current;
+  if (fh) {
+    fh.scale.setScalar(0.92 + flicker * 0.22);
+    fh.position.y = FLAME_BASE_Y + 0.012;
+  }
+  const em = entry.ember.current;
+  if (em) {
+    em.scale.setScalar(0.95 + Math.sin(t * 1.6) * 0.12);
+    em.position.y = FLAME_BASE_Y + 0.015;
+  }
+  const fl = entry.flameLight.current;
+  if (fl) {
+    fl.intensity = 3.35 + flicker * 1.65;
+    fl.distance = CS * (4.25 + flicker * 0.5);
+    fl.position.x = swayX * 0.8;
+    fl.position.y = FLAME_BASE_Y + 0.12;
+    fl.position.z = FLAME_Z + swayZ * 0.8;
+  }
+  const ffl = entry.flameFillLight.current;
+  if (ffl) {
+    ffl.intensity = 0.95 + flicker * 0.55;
+    ffl.position.x = swayX * 0.55;
+    ffl.position.y = FLAME_BASE_Y + 0.05;
+    ffl.position.z = FLAME_Z - 0.01 + swayZ * 0.55;
+  }
+}
+
+function TorchFlickerDriver({ entries }: { entries: Set<TorchFlickerEntry> }) {
+  useFrame(({ clock }) => {
+    const et = clock.getElapsedTime();
+    entries.forEach((e) => applyTorchFlicker(e, et));
+  });
+  return null;
+}
+
 /** Flicker + point lights only for torches near the player. */
 function WallTorchIgnited({ torch }: { torch: TorchPlacement }) {
   const flameOuterRef = useRef<THREE.Mesh>(null);
@@ -1276,53 +1424,24 @@ function WallTorchIgnited({ torch }: { torch: TorchPlacement }) {
   const FLAME_BASE_Y = TORCH_FLAME_BASE_Y;
   const FLAME_Z = TORCH_FLAME_Z;
 
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime() * 7.5 + torch.seed * 3.1;
-    const pulse = 0.92 + Math.sin(t) * 0.12 + Math.sin(t * 1.93) * 0.05;
-    const flicker = 0.84 + Math.sin(t * 1.37) * 0.13 + Math.sin(t * 3.9) * 0.08;
-    const swayX = Math.sin(t * 0.45) * 0.02;
-    const swayZ = Math.cos(t * 0.37) * 0.015;
-
-    if (flameOuterRef.current) {
-      flameOuterRef.current.scale.set(1, Math.max(0.75, pulse), 1);
-      flameOuterRef.current.position.x = swayX;
-      flameOuterRef.current.position.y = FLAME_BASE_Y + 0.11 + pulse * 0.01;
-      flameOuterRef.current.position.z = FLAME_Z + swayZ;
-    }
-    if (flameInnerRef.current) {
-      flameInnerRef.current.scale.set(1, Math.max(0.8, pulse * 0.95), 1);
-      flameInnerRef.current.position.x = swayX * 0.7;
-      flameInnerRef.current.position.y = FLAME_BASE_Y + 0.085 + pulse * 0.008;
-      flameInnerRef.current.position.z = FLAME_Z + swayZ * 0.7;
-    }
-    if (flameWispRef.current) {
-      flameWispRef.current.scale.set(1, Math.max(0.72, pulse * 1.05), 1);
-      flameWispRef.current.position.x = -swayX * 0.85;
-      flameWispRef.current.position.y = FLAME_BASE_Y + 0.125 + pulse * 0.012;
-      flameWispRef.current.position.z = FLAME_Z + 0.01 - swayZ * 0.5;
-    }
-    if (flameHaloRef.current) {
-      flameHaloRef.current.scale.setScalar(0.92 + flicker * 0.22);
-      flameHaloRef.current.position.y = FLAME_BASE_Y + 0.012;
-    }
-    if (emberRef.current) {
-      emberRef.current.scale.setScalar(0.95 + Math.sin(t * 1.6) * 0.12);
-      emberRef.current.position.y = FLAME_BASE_Y + 0.015;
-    }
-    if (flameLightRef.current) {
-      flameLightRef.current.intensity = 3.35 + flicker * 1.65;
-      flameLightRef.current.distance = CS * (4.25 + flicker * 0.5);
-      flameLightRef.current.position.x = swayX * 0.8;
-      flameLightRef.current.position.y = FLAME_BASE_Y + 0.12;
-      flameLightRef.current.position.z = FLAME_Z + swayZ * 0.8;
-    }
-    if (flameFillLightRef.current) {
-      flameFillLightRef.current.intensity = 0.95 + flicker * 0.55;
-      flameFillLightRef.current.position.x = swayX * 0.55;
-      flameFillLightRef.current.position.y = FLAME_BASE_Y + 0.05;
-      flameFillLightRef.current.position.z = FLAME_Z - 0.01 + swayZ * 0.55;
-    }
-  });
+  const registry = useContext(TorchFlickerContext);
+  useEffect(() => {
+    if (!registry) return;
+    const entry: TorchFlickerEntry = {
+      seed: torch.seed,
+      flameOuter: flameOuterRef,
+      flameInner: flameInnerRef,
+      flameWisp: flameWispRef,
+      flameHalo: flameHaloRef,
+      ember: emberRef,
+      flameLight: flameLightRef,
+      flameFillLight: flameFillLightRef,
+    };
+    registry.add(entry);
+    return () => {
+      registry.delete(entry);
+    };
+  }, [registry, torch.seed]);
 
   return (
     <>
@@ -1412,7 +1531,7 @@ function WallTorch({ torch, active }: { torch: TorchPlacement; active: boolean }
 }
 
 function WallTorches({
-  grid, mapWidth, mapHeight, playerX, playerY, fogIntensityMap,
+  grid, mapWidth, mapHeight, playerX, playerY, fogIntensityMap, touchUi = false,
 }: {
   grid: string[][];
   mapWidth: number;
@@ -1420,6 +1539,8 @@ function WallTorches({
   playerX: number;
   playerY: number;
   fogIntensityMap?: Map<string, number>;
+  /** Mobile distance-cull: avoid mounting the `useFrame` loop and lights for torches > radius tiles from the player. */
+  touchUi?: boolean;
 }) {
   const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
   const walkable = (cx: number, cy: number) =>
@@ -1480,16 +1601,23 @@ function WallTorches({
     return result;
   }, [grid, mapWidth, mapHeight]);
 
+  /** Mobile: drop torches entirely beyond this radius (no mesh, no light, no useFrame). Desktop keeps all. */
+  const mountRadius = touchUi ? 7 : Infinity;
+  /** Single Set shared across every `WallTorchIgnited` below — one `useFrame` drives flicker for all. */
+  const flickerRegistry = useMemo(() => new Set<TorchFlickerEntry>(), []);
   return (
-    <>
+    <TorchFlickerContext.Provider value={flickerRegistry}>
+      <TorchFlickerDriver entries={flickerRegistry} />
       {torches.map((t, i) => {
         const fog = fogIntensityMap?.get(`${t.cellX},${t.cellY}`) ?? 0;
         /* Align with ornaments / set-pieces (~0.14): 0.02 hid torches on almost any fogged cell — only "current tile" read lit. */
         if (fog > 0.14) return null;
-        const near = Math.hypot(t.cellX - playerX, t.cellY - playerY) <= 8.25;
+        const d = Math.hypot(t.cellX - playerX, t.cellY - playerY);
+        if (d > mountRadius) return null;
+        const near = d <= 8.25;
         return <WallTorch key={i} torch={t} active={near} />;
       })}
-    </>
+    </TorchFlickerContext.Provider>
   );
 }
 
@@ -1502,12 +1630,15 @@ function cellNoise(x: number, y: number, salt = 0): number {
 }
 
 function GothicWallOrnaments({
-  grid, mapWidth, mapHeight, fogIntensityMap,
+  grid, mapWidth, mapHeight, fogIntensityMap, playerX, playerY, touchUi = false,
 }: {
   grid: string[][];
   mapWidth: number;
   mapHeight: number;
   fogIntensityMap?: Map<string, number>;
+  playerX: number;
+  playerY: number;
+  touchUi?: boolean;
 }) {
   const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
   const walkable = (cx: number, cy: number) =>
@@ -1540,11 +1671,14 @@ function GothicWallOrnaments({
     return out;
   }, [grid, mapHeight, mapWidth]);
 
+  /** Distance-cull: ornaments are static decor — skip ones far from the player. */
+  const mountRadius = touchUi ? 6 : 12;
   return (
     <>
       {ornaments.map((o, i) => {
         const fog = fogIntensityMap?.get(`${o.cellX},${o.cellY}`) ?? 0;
         if (fog > 0.15) return null;
+        if (Math.hypot(o.cellX - playerX, o.cellY - playerY) > mountRadius) return null;
         return (
           <group key={`orn-${i}`} position={[o.x, o.y, o.z]} rotation={[0, o.yaw, 0]}>
             <mesh receiveShadow>
@@ -1830,12 +1964,15 @@ function SpiderWebMazeMesh({ cellX, cellY }: { cellX: number; cellY: number }) {
 }
 
 function HorrorCornerRelics({
-  grid, mapWidth, mapHeight, fogIntensityMap,
+  grid, mapWidth, mapHeight, fogIntensityMap, playerX, playerY, touchUi = false,
 }: {
   grid: string[][];
   mapWidth: number;
   mapHeight: number;
   fogIntensityMap?: Map<string, number>;
+  playerX: number;
+  playerY: number;
+  touchUi?: boolean;
 }) {
   const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
   const walkable = (cx: number, cy: number) =>
@@ -1865,11 +2002,14 @@ function HorrorCornerRelics({
     return out;
   }, [grid, mapHeight, mapWidth]);
 
+  /** Distance-cull: relics are static clutter; skip distant ones. */
+  const mountRadius = touchUi ? 6 : 12;
   return (
     <>
       {relics.map((r, i) => {
         const fog = fogIntensityMap?.get(`${r.cellX},${r.cellY}`) ?? 0;
         if (fog > 0.1) return null;
+        if (Math.hypot(r.cellX - playerX, r.cellY - playerY) > mountRadius) return null;
         return (
           <group key={`relic-${i}`} position={[r.x, FLOOR_Y + 0.06, r.z]} rotation={[0, r.rot, 0]}>
             <mesh castShadow receiveShadow>
@@ -2054,7 +2194,7 @@ function MazeWorldFeaturePickups({
 }
 
 function MazeSetPieces({
-  grid, mapWidth, mapHeight, playerX, playerY, fogIntensityMap,
+  grid, mapWidth, mapHeight, playerX, playerY, fogIntensityMap, touchUi = false,
 }: {
   grid: string[][];
   mapWidth: number;
@@ -2062,6 +2202,7 @@ function MazeSetPieces({
   playerX: number;
   playerY: number;
   fogIntensityMap?: Map<string, number>;
+  touchUi?: boolean;
 }) {
   const isW = (cx: number, cy: number) => grid[cy]?.[cx] === WALL;
   const walkable = (cx: number, cy: number) =>
@@ -2127,12 +2268,16 @@ function MazeSetPieces({
     return out;
   }, [grid, mapHeight, mapWidth]);
 
+  /** Distance-cull wall set-pieces (portals/doors/grilles/signs). Mobile: tighter radius. */
+  const mountRadius = touchUi ? 6 : 12;
   return (
     <>
       {wallProps.map((p, i) => {
         const fog = fogIntensityMap?.get(`${p.cellX},${p.cellY}`) ?? 0;
         if (fog > 0.14) return null;
-        const near = Math.hypot(p.cellX - playerX, p.cellY - playerY) <= 6.2;
+        const d = Math.hypot(p.cellX - playerX, p.cellY - playerY);
+        if (d > mountRadius) return null;
+        const near = d <= 6.2;
         if (p.type === "portal") {
           const corridorCellX = p.cellX + p.openDx;
           const corridorCellY = p.cellY + p.openDy;
@@ -2219,6 +2364,7 @@ function MazeSetPieces({
       {sculptures.map((s, i) => {
         const fog = fogIntensityMap?.get(`${s.cellX},${s.cellY}`) ?? 0;
         if (fog > 0.14) return null;
+        if (Math.hypot(s.cellX - playerX, s.cellY - playerY) > mountRadius) return null;
         return (
           <group key={`sculpt-${i}`} position={[s.x, FLOOR_Y + 0.04, s.z]} rotation={[0, s.rot, 0]}>
             <mesh castShadow receiveShadow>
@@ -3507,6 +3653,10 @@ function MonsterInMaze({
   const prevCombatPulseRef = useRef(combatPulse);
   const groundLiftRef = useRef(0);
   const groundBox = useMemo(() => new THREE.Box3(), []);
+  /** Stride the skinned-mesh bbox traversal — the single biggest per-monster per-frame cost. */
+  const bboxFrameRef = useRef(0);
+  /** Coarse-tick counter for far-distance idle monsters (update every ~30 frames). */
+  const farTickRef = useRef(0);
   const seed = useMemo(() => ((x * 83492791) ^ (y * 29765743)) & 1023, [x, y]);
 
   useEffect(() => {
@@ -3543,6 +3693,21 @@ function MonsterInMaze({
     }
     const transitDist = smoothPosRef.current.distanceTo(targetPosRef.current);
     /**
+     * Far-distance early-return: an idle monster 8+ tiles away doesn't need to drive React
+     * state / recompute skinned-mesh bounds every frame. Cap to a coarse tick (~every 30
+     * frames at 60fps ≈ 2Hz). Nothing gameplay-visible depends on sub-second updates when
+     * the player can barely see the tile.
+     */
+    const farIdle = dist > 8 && transitDist <= 0.05 && !nearPlayer && t >= attackUntilRef.current;
+    if (farIdle) {
+      farTickRef.current += 1;
+      if (farTickRef.current % 30 !== 0) {
+        return;
+      }
+    } else {
+      farTickRef.current = 0;
+    }
+    /**
      * Non-ghost: `hunt` = walk/run clip while lerping toward a new grid cell.
      * Ghost (`G`): never use `hunt` for animation — smooth drift + bob already sells motion; the prior
      * `transitDist > 0.05` gate stayed true almost always (lerp tail + target updates), so Walking loop
@@ -3571,26 +3736,38 @@ function MonsterInMaze({
     const model = modelRef.current;
     if (model) {
       if (!isGhost) {
-        groundBox.setFromObject(model);
-        const bboxH = groundBox.max.y - groundBox.min.y;
-        const bboxOk =
-          Number.isFinite(groundBox.min.y) &&
-          Number.isFinite(groundBox.max.y) &&
-          bboxH >= MAZE_MONSTER_BBOX_HEIGHT_MIN &&
-          bboxH <= MAZE_MONSTER_BBOX_HEIGHT_MAX;
-        if (!bboxOk) {
-          groundLiftRef.current = Math.min(
-            MAZE_MONSTER_GROUND_LIFT_MAX,
-            groundLiftRef.current * 0.88
-          );
-        } else {
-          const desiredMinY = FLOOR_Y + 0.015;
-          const neededLift = Math.max(0, desiredMinY - groundBox.min.y);
-          // Keep feet above floor even if animation clips dip root/bones down.
-          groundLiftRef.current = Math.min(
-            MAZE_MONSTER_GROUND_LIFT_MAX,
-            Math.max(groundLiftRef.current * 0.9, neededLift)
-          );
+        /**
+         * Skinned-mesh bbox is very expensive; every monster used to do this every frame.
+         * Stride harder the farther they are from the player — close-up monsters still look
+         * grounded, distant ones converge over a few frames (the `Math.max(prev*0.9, needed)`
+         * smoothing hides the staircase).
+         */
+        const bboxStride =
+          dist <= 2 ? 4
+            : dist <= 5 ? 10
+              : 20;
+        bboxFrameRef.current += 1;
+        if (bboxFrameRef.current % bboxStride === 0) {
+          groundBox.setFromObject(model);
+          const bboxH = groundBox.max.y - groundBox.min.y;
+          const bboxOk =
+            Number.isFinite(groundBox.min.y) &&
+            Number.isFinite(groundBox.max.y) &&
+            bboxH >= MAZE_MONSTER_BBOX_HEIGHT_MIN &&
+            bboxH <= MAZE_MONSTER_BBOX_HEIGHT_MAX;
+          if (!bboxOk) {
+            groundLiftRef.current = Math.min(
+              MAZE_MONSTER_GROUND_LIFT_MAX,
+              groundLiftRef.current * 0.88
+            );
+          } else {
+            const desiredMinY = FLOOR_Y + 0.015;
+            const neededLift = Math.max(0, desiredMinY - groundBox.min.y);
+            groundLiftRef.current = Math.min(
+              MAZE_MONSTER_GROUND_LIFT_MAX,
+              Math.max(groundLiftRef.current * 0.9, neededLift)
+            );
+          }
         }
         model.position.y = groundLiftRef.current;
       } else {
@@ -3732,6 +3909,12 @@ function MazeScene({
   const shadowMapSize = touchUi ? 512 : 1024;
   return (
     <>
+      <ShadowUpdateOnPlayerCell
+        playerX={playerX}
+        playerY={playerY}
+        mapWidth={mapWidth}
+        mapHeight={mapHeight}
+      />
       <MazeAtmosphericFog />
       {/* Base fill: was ~0.008 — floor is MeshStandard + shadowed; walls use MeshBasic tops so they stayed bright alone. */}
       <ambientLight intensity={0.16} color="#2b3040" />
@@ -3763,8 +3946,17 @@ function MazeScene({
         playerX={playerX}
         playerY={playerY}
         fogIntensityMap={fogIntensityMap}
+        touchUi={touchUi}
       />
-      <GothicWallOrnaments grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
+      <GothicWallOrnaments
+        grid={grid}
+        mapWidth={mapWidth}
+        mapHeight={mapHeight}
+        fogIntensityMap={fogIntensityMap}
+        playerX={playerX}
+        playerY={playerY}
+        touchUi={touchUi}
+      />
       <MazeSetPieces
         grid={grid}
         mapWidth={mapWidth}
@@ -3772,8 +3964,17 @@ function MazeScene({
         playerX={playerX}
         playerY={playerY}
         fogIntensityMap={fogIntensityMap}
+        touchUi={touchUi}
       />
-      <HorrorCornerRelics grid={grid} mapWidth={mapWidth} mapHeight={mapHeight} fogIntensityMap={fogIntensityMap} />
+      <HorrorCornerRelics
+        grid={grid}
+        mapWidth={mapWidth}
+        mapHeight={mapHeight}
+        fogIntensityMap={fogIntensityMap}
+        playerX={playerX}
+        playerY={playerY}
+        touchUi={touchUi}
+      />
       <Suspense fallback={null}>
         <MazeArtifactPickups pickups={artifactPickups ?? []} />
         <MazeWorldFeaturePickups
@@ -4378,7 +4579,7 @@ const MazeIsoView = forwardRef(function MazeIsoView(
               }
         }
         gl={{
-          antialias: true,
+          antialias: !touchUi,
           alpha: false,
           powerPreference: "high-performance",
           stencil: false,
@@ -4387,6 +4588,14 @@ const MazeIsoView = forwardRef(function MazeIsoView(
         dpr={touchUi ? [1, 1] : [1, 1.25]}
         onCreated={({ gl }) => {
           gl.setClearColor("#06060a");
+          /**
+           * Shadow map auto-update is off — we flip `needsUpdate` only when the player changes
+           * grid cell (see directionalLight effect below). Re-rendering shadows every frame is
+           * one of the largest per-frame GPU costs and nothing in the scene animates enough to
+           * need it: walls/torches/etc. are static casters, the player/monsters lift a few cm.
+           */
+          gl.shadowMap.autoUpdate = false;
+          gl.shadowMap.needsUpdate = true;
         }}
         onPointerDown={(e) => {
           if (!combatActive || !onCombatRollRequest) return;

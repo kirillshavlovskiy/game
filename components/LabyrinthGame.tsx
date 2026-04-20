@@ -3931,6 +3931,30 @@ export default function LabyrinthGame() {
     return out;
   }, [lab, fogIntensityMap, currentPlayer]);
 
+  /**
+   * Stable props for `MazeIsoView` / `Monsters3D`.
+   * The parent re-renders on many unrelated state updates during a move; without these memos
+   * the `miniMonsters` / `combatMonster` / `spiderWebCells` values are fresh arrays/objects each
+   * render, which forces `Monsters3D` children to reconcile and re-run effects (animation mixer
+   * churn, texture rebinds). Keying on `lab.monsters` / `lab.webPositions` pins identity to the
+   * underlying game state.
+   */
+  const mazeIsoMiniMonsters = useMemo(() => {
+    if (!lab) return [];
+    return lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }));
+  }, [lab?.monsters]);
+
+  const mazeIsoSpiderWebCells = useMemo<ReadonlyArray<readonly [number, number]>>(() => {
+    return (lab?.webPositions ?? []) as ReadonlyArray<readonly [number, number]>;
+  }, [lab?.webPositions]);
+
+  const mazeIsoCombatMonster = useMemo(() => {
+    const cs = combatState as { monsterIndex: number; monsterType: string } | null;
+    if (!cs || !lab) return null;
+    const m = lab.monsters[cs.monsterIndex];
+    return m ? { x: m.x, y: m.y, type: m.type } : null;
+  }, [combatState, lab?.monsters]);
+
   const scheduleDraculaAction = useCallback((mi: number, action: "teleport" | "attack", delayMs: number) => {
     setTimeout(() => {
       // Active fight / mid-roll / pause only — omit combatResult so reward UI does not block map resolution.
@@ -13414,21 +13438,16 @@ export default function LabyrinthGame() {
                 magicPortalPreviewOptions={isoMagicPortalPreviewOptions}
                 teleportSourceType={teleportPicker?.sourceType ?? null}
                 focusVersion={currentPlayer}
-                miniMonsters={lab.monsters.map((m) => ({ x: m.x, y: m.y, type: m.type, draculaState: m.draculaState }))}
+                miniMonsters={mazeIsoMiniMonsters}
             fogIntensityMap={fogIntensityMap}
-                spiderWebCells={lab.webPositions ?? []}
+                spiderWebCells={mazeIsoSpiderWebCells}
                 artifactPickups={mazeIsoArtifactPickups}
                 worldFeaturePickups={mazeIsoWorldFeaturePickups}
                 combatActive={mazeMapView === "iso" && !!combatState}
                 combatRolling={rolling}
                 combatRollFace={isoCombatRollFace}
                 combatPulseVersion={isoCombatPulseVersion}
-                combatMonster={(() => {
-                  const cs = combatState as { monsterIndex: number; monsterType: string } | null;
-                  if (!cs) return null;
-                  const m = lab.monsters[cs.monsterIndex];
-                  return m ? { x: m.x, y: m.y, type: m.type } : null;
-                })()}
+                combatMonster={mazeIsoCombatMonster}
                 onCombatRollRequest={
                   mazeMapView === "iso" && !!combatState
                     ? handleCombatRollClick
