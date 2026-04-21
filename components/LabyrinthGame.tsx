@@ -3556,6 +3556,17 @@ export default function LabyrinthGame() {
   const isoMiniMapPinchStartRef = useRef<{ distance: number; zoom: number } | null>(null);
   const mazeZoomRef = useRef(mazeZoom);
   mazeZoomRef.current = mazeZoom;
+  /** 2D grid drag-pan state: tracks active pointer, movement threshold, and `moved` so cell-tap can be suppressed after a drag. */
+  const mazeDragPanRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    startScrollLeft: number;
+    startScrollTop: number;
+    moved: boolean;
+  } | null>(null);
+  /** Set true during an active drag-pan; used by cell `onClick` to ignore the trailing click. */
+  const mazeDragPanMovedRef = useRef(false);
 
   const expandDesktopControls = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -3633,17 +3644,27 @@ export default function LabyrinthGame() {
     };
   }, [lab]);
 
-  /** Pinch-to-zoom on map (iOS-style gestures); wheel+ctrl for trackpad pinch. Same behavior portrait/landscape — not tied to `isLandscapeCompact`. Re-binds when a maze exists (ref is absent on first mount before Start / while generating). */
+  /** 2D grid navigation: drag-pan (mouse + single-finger), plain wheel zoom anchored to cursor, Ctrl/Cmd wheel fallback, pinch-to-zoom (2-finger). Bound to `mazeAreaRef` so both scroll chrome and map content respond. */
   useEffect(() => {
     if (lab == null) return;
-    const el = mazeWrapRef.current;
-    if (!el) return;
+    const area = mazeAreaRef.current;
+    if (!area) return;
     const touchDistance = (touches: TouchList) =>
       Math.hypot(touches[1].clientX - touches[0].clientX, touches[1].clientY - touches[0].clientY);
+
+    const PAN_THRESHOLD_PX = 6;
+
+    const isInteractiveTarget = (t: EventTarget | null): boolean => {
+      if (!(t instanceof Element)) return false;
+      return !!t.closest(
+        'button, a, input, textarea, select, [role="button"], .marker, .hole-cell'
+      );
+    };
 
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) {
         pinchStartRef.current = { distance: touchDistance(e.touches), zoom: mazeZoomRef.current };
+        mazeDragPanRef.current = null;
       }
     };
     const onTouchMove = (e: TouchEvent) => {
@@ -3660,27 +3681,97 @@ export default function LabyrinthGame() {
     };
 
     const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        const delta = -Math.sign(e.deltaY) * 0.15;
-        setMazeZoom((z) => Math.max(MAZE_ZOOM_MIN, Math.min(MAZE_ZOOM_MAX, z + delta)));
+      if (mazeMapViewRef.current !== "grid") return;
+      e.preventDefault();
+      const rect = area.getBoundingClientRect();
+      const fx = e.clientX - rect.left + area.scrollLeft;
+      const fy = e.clientY - rect.top + area.scrollTop;
+      const z0 = mazeZoomRef.current;
+      const step = e.ctrlKey || e.metaKey ? 0.15 : MAZE_ZOOM_STEP;
+      const z1 = Math.max(MAZE_ZOOM_MIN, Math.min(MAZE_ZOOM_MAX, z0 - Math.sign(e.deltaY) * step));
+      if (z1 === z0) return;
+      setMazeZoom(z1);
+      requestAnimationFrame(() => {
+        const ratio = z1 / z0;
+        area.scrollLeft = fx * ratio - (e.clientX - rect.left);
+        area.scrollTop = fy * ratio - (e.clientY - rect.top);
+      });
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (mazeMapViewRef.current !== "grid") return;
+      if (e.button !== 0 && e.pointerType === "mouse") return;
+      if (isInteractiveTarget(e.target)) return;
+      mazeDragPanRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        startScrollLeft: area.scrollLeft,
+        startScrollTop: area.scrollTop,
+        moved: false,
+      };
+      mazeDragPanMovedRef.current = false;
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      const d = mazeDragPanRef.current;
+      if (!d || d.pointerId !== e.pointerId) return;
+      const dx = e.clientX - d.startX;
+      const dy = e.clientY - d.startY;
+      if (!d.moved && Math.abs(dx) + Math.abs(dy) < PAN_THRESHOLD_PX) return;
+      if (!d.moved) {
+        d.moved = true;
+        mazeDragPanMovedRef.current = true;
+        try {
+          (e.target as Element).setPointerCapture?.(e.pointerId);
+        } catch {}
+        area.style.cursor = "grabbing";
+      }
+      e.preventDefault();
+      area.scrollLeft = d.startScrollLeft - dx;
+      area.scrollTop = d.startScrollTop - dy;
+    };
+    const onPointerEnd = (e: PointerEvent) => {
+      const d = mazeDragPanRef.current;
+      if (!d || d.pointerId !== e.pointerId) return;
+      const moved = d.moved;
+      mazeDragPanRef.current = null;
+      area.style.cursor = "";
+      if (moved) {
+        const swallow = (ce: MouseEvent) => {
+          ce.stopPropagation();
+          ce.preventDefault();
+        };
+        area.addEventListener("click", swallow, { capture: true, once: true });
+        window.setTimeout(() => {
+          mazeDragPanMovedRef.current = false;
+        }, 0);
+      } else {
+        mazeDragPanMovedRef.current = false;
       }
     };
 
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: false });
-    el.addEventListener("touchend", onTouchEndOrCancel, { passive: true });
-    el.addEventListener("touchcancel", onTouchEndOrCancel, { passive: true });
-    el.addEventListener("wheel", onWheel, { passive: false });
+    area.addEventListener("touchstart", onTouchStart, { passive: true });
+    area.addEventListener("touchmove", onTouchMove, { passive: false });
+    area.addEventListener("touchend", onTouchEndOrCancel, { passive: true });
+    area.addEventListener("touchcancel", onTouchEndOrCancel, { passive: true });
+    area.addEventListener("wheel", onWheel, { passive: false });
+    area.addEventListener("pointerdown", onPointerDown);
+    area.addEventListener("pointermove", onPointerMove);
+    area.addEventListener("pointerup", onPointerEnd);
+    area.addEventListener("pointercancel", onPointerEnd);
 
     return () => {
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", onTouchEndOrCancel);
-      el.removeEventListener("touchcancel", onTouchEndOrCancel);
-      el.removeEventListener("wheel", onWheel);
+      area.removeEventListener("touchstart", onTouchStart);
+      area.removeEventListener("touchmove", onTouchMove);
+      area.removeEventListener("touchend", onTouchEndOrCancel);
+      area.removeEventListener("touchcancel", onTouchEndOrCancel);
+      area.removeEventListener("wheel", onWheel);
+      area.removeEventListener("pointerdown", onPointerDown);
+      area.removeEventListener("pointermove", onPointerMove);
+      area.removeEventListener("pointerup", onPointerEnd);
+      area.removeEventListener("pointercancel", onPointerEnd);
     };
-  }, [lab?.width, lab?.height, lab?.numPlayers, MAZE_ZOOM_MAX, MAZE_ZOOM_MIN]);
+  }, [lab?.width, lab?.height, lab?.numPlayers, MAZE_ZOOM_MAX, MAZE_ZOOM_MIN, MAZE_ZOOM_STEP]);
 
   const mazeSimplexNoiseAppliedRef = useRef(false);
   useEffect(() => {
@@ -7943,6 +8034,32 @@ export default function LabyrinthGame() {
       });
     });
   }, [scrollToCurrentPlayerOnMap]);
+
+  /** Auto-follow the active player in 2D grid: center on switch, on player change, and when their cell drifts outside the viewport. Skipped while the user is mid-drag-pan. */
+  useEffect(() => {
+    if (mazeMapView !== "grid" || !lab) return;
+    if (mazeDragPanMovedRef.current || mazeDragPanRef.current != null) return;
+    const area = mazeAreaRef.current;
+    const cell = currentPlayerCellRef.current;
+    if (!area || !cell) {
+      const id = requestAnimationFrame(() => {
+        const el = currentPlayerCellRef.current;
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      });
+      return () => cancelAnimationFrame(id);
+    }
+    const ar = area.getBoundingClientRect();
+    const cr = cell.getBoundingClientRect();
+    const offscreen =
+      cr.right <= ar.left + 12 ||
+      cr.left >= ar.right - 12 ||
+      cr.bottom <= ar.top + 12 ||
+      cr.top >= ar.bottom - 12;
+    if (offscreen) {
+      cell.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    }
+    return undefined;
+  }, [mazeMapView, currentPlayer, lab?.players[currentPlayer]?.x, lab?.players[currentPlayer]?.y]);
 
   /** Touch 3D: joystick “forward” tracks camera aim (cardinal snap in parent state + ref for same-frame reads). */
   const onTouchCameraForwardGrid = useCallback((dx: number, dy: number) => {
@@ -13255,6 +13372,30 @@ export default function LabyrinthGame() {
                   boxShadow: "0 4px 20px rgba(0,0,0,0.45)",
                 }
               : {}),
+            /** 2D grid: float zoom/view controls to the bottom-right so they are always reachable regardless of scroll/zoom, and don't overlap fog/combat telegraphs at the top. */
+            ...(mazeMapView === "grid" && lab && !isoImmersiveUi && !mobileIsoEdgeToEdge
+              ? {
+                  position: "absolute" as const,
+                  right: "max(12px, env(safe-area-inset-right, 0px))",
+                  bottom: isMobile
+                    ? `calc(max(${MOBILE_DOCK_COLLAPSED_H + 16}px, env(safe-area-inset-bottom, 0px) + ${MOBILE_DOCK_COLLAPSED_H + 16}px))`
+                    : 12,
+                  top: "auto",
+                  left: "auto",
+                  zIndex: 60,
+                  width: "auto",
+                  maxWidth: "min(calc(100vw - 24px), 520px)",
+                  margin: 0,
+                  padding: "6px 10px",
+                  background: "rgba(10,10,16,0.92)",
+                  borderRadius: 10,
+                  border: "1px solid #333",
+                  boxShadow: "0 6px 22px rgba(0,0,0,0.5)",
+                  justifyContent: "flex-end" as const,
+                  flexWrap: "wrap" as const,
+                  alignSelf: "auto" as const,
+                }
+              : {}),
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -14473,7 +14614,7 @@ export default function LabyrinthGame() {
           className="maze"
           style={{
             ...mazeStyle,
-            ...(mazeMapView === "iso" ? { display: "none" } : {}),
+            ...(mazeMapView === "iso" ? { display: "none" } : { cursor: "grab" }),
             ...({
               "--maze-cell-px": `${CELL_SIZE * mazeZoom}px`,
             } as React.CSSProperties),
@@ -14774,7 +14915,10 @@ export default function LabyrinthGame() {
                     touchAction: isCatapultSourceCell ? "none" : isTappable ? "manipulation" : undefined,
                     userSelect: isCatapultSourceCell ? "none" : undefined,
                   }}
-                  onClick={() => isTappable && handleCellTap(x, y)}
+                  onClick={() => {
+                    if (mazeDragPanMovedRef.current) return;
+                    if (isTappable) handleCellTap(x, y);
+                  }}
                   onPointerDown={isCatapultSourceCell ? (e) => {
                     if (gamePausedRef.current) return;
                     e.preventDefault();
@@ -15609,6 +15753,125 @@ export default function LabyrinthGame() {
                   />
                 </div>
               ) : null}
+              {lab && mazeMapView === "grid" && !combatOverlayVisible && !pendingCombatOffer && (() => {
+                /** Collapsed-dock 2D quick row: Locate, End turn, and up to two highest-count artifact chips (bomb counts too) — lets the player act without expanding the dock. */
+                const quickChips: Array<{ id: MobileDockAction; n: number; label: string }> = [];
+                if ((cp?.bombs ?? 0) > 0) {
+                  quickChips.push({ id: "bomb", n: cp?.bombs ?? 0, label: "Bomb" });
+                }
+                if ((cp?.catapultCharges ?? 0) > 0) {
+                  quickChips.push({ id: "catapultCharge", n: cp?.catapultCharges ?? 0, label: "Sling" });
+                }
+                for (const k of STORED_ARTIFACT_ORDER) {
+                  const n = storedArtifactCount(cp, k);
+                  if (n <= 0) continue;
+                  quickChips.push({ id: k, n, label: STORED_ARTIFACT_TITLE[k] });
+                }
+                const chips = quickChips.slice(0, 2);
+                const endTurnDisabled =
+                  winner !== null ||
+                  !!catapultPicker ||
+                  !!teleportPicker ||
+                  !!combatState ||
+                  !!pendingCombatOffer;
+                const locateDisabled =
+                  winner !== null || !lab || (lab.eliminatedPlayers?.has(currentPlayer) ?? false);
+                return (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    onTouchStart={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "6px 8px",
+                      borderRadius: 10,
+                      background: "rgba(14,16,26,0.95)",
+                      border: "1px solid #3a3d52",
+                      flexShrink: 0,
+                      touchAction: "manipulation",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        scrollToCurrentPlayerOnMap();
+                      }}
+                      disabled={locateDisabled}
+                      title="Center the map on the active player"
+                      style={{
+                        ...buttonStyle,
+                        ...secondaryButtonStyle,
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: "0.72rem",
+                        padding: "6px 8px",
+                        opacity: locateDisabled ? 0.45 : 1,
+                      }}
+                    >
+                      Locate
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        endTurn();
+                      }}
+                      disabled={endTurnDisabled}
+                      title={combatState ? "Cannot end turn during combat" : "End turn"}
+                      style={{
+                        ...buttonStyle,
+                        ...secondaryButtonStyle,
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: "0.72rem",
+                        padding: "6px 8px",
+                        opacity: endTurnDisabled ? 0.45 : 1,
+                      }}
+                    >
+                      End turn
+                    </button>
+                    {chips.map(({ id, n, label }) => (
+                      <button
+                        key={`quick-${id}`}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMobileDockAction(id);
+                          setMobileDockExpanded(true);
+                        }}
+                        title={`${label} \u00d7${n} — opens controls`}
+                        style={{
+                          ...buttonStyle,
+                          flex: "0 0 auto",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "6px 8px",
+                          fontSize: "0.7rem",
+                          fontWeight: 700,
+                          background:
+                            id === "bomb"
+                              ? "rgba(255,136,68,0.22)"
+                              : id === "catapultCharge"
+                                ? "rgba(26,61,42,0.6)"
+                                : "rgba(42,42,53,0.95)",
+                          border: "1px solid #444",
+                          borderRadius: 8,
+                          color: "#ddd",
+                        }}
+                      >
+                        <ArtifactIcon variant={dockActionIconVariant(id)} size={18} />
+                        <span>×{n}</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           ) : null
         ) : desktopWindowedIsoAllHudOnCanvas ? null : pendingCombatOffer && lab && !teleportPicker ? (
