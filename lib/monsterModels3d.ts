@@ -1694,7 +1694,14 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
     attack: expandSpiderClipTryList(
       mergeUniqueClipOrder([...SPIDER_ATTACK_SPELL_PRIORITY], [...SPIDER_ATTACK_SKILL_PRIORITY]),
     ),
+    /**
+     * Rolling-state = dice rolling with `rollingApproachBlend` translating the rig forward.
+     * Must lead with a locomotion clip so the feet step while the mesh closes; static poses
+     * (Alert / Zombie_Scream / Jumping_Punch) looked like foot-sliding in the face-off view.
+     */
     rolling: expandSpiderClipTryList([
+      "Running",
+      "Walking",
       "Zombie_Scream",
       "Alert",
       "Jumping_Punch",
@@ -1716,7 +1723,11 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
     attack: expandZombieClipTryList(
       mergeUniqueClipOrder([...ZOMBIE_ATTACK_SPELL_PRIORITY], [...ZOMBIE_ATTACK_SKILL_PRIORITY]),
     ),
+    /** See spider.rolling comment — lead with locomotion clips to match the forward approach. */
     rolling: expandZombieClipTryList([
+      "Unsteady_Walk",
+      "Walking",
+      "Running",
       "Zombie_Scream",
       "Alert",
       "Alert_Quick_Turn_Right",
@@ -1740,7 +1751,11 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
     attack: expandGhostClipTryList(
       mergeUniqueClipOrder([...GHOST_ATTACK_SPELL_PRIORITY], [...GHOST_ATTACK_SKILL_PRIORITY]),
     ),
+    /** See spider.rolling comment — lead with locomotion clips to match the forward approach. */
     rolling: expandGhostClipTryList([
+      "Mummy_Stagger",
+      "Walking",
+      "Running",
       "Zombie_Scream",
       "Alert",
       "Alert_Quick_Turn_Right",
@@ -1764,7 +1779,13 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
     attack: expandLavaClipTryList(
       mergeUniqueClipOrder([...LAVA_ATTACK_SPELL_PRIORITY], [...LAVA_ATTACK_SKILL_PRIORITY]),
     ),
+    /**
+     * See spider.rolling comment — lead with locomotion so the Lava Golem steps forward
+     * during approach (the prior Alert-first pick left the rig sliding forward on `rollingApproachBlend`).
+     */
     rolling: expandLavaClipTryList([
+      "Walking",
+      "Running",
       "Alert",
       "Charged_Upward_Slash",
       "Jumping_Punch",
@@ -1787,7 +1808,14 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
     attack: expandDraculaClipTryList(
       mergeUniqueClipOrder([...DRACULA_ATTACK_SPELL_PRIORITY], [...DRACULA_ATTACK_SKILL_PRIORITY]),
     ),
-    rolling: expandDraculaClipTryList(["Mummy_Stagger", "Jumping_Punch", "Charged_Spell_Cast_2"]),
+    /** Dracula already leads with Mummy_Stagger (a walk-in-place clip); keep Walking/Running as fallbacks if the stagger clip is ever stripped. */
+    rolling: expandDraculaClipTryList([
+      "Mummy_Stagger",
+      "Walking",
+      "Running",
+      "Jumping_Punch",
+      "Charged_Spell_Cast_2",
+    ]),
     /** Default hurt order when no HP tier: light flinch → harder reactions (contrast with `attack` strikes). */
     hurt: expandDraculaClipTryList(["Face_Punch_Reaction", "Face_Punch_Reaction_2", "Hit_Reaction_to_Waist"]),
     knockdown: expandDraculaClipTryList(["Shot_and_Fall_Backward", "falling_down"]),
@@ -1803,8 +1831,11 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
     attack: expandSkeletonClipTryList(
       mergeUniqueClipOrder([...SKELETON_ATTACK_SPELL_PRIORITY], [...SKELETON_ATTACK_SKILL_PRIORITY]),
     ),
+    /** Skeleton already leads with Mummy_Stagger; append Walking/Running as fallback if the stagger clip is ever missing. */
     rolling: expandSkeletonClipTryList([
       "Mummy_Stagger",
+      "Walking",
+      "Running",
       "Left_Slash",
       "Alert_Quick_Turn_Right",
       "Triple_Combo_Attack",
@@ -1829,7 +1860,11 @@ const MESHY_MERGED_CLIP_PRIORITY: Partial<
     attack: expandClownClipTryList(
       mergeUniqueClipOrder([...CLOWN_ATTACK_SPELL_PRIORITY], [...CLOWN_ATTACK_SKILL_PRIORITY]),
     ),
+    /** See spider.rolling comment — Unsteady_Walk is the clown's signature forward walk. */
     rolling: expandClownClipTryList([
+      "Unsteady_Walk",
+      "Walking",
+      "Running",
       "Alert_Quick_Turn_Right",
       "Angry_Ground_Stomp",
       "Axe_Spin_Attack",
@@ -2116,7 +2151,7 @@ function draculaMergedCanonicalFallback(
       ...mergeUniqueClipOrder([...DRACULA_ATTACK_SPELL_PRIORITY], [...DRACULA_ATTACK_SKILL_PRIORITY]),
       ...DRACULA_ATTACK_FALLBACK_TAIL,
     ],
-    rolling: ["Mummy_Stagger", "Jumping_Punch", "Charged_Spell_Cast_2"],
+    rolling: ["Mummy_Stagger", "Walking", "Running", "Jumping_Punch", "Charged_Spell_Cast_2"],
     hurt: ["Face_Punch_Reaction", "Face_Punch_Reaction_2", "Hit_Reaction_to_Waist"],
     knockdown: [...draculaKnockdownClipPriority(attackVariant)],
     defeated: [...draculaDefeatedClipPriority(attackVariant)],
@@ -2166,7 +2201,7 @@ function skeletonMergedCanonicalFallback(
       ...mergeUniqueClipOrder([...SKELETON_ATTACK_SPELL_PRIORITY], [...SKELETON_ATTACK_SKILL_PRIORITY]),
       ...SKELETON_ATTACK_FALLBACK_TAIL,
     ],
-    rolling: ["Mummy_Stagger", "Left_Slash", "Alert_Quick_Turn_Right", "Triple_Combo_Attack", "Charged_Spell_Cast_2"],
+    rolling: ["Mummy_Stagger", "Walking", "Running", "Left_Slash", "Alert_Quick_Turn_Right", "Triple_Combo_Attack", "Charged_Spell_Cast_2"],
     hurt: ["Hit_Reaction_to_Waist","Face_Punch_Reaction_1", "Face_Punch_Reaction_2"],
     knockdown: [...skeletonKnockdownClipPriority(attackVariant)],
     defeated: [...skeletonDefeatedClipPriority(attackVariant)],
@@ -2196,7 +2231,7 @@ function zombieMergedCanonicalFallback(
       ...mergeUniqueClipOrder([...ZOMBIE_ATTACK_SPELL_PRIORITY], [...ZOMBIE_ATTACK_SKILL_PRIORITY]),
       ...ZOMBIE_ATTACK_FALLBACK_TAIL,
     ],
-    rolling: ["Zombie_Scream", "Alert", "Alert_Quick_Turn_Right", "Jumping_Punch"],
+    rolling: ["Unsteady_Walk", "Walking", "Running", "Zombie_Scream", "Alert", "Alert_Quick_Turn_Right", "Jumping_Punch"],
     hurt: ["Hit_Reaction_to_Waist", "Face_Punch_Reaction_2"],
     knockdown: [...zombieKnockdownClipPriority(attackVariant)],
     defeated: [...zombieDefeatedClipPriority(attackVariant)],
@@ -2225,7 +2260,7 @@ function ghostMergedCanonicalFallback(
       ...mergeUniqueClipOrder([...GHOST_ATTACK_SPELL_PRIORITY], [...GHOST_ATTACK_SKILL_PRIORITY]),
       ...GHOST_ATTACK_FALLBACK_TAIL,
     ],
-    rolling: ["Zombie_Scream", "Alert", "Alert_Quick_Turn_Right", "Jumping_Punch", "Axe_Spin_Attack"],
+    rolling: ["Mummy_Stagger", "Walking", "Running", "Zombie_Scream", "Alert", "Alert_Quick_Turn_Right", "Jumping_Punch", "Axe_Spin_Attack"],
     hurt: ["Hit_Reaction_to_Waist", "Face_Punch_Reaction_2"],
     knockdown: [...ghostKnockdownClipPriority(attackVariant)],
     defeated: [...ghostDefeatedClipPriority(attackVariant)],
@@ -2274,7 +2309,7 @@ function clownMergedCanonicalFallback(
       ...mergeUniqueClipOrder([...CLOWN_ATTACK_SPELL_PRIORITY], [...CLOWN_ATTACK_SKILL_PRIORITY]),
       ...CLOWN_ATTACK_FALLBACK_TAIL,
     ],
-    rolling: ["Alert_Quick_Turn_Right", "Angry_Ground_Stomp", "Axe_Spin_Attack", "Skill_01"],
+    rolling: ["Unsteady_Walk", "Walking", "Running", "Alert_Quick_Turn_Right", "Angry_Ground_Stomp", "Axe_Spin_Attack", "Skill_01"],
     hurt: ["Hit_Reaction_to_Waist", "Face_Punch_Reaction_2"],
     knockdown: [...clownKnockdownClipPriority(attackVariant)],
     defeated: [...clownDefeatedClipPriority(attackVariant)],
@@ -2351,7 +2386,7 @@ function lavaMergedCanonicalFallback(
       ...mergeUniqueClipOrder([...LAVA_ATTACK_SPELL_PRIORITY], [...LAVA_ATTACK_SKILL_PRIORITY]),
       ...LAVA_ATTACK_FALLBACK_TAIL,
     ],
-    rolling: ["Alert", "Charged_Upward_Slash", "Jumping_Punch", "Skill_03"],
+    rolling: ["Walking", "Running", "Alert", "Charged_Upward_Slash", "Jumping_Punch", "Skill_03"],
     hurt: ["Hit_Reaction_to_Waist", "Face_Punch_Reaction_2"],
     knockdown: [...lavaKnockdownClipPriority(attackVariant)],
     defeated: [...lavaDefeatedClipPriority(attackVariant)],
@@ -2400,7 +2435,7 @@ function spiderMergedCanonicalFallback(
       ...mergeUniqueClipOrder([...SPIDER_ATTACK_SPELL_PRIORITY], [...SPIDER_ATTACK_SKILL_PRIORITY]),
       ...SPIDER_ATTACK_FALLBACK_TAIL,
     ],
-    rolling: ["Zombie_Scream", "Alert", "Jumping_Punch", "Left_Slash"],
+    rolling: ["Running", "Walking", "Zombie_Scream", "Alert", "Jumping_Punch", "Left_Slash"],
     hurt: ["Hit_Reaction_to_Waist", "Face_Punch_Reaction_2"],
     knockdown: [...mergedMonsterKnockdownClipPriority(attackVariant)],
     defeated: [...mergedMonsterDefeatedClipPriority(attackVariant)],
