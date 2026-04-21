@@ -1,0 +1,49 @@
+appId: com.creeplabyrinth.diceofthedamned
+productName: Dice Of The Damned
+copyright: © 2026 Creep Labyrinth
+
+directories:
+  output: dist/desktop
+  buildResources: build
+
+# Ship only the electron wrapper and the already-exported static site. The
+# itch zip path (`scripts/package-itch.cjs`) keeps building `creep-labyrinth-itch.zip`
+# untouched — this config is additive.
+files:
+  - "electron/**/*"
+  - "out/**/*"
+  - "package.json"
+  - "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}"
+  - "!**/{.DS_Store,.git,.gitignore,.gitattributes}"
+  - "!**/node_modules/**/*.map"
+
+# asar-pack just the tiny electron wrapper. The massive `out/` tree (models,
+# textures, GLBs) stays on disk so Chromium can stream them directly with no
+# archive overhead — same behavior as the itch HTML5 build.
+asar: true
+asarUnpack:
+  - "out/**"
+
+mac:
+  target:
+    - target: zip
+      arch: [universal]
+  category: public.app-category.adventure-games
+  icon: build/icon.png
+  darkModeSupport: true
+  # Unsigned: itch.io indie convention. Gatekeeper users need right-click → Open
+  # on first launch. See docs/DESKTOP_DISTRIBUTION.md for the bypass note.
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  identity: null
+  artifactName: "${productName}-${version}-mac-universal.${ext}"
+
+win:
+  target:
+    - target: portable
+      arch: [x64]
+  icon: build/icon.png
+  artifactName: "${productName}-${version}-win-x64-portable.${ext}"
+
+# Default for any other platform we might build later.
+artifactName: "${productName}-${version}-${os}-${arch}.${ext}"

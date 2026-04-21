@@ -1,7 +1,13 @@
 {
   "name": "creep-labyrinth",
+  "productName": "Dice Of The Damned",
   "version": "1.0.0",
   "private": true,
+  "main": "electron/main.js",
+  "description": "Dice Of The Damned — retro horror maze crawl with 3D dice combat.",
+  "author": {
+    "name": "Kirill Shavlovskiy"
+  },
   "scripts": {
     "dev": "node node_modules/next/dist/bin/next dev",
     "validate-scenarios": "npx tsx scripts/validate-scenarios.ts",
@@ -12,6 +18,10 @@
     "package:itch": "node scripts/package-itch.cjs",
     "package:crazygames": "bash scripts/package-crazygames.sh",
     "package:crazygames-lite": "bash scripts/package-crazygames-lite.sh",
+    "desktop:dev": "electron electron/main.js",
+    "dist:mac": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --universal",
+    "dist:win": "electron-builder --win",
+    "dist:desktop": "npm run build:itch && npm run dist:mac && npm run dist:win",
     "clean": "rm -rf .next node_modules package-lock.json && npm install",
     "start": "next start",
     "lint": "next lint",
@@ -37,6 +47,8 @@
     "@types/react-dom": "^18",
     "@types/three": "^0.170.0",
     "cross-env": "^7.0.3",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
     "eslint": "^8",
     "eslint-config-next": "^14.2.35",
     "typescript": "^5"

@@ -10,8 +10,11 @@ local.env
 .next/
 out/
 
-# itch.io packaging
+# itch.io + desktop packaging (mac/win electron-builder output)
 dist/
+
+# electron-builder local caches (redirected from ~/Library/Caches when sandboxed)
+.cache/
 
 # TypeScript incremental build cache
 tsconfig.tsbuildinfo
