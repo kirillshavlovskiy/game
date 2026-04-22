@@ -415,22 +415,13 @@ button {
   border-radius: 4px;
 }
 
-@keyframes mazeArtifactSpin {
-  from {
-    transform: rotateY(0deg);
-  }
-  to {
-    transform: rotateY(360deg);
-  }
-}
-
+/* Artifact pickup wrapper in the 2D top-down map. Animations removed — artifacts are
+   static so they read as placed loot, not spinning VFX. The `artifact-spin-wrap` class
+   name is kept for compat with existing JSX; it's now layout-only. */
 .cell.path.artifact .artifact-spin-wrap {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  perspective: 120px;
-  transform-style: preserve-3d;
-  animation: mazeArtifactSpin 5s linear infinite;
 }
 
 /* Fog/darkness zone - gradual opacity from transparent (edge) to opaque (center). Cleared by torch. */

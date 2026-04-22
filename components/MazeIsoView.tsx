@@ -2055,15 +2055,15 @@ function HorrorCornerRelics({
   }
 }
 
+/**
+ * Fallback orb rendered for artifact kinds that don't have a dedicated GLB. Static pose —
+ * rotation was intentionally removed so maze pickups read as stable scenery, not fidgety VFX.
+ */
 function GenericRotatingArtifactOrb({ x, y }: { x: number; y: number }) {
-  const ref = useRef<THREE.Group>(null);
-  useFrame((_, dt) => {
-    if (ref.current) ref.current.rotation.y += dt * 1.25;
-  });
   const px = x * CS;
   const pz = y * CS;
   return (
-    <group ref={ref} position={[px, FLOOR_Y + 0.36, pz]}>
+    <group position={[px, FLOOR_Y + 0.36, pz]}>
       <mesh castShadow>
         <octahedronGeometry args={[0.2, 0]} />
         <meshStandardMaterial
@@ -2078,26 +2078,31 @@ function GenericRotatingArtifactOrb({ x, y }: { x: number; y: number }) {
   );
 }
 
+/**
+ * 3D GLB pickup for collectible artifacts (shield, holy sword, holy cross, magic-portal
+ * ring, etc). Name kept for historical grep — the component no longer spins; pickups
+ * sit still so they read as placed props rather than animated VFX.
+ *
+ * `staticRotationY` is preserved (not an animation, just an orientation offset) because
+ * features like the magic-portal ring need to be aligned to the corridor direction.
+ */
 function RotatingArtifactGlbPickup({
   x,
   y,
   url,
-  spin = true,
   /** When set, uniform scale so max(XZ) footprint matches this (corridor width). Otherwise cube-fit with `MAZE_ROTATING_PICKUP_MAX_DIM`. */
   maxHorizSpan,
-  /** Extra Y rotation (radians) applied before optional spin — e.g. magic portal ring alignment. */
+  /** One-shot Y rotation offset (radians) — e.g. magic-portal ring alignment. */
   staticRotationY = 0,
 }: {
   x: number;
   y: number;
   url: string;
-  spin?: boolean;
   maxHorizSpan?: number;
   staticRotationY?: number;
 }) {
   const { scene } = useGLTF(url);
   const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
-  const spinRef = useRef<THREE.Group>(null);
   useEffect(() => {
     clone.traverse((o) => {
       if (o instanceof THREE.Mesh) {
@@ -2123,15 +2128,11 @@ function RotatingArtifactGlbPickup({
     const b2 = new THREE.Box3().setFromObject(clone);
     clone.position.set(0, -b2.min.y + 0.02, 0);
   }, [clone, maxHorizSpan]);
-  useFrame((_, dt) => {
-    if (!spin) return;
-    if (spinRef.current) spinRef.current.rotation.y += dt * 1.05;
-  });
   const px = x * CS;
   const pz = y * CS;
   return (
     <group position={[px, FLOOR_Y + 0.02, pz]}>
-      <group ref={spinRef} rotation={[0, staticRotationY, 0]}>
+      <group rotation={[0, staticRotationY, 0]}>
         <primitive object={clone} />
       </group>
     </group>
@@ -2183,7 +2184,6 @@ function MazeWorldFeaturePickups({
             x={p.x}
             y={p.y}
             url={p.url}
-            spin={!isMagicTeleport}
             maxHorizSpan={isMagicTeleport ? MAZE_MAGIC_TELEPORT_RING_HORIZ_SPAN : undefined}
             staticRotationY={isMagicTeleport ? magicYaw : 0}
           />
