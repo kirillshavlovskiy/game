@@ -20,7 +20,7 @@ Play as one explorer against the labyrinth: **roll for moves**, pick your route 
 
 ### Multiplayer (same screen)
 
-For game nights or couch play, add more human players and **pass the device** (or share one keyboard): turns are **hot-seat**—only the active player moves, but everyone sees the same maze, combat, and dice.
+For game nights or couch play, add up to **4 human players** and **pass the device** (or share one keyboard): turns are **hot-seat**—only the active player moves, but everyone sees the same maze, combat, and dice. Works in the browser build and the Mac / Windows desktop downloads alike.
 
 ### Goal
 
@@ -81,6 +81,8 @@ Pick **one** primary genre from itch’s list. Best fit for Creep Labyrinth:
 
 ## Release checklist
 
-1. `npm run package:itch` → upload `dist/creep-labyrinth-itch.zip` as **HTML** (index at zip root).  
-2. Match **version** in `package.json` to what you note in the itch devlog or file name if you rename the zip.  
-3. Optional: `git tag v0.1.1 && git push origin v0.1.1` after committing the version bump.
+1. **HTML5:** `npm run build:itch && npm run package:itch` → upload `dist/creep-labyrinth-itch.zip` as **HTML**.
+2. **Desktop:** `npm run dist:desktop` → upload the Mac `.zip` and Windows `.exe` from `dist/desktop/`. See `docs/DESKTOP_DISTRIBUTION.md` for platform tags and first-launch notes.
+3. All three files ship **free** — no "available after purchase" gating.
+4. Match **version** in `package.json` to what you note in the itch devlog.
+5. Optional: `git tag v1.0.x && git push origin v1.0.x` after committing the version bump.

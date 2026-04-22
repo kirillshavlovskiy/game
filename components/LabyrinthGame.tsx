@@ -173,7 +173,7 @@ import {
   cloneLabyrinthForDoMove,
   playerStepWouldSucceed,
 } from "@/lib/labyrinth";
-import { MULTIPLAYER_ENABLED } from "@/lib/gameEnv";
+import { MULTIPLAYER_ENABLED, MAX_PLAYERS } from "@/lib/gameEnv";
 import { ARTIFACT_KIND_VISUAL_GLB } from "@/lib/storedArtifactGlbs";
 import { MAZE_WORLD_FEATURE_BOMB_GLB, mazeWorldFeatureGlbUrl } from "@/lib/mazeIsoWorldPickups";
 import {
@@ -2499,9 +2499,11 @@ function SpiderWebCell() {
   );
 }
 
-/** Avatar options for player selection (emoji) */
-const PLAYER_AVATARS = ["🧙", "🧛", "🧟", "🦸", "🧚", "🦊", "🐉", "🦉", "🐺", "🦋"] as const;
-/** Horror-maze hunter portraits (`public/heroes/*.png`) — wear-only variants, no weapons or ammo */
+/**
+ * Horror-maze hunter portraits (`public/heroes/*.png`) — wear-only variants, no weapons or ammo.
+ * MAX_PLAYERS === HORROR_HERO_PORTRAITS.length by design (4 heroes, 4 hot-seat slots), so every
+ * player has a dedicated default portrait and can still swap among the 4 in Setup / Settings.
+ */
 const HERO_PORTRAIT_PREFIX = publicAssetPath("heroes/");
 const HORROR_HERO_PORTRAITS = [
   { path: `${HERO_PORTRAIT_PREFIX}hero-wear-1.png`, title: "Horror hero — leather & belts (no weapons)" },
@@ -2568,9 +2570,8 @@ function PlayerAvatarFace(props: {
   );
 }
 
-/** Emoji avatar buttons in start / settings modals */
+/** Hero-portrait avatar buttons in start / settings modals */
 const AVATAR_PICKER_BTN_PX = 40;
-const AVATAR_PICKER_FONT = "1.28rem";
 const AVATAR_PICKER_WRAP_MAX_W = 280;
 
 /** Skip game hotkeys while focus is in a text field / select (Setup & in-game Settings name inputs, etc.) */
@@ -3150,6 +3151,10 @@ export default function LabyrinthGame() {
   const [mazeSize, setMazeSize] = useState(25);
   const [difficulty, setDifficulty] = useState(2);
   const [firstMonsterType, setFirstMonsterType] = useState<import("@/lib/labyrinth").MonsterType>("V");
+  /**
+   * Hot-seat defaults to 1 — most players land here for single-player first. They can slide the
+   * counter up to `MAX_PLAYERS` (4) in the Setup modal to start a hot-seat session.
+   */
   const [numPlayers, setNumPlayers] = useState(1);
   const [rolling, setRolling] = useState(false);
   const [bonusAdded, setBonusAdded] = useState<number | null>(null);
@@ -3383,11 +3388,14 @@ export default function LabyrinthGame() {
   const [playerNames, setPlayerNames] = useState<string[]>(() =>
     Array.from({ length: 1 }, (_, i) => `Player ${i + 1}`)
   );
+  /**
+   * Every slot gets a distinct hero portrait. `MAX_PLAYERS` matches the number of
+   * horror-hero portraits on disk (4), so there's a clean 1:1 mapping and no need
+   * to fall back to emoji avatars in the picker UI.
+   */
   const [playerAvatars, setPlayerAvatars] = useState<string[]>(() =>
-    Array.from({ length: 10 }, (_, i) =>
-      i < HORROR_HERO_PORTRAITS.length
-        ? HORROR_HERO_PORTRAITS[i]!.path
-        : PLAYER_AVATARS[i % PLAYER_AVATARS.length]
+    Array.from({ length: MAX_PLAYERS }, (_, i) =>
+      HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path
     )
   );
   /** Player 1 portrait is not selectable — keep state aligned with `PLAYER_1_FIXED_AVATAR_PATH`. */
@@ -3400,10 +3408,10 @@ export default function LabyrinthGame() {
     });
   }, [numPlayers]);
   const [playerWeaponGlb, setPlayerWeaponGlb] = useState<string[]>(() =>
-    Array.from({ length: 10 }, (_, i) => WEAPON_OPTIONS[i % WEAPON_OPTIONS.length]!.path),
+    Array.from({ length: MAX_PLAYERS }, (_, i) => WEAPON_OPTIONS[i % WEAPON_OPTIONS.length]!.path),
   );
   const [playerOffhandArmourGlb, setPlayerOffhandArmourGlb] = useState<string[]>(() =>
-    Array.from({ length: 10 }, () => NO_ARMOUR_SENTINEL),
+    Array.from({ length: MAX_PLAYERS }, () => NO_ARMOUR_SENTINEL),
   );
   const diceRef = useRef<Dice3DRef>(null);
   const combatDiceRef = useRef<Dice3DRef>(null);
@@ -4314,7 +4322,7 @@ export default function LabyrinthGame() {
   }, [currentPlayer, winner, showDiceModal]);
 
   useEffect(() => {
-    const maxP = MULTIPLAYER_ENABLED ? 10 : 1;
+    const maxP = MULTIPLAYER_ENABLED ? MAX_PLAYERS : 1;
     const n = Math.min(Math.max(1, numPlayers), maxP);
     if (n !== numPlayers) {
       setNumPlayers(n);
@@ -4524,7 +4532,7 @@ export default function LabyrinthGame() {
 
   const newGame = useCallback((opts?: { initSource?: string }) => {
     const initSource = opts?.initSource ?? "procedural";
-    const n = MULTIPLAYER_ENABLED ? Math.min(Math.max(1, numPlayers), 9) : 1;
+    const n = MULTIPLAYER_ENABLED ? Math.min(Math.max(1, numPlayers), MAX_PLAYERS) : 1;
     const size = getDimensions();
     const extraPaths = Math.max(4, n * 2);
     const l = new Labyrinth(size, size, extraPaths, n, difficulty, firstMonsterType);
@@ -4617,7 +4625,7 @@ export default function LabyrinthGame() {
   }, [getDimensions, numPlayers, difficulty, firstMonsterType]);
 
   const generateWithAI = useCallback(async () => {
-    const n = MULTIPLAYER_ENABLED ? Math.min(Math.max(1, numPlayers), 9) : 1;
+    const n = MULTIPLAYER_ENABLED ? Math.min(Math.max(1, numPlayers), MAX_PLAYERS) : 1;
     const numPaths = n * 2;
     setError("Generating maze...");
     try {
@@ -7323,9 +7331,21 @@ export default function LabyrinthGame() {
     triggerRoundEnd,
   ]);
 
-  // Auto-roll when dice modal is shown (restores original behavior: next player gets moves without manual click)
+  /**
+   * Auto-roll the movement dice when the modal appears, but only in single-player.
+   *
+   * Hot-seat multiplayer intentionally requires the active player to tap the dice
+   * (or "Roll dice" button) themselves — the tactile roll is the whole point of
+   * passing the device around, and it gives each player a clear "your turn starts
+   * now" beat before they see their move count.
+   *
+   * Single-player keeps the quick-flow auto-roll so solo sessions don't need an
+   * extra click every turn.
+   */
   useEffect(() => {
     if (TEMP_INFINITE_MOVES) return;
+    const labNumPlayers = lab?.numPlayers ?? 1;
+    if (labNumPlayers > 1) return;
     if (
       !showDiceModal ||
       combatState ||
@@ -8335,9 +8355,9 @@ export default function LabyrinthGame() {
                 <input
                   type="number"
                   min={1}
-                  max={10}
+                  max={MAX_PLAYERS}
                   value={numPlayers}
-                  onChange={(e) => setNumPlayers(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
+                  onChange={(e) => setNumPlayers(Math.min(MAX_PLAYERS, Math.max(1, Number(e.target.value) || 1)))}
                   style={{ ...startModalInputStyle, ...(isMobile ? { width: "100%", maxWidth: 120, minHeight: 44 } : {}) }}
                 />
               </div>
@@ -8352,7 +8372,7 @@ export default function LabyrinthGame() {
               }}
             >
               <label style={isMobile ? startModalLabelStyleMobile : startModalLabelStyle}>
-                Player names & avatars <span style={{ opacity: 0.75, fontWeight: 500 }}>(horror hunters + emoji)</span>
+                Player names & avatars <span style={{ opacity: 0.75, fontWeight: 500 }}>(horror hunters)</span>
               </label>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
@@ -8415,7 +8435,7 @@ export default function LabyrinthGame() {
                                       : [
                                           ...prev,
                                           ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
-                                            PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length]
+                                            HORROR_HERO_PORTRAITS[(prev.length + j) % HORROR_HERO_PORTRAITS.length]!.path
                                           ),
                                         ];
                                   next[i] = h.path;
@@ -8428,12 +8448,12 @@ export default function LabyrinthGame() {
                                 padding: 0,
                                 lineHeight: 1,
                                 border:
-                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
+                                  (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
                                     ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
                                     : `1px solid ${START_MENU_BORDER_MUTE}`,
                                 borderRadius: 6,
                                 background:
-                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
+                                  (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
                                     ? START_MENU_SELECTED_FILL
                                     : START_MENU_CTRL_BG,
                                 cursor: "pointer",
@@ -8449,42 +8469,6 @@ export default function LabyrinthGame() {
                                 draggable={false}
                                 style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
                               />
-                            </button>
-                          ))}
-                          {PLAYER_AVATARS.map((av) => (
-                            <button
-                              key={av}
-                              type="button"
-                              className="start-menu-avatar-btn"
-                              onClick={() => {
-                                setPlayerAvatars((prev) => {
-                                  const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length])];
-                                  next[i] = av;
-                                  return next;
-                                });
-                              }}
-                              style={{
-                                width: AVATAR_PICKER_BTN_PX,
-                                height: AVATAR_PICKER_BTN_PX,
-                                padding: 0,
-                                fontSize: AVATAR_PICKER_FONT,
-                                lineHeight: 1,
-                                border:
-                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av
-                                    ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
-                                    : `1px solid ${START_MENU_BORDER_MUTE}`,
-                                borderRadius: 6,
-                                background:
-                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av
-                                    ? START_MENU_SELECTED_FILL
-                                    : START_MENU_CTRL_BG,
-                                cursor: "pointer",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                              }}
-                            >
-                              {av}
                             </button>
                           ))}
                         </>
@@ -12583,7 +12567,7 @@ export default function LabyrinthGame() {
                       >
                         {showCombatDefeatSkull ? "💀" : (
                           <PlayerAvatarFace
-                            value={playerAvatars[headerPi] ?? PLAYER_AVATARS[headerPi % PLAYER_AVATARS.length]}
+                            value={playerAvatars[headerPi] ?? HORROR_HERO_PORTRAITS[headerPi % HORROR_HERO_PORTRAITS.length]!.path}
                             sizePx={combatPlayerAvatarPx}
                             radiusPx={10}
                             emojiFont="clamp(5rem, 11vw, 6.75rem)"
@@ -13060,15 +13044,15 @@ export default function LabyrinthGame() {
                 <input
                   type="number"
                   min={1}
-                  max={10}
+                  max={MAX_PLAYERS}
                   value={numPlayers}
-                  onChange={(e) => setNumPlayers(Number(e.target.value) || 1)}
+                  onChange={(e) => setNumPlayers(Math.min(MAX_PLAYERS, Math.max(1, Number(e.target.value) || 1)))}
                   style={inputStyle}
                 />
               </div>
             ) : null}
             <div style={{ ...modalRowStyle, flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-              <label>Player names & avatars (horror hunters + emoji):</label>
+              <label>Player names & avatars (horror hunters):</label>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
                 {Array.from({ length: numPlayers }).map((_, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
@@ -13120,7 +13104,7 @@ export default function LabyrinthGame() {
                                       : [
                                           ...prev,
                                           ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
-                                            PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length]
+                                            HORROR_HERO_PORTRAITS[(prev.length + j) % HORROR_HERO_PORTRAITS.length]!.path
                                           ),
                                         ];
                                   next[i] = h.path;
@@ -13133,12 +13117,12 @@ export default function LabyrinthGame() {
                                 padding: 0,
                                 lineHeight: 1,
                                 border:
-                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
+                                  (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
                                     ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}`
                                     : "1px solid #444",
                                 borderRadius: 6,
                                 background:
-                                  (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === h.path
+                                  (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
                                     ? "rgba(0,255,136,0.2)"
                                     : "#1a1a24",
                                 cursor: "pointer",
@@ -13154,35 +13138,6 @@ export default function LabyrinthGame() {
                                 draggable={false}
                                 style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
                               />
-                            </button>
-                          ))}
-                          {PLAYER_AVATARS.map((av) => (
-                            <button
-                              key={av}
-                              type="button"
-                              onClick={() => {
-                                setPlayerAvatars((prev) => {
-                                  const next = prev.length >= numPlayers ? [...prev] : [...prev, ...Array.from({ length: numPlayers - prev.length }, (_, j) => PLAYER_AVATARS[(prev.length + j) % PLAYER_AVATARS.length])];
-                                  next[i] = av;
-                                  return next;
-                                });
-                              }}
-                              style={{
-                                width: AVATAR_PICKER_BTN_PX,
-                                height: AVATAR_PICKER_BTN_PX,
-                                padding: 0,
-                                fontSize: AVATAR_PICKER_FONT,
-                                lineHeight: 1,
-                                border: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}` : "1px solid #444",
-                                borderRadius: 6,
-                                background: (playerAvatars[i] ?? PLAYER_AVATARS[i % PLAYER_AVATARS.length]) === av ? "rgba(0,255,136,0.2)" : "#1a1a24",
-                                cursor: "pointer",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                              }}
-                            >
-                              {av}
                             </button>
                           ))}
                         </>
@@ -14675,7 +14630,7 @@ export default function LabyrinthGame() {
                       transformOrigin: `${catapultDragOffset.dx >= 0 ? "left" : "right"} ${catapultDragOffset.dy >= 0 ? "top" : "bottom"}`,
                     }
                   : {};
-                const avatar = playerAvatars[pi] ?? PLAYER_AVATARS[pi % PLAYER_AVATARS.length];
+                const avatar = playerAvatars[pi] ?? HORROR_HERO_PORTRAITS[pi % HORROR_HERO_PORTRAITS.length]!.path;
                 const isActive = pi === currentPlayer;
                 const hitFlashSeq =
                   playerAvatarHitFlash?.playerIndex === pi ? playerAvatarHitFlash.seq : 0;

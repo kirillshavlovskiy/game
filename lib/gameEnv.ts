@@ -1,10 +1,16 @@
 /**
- * Build-time / client bundle flags from `NEXT_PUBLIC_*` env vars.
+ * Build-time / client bundle flags.
  *
- * Set `NEXT_PUBLIC_MULTIPLAYER_ENABLED=true` in `.env.local` to allow changing the player count
- * (2–10) from the start menu. When unset or false, the UI hides that control and the game uses
- * exactly one human player.
+ * Hot-seat multiplayer (up to 4 players) is a standard feature of the game
+ * and is always available in production builds. This constant is kept for
+ * grep-ability and to document every call-site that branches on the MP toggle
+ * — every such site can be treated as a compile-time `true`.
+ *
+ * Historical note: this used to be gated by `NEXT_PUBLIC_MULTIPLAYER_ENABLED`
+ * when we considered a paid "Party Edition" SKU. The gate was dropped in
+ * favor of shipping MP in every build (free HTML5 + desktop alike).
  */
-export const MULTIPLAYER_ENABLED =
-  typeof process.env.NEXT_PUBLIC_MULTIPLAYER_ENABLED === "string" &&
-  ["true", "1", "yes"].includes(process.env.NEXT_PUBLIC_MULTIPLAYER_ENABLED.trim().toLowerCase());
+export const MULTIPLAYER_ENABLED = true as const;
+
+/** Maximum concurrent human players in a single hot-seat session. */
+export const MAX_PLAYERS = 4;
