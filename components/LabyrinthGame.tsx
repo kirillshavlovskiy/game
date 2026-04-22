@@ -12,11 +12,12 @@ const combatLog = (message: string, ...args: unknown[]) => {
 };
 
 /**
- * When `true`, movement pool stays unlimited — no movement dice modal after each step.
- * Use this so single-player does not re-open the movement dice after every 1-move roll.
- * Set to `false` for classic finite moves (roll once, then spend until empty).
+ * Dev-only debug override. When `true`, every turn grants an unlimited movement pool and the
+ * roll-for-moves modal is suppressed — useful when iterating on maze / combat wiring without
+ * rolling dice each turn. Ship with `false` for the classic "roll once, spend until empty,
+ * then turn passes" loop that hot-seat multiplayer needs.
  */
-const TEMP_INFINITE_MOVES = true;
+const TEMP_INFINITE_MOVES = false;
 const INFINITE_MOVES_POOL = 999_999;
 
 const ISO_MINIMAP_ZOOM_BASELINE = 1;
