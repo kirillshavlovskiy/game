@@ -2512,9 +2512,6 @@ const HORROR_HERO_PORTRAITS = [
   { path: `${HERO_PORTRAIT_PREFIX}hero-wear-4.png`, title: "Horror hero — gambeson & pauldron (no weapons)" },
 ] as const;
 
-/** Player 1 (index 0): only this portrait at start — no hero/emoji picker in start menu / settings. */
-const PLAYER_1_FIXED_AVATAR_PATH = HORROR_HERO_PORTRAITS[0]!.path;
-
 function isHeroPortraitPath(value: string): boolean {
   return (
     value.startsWith(HERO_PORTRAIT_PREFIX) ||
@@ -3398,15 +3395,6 @@ export default function LabyrinthGame() {
       HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path
     )
   );
-  /** Player 1 portrait is not selectable — keep state aligned with `PLAYER_1_FIXED_AVATAR_PATH`. */
-  useEffect(() => {
-    setPlayerAvatars((prev) => {
-      if (prev[0] === PLAYER_1_FIXED_AVATAR_PATH) return prev;
-      const next = [...prev];
-      next[0] = PLAYER_1_FIXED_AVATAR_PATH;
-      return next;
-    });
-  }, [numPlayers]);
   const [playerWeaponGlb, setPlayerWeaponGlb] = useState<string[]>(() =>
     Array.from({ length: MAX_PLAYERS }, (_, i) => WEAPON_OPTIONS[i % WEAPON_OPTIONS.length]!.path),
   );
@@ -8396,83 +8384,56 @@ export default function LabyrinthGame() {
                         alignItems: "center",
                       }}
                     >
-                      {i === 0 ? (
-                        <div
-                          title={HORROR_HERO_PORTRAITS[0]!.title}
+                      {HORROR_HERO_PORTRAITS.map((h) => (
+                        <button
+                          key={h.path}
+                          type="button"
+                          title={h.title}
+                          className="start-menu-avatar-btn"
+                          onClick={() => {
+                            setPlayerAvatars((prev) => {
+                              const next =
+                                prev.length >= numPlayers
+                                  ? [...prev]
+                                  : [
+                                      ...prev,
+                                      ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
+                                        HORROR_HERO_PORTRAITS[(prev.length + j) % HORROR_HERO_PORTRAITS.length]!.path
+                                      ),
+                                    ];
+                              next[i] = h.path;
+                              return next;
+                            });
+                          }}
                           style={{
                             width: AVATAR_PICKER_BTN_PX,
                             height: AVATAR_PICKER_BTN_PX,
-                            border: `2px solid ${START_MENU_ACCENT_BRIGHT}`,
+                            padding: 0,
+                            lineHeight: 1,
+                            border:
+                              (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
+                                ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
+                                : `1px solid ${START_MENU_BORDER_MUTE}`,
                             borderRadius: 6,
-                            background: START_MENU_SELECTED_FILL,
-                            overflow: "hidden",
-                            flexShrink: 0,
+                            background:
+                              (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
+                                ? START_MENU_SELECTED_FILL
+                                : START_MENU_CTRL_BG,
+                            cursor: "pointer",
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
+                            overflow: "hidden",
                           }}
                         >
                           <img
-                            src={heroPortraitImgSrc(PLAYER_1_FIXED_AVATAR_PATH)}
+                            src={h.path}
                             alt=""
                             draggable={false}
                             style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
                           />
-                        </div>
-                      ) : (
-                        <>
-                          {HORROR_HERO_PORTRAITS.map((h) => (
-                            <button
-                              key={h.path}
-                              type="button"
-                              title={h.title}
-                              className="start-menu-avatar-btn"
-                              onClick={() => {
-                                setPlayerAvatars((prev) => {
-                                  const next =
-                                    prev.length >= numPlayers
-                                      ? [...prev]
-                                      : [
-                                          ...prev,
-                                          ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
-                                            HORROR_HERO_PORTRAITS[(prev.length + j) % HORROR_HERO_PORTRAITS.length]!.path
-                                          ),
-                                        ];
-                                  next[i] = h.path;
-                                  return next;
-                                });
-                              }}
-                              style={{
-                                width: AVATAR_PICKER_BTN_PX,
-                                height: AVATAR_PICKER_BTN_PX,
-                                padding: 0,
-                                lineHeight: 1,
-                                border:
-                                  (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
-                                    ? `2px solid ${START_MENU_ACCENT_BRIGHT}`
-                                    : `1px solid ${START_MENU_BORDER_MUTE}`,
-                                borderRadius: 6,
-                                background:
-                                  (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
-                                    ? START_MENU_SELECTED_FILL
-                                    : START_MENU_CTRL_BG,
-                                cursor: "pointer",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                overflow: "hidden",
-                              }}
-                            >
-                              <img
-                                src={h.path}
-                                alt=""
-                                draggable={false}
-                                style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
-                              />
-                            </button>
-                          ))}
-                        </>
-                      )}
+                        </button>
+                      ))}
                     </div>
                     <input
                       type="text"
@@ -13066,82 +13027,55 @@ export default function LabyrinthGame() {
                         alignItems: "center",
                       }}
                     >
-                      {i === 0 ? (
-                        <div
-                          title={HORROR_HERO_PORTRAITS[0]!.title}
+                      {HORROR_HERO_PORTRAITS.map((h) => (
+                        <button
+                          key={h.path}
+                          type="button"
+                          title={h.title}
+                          onClick={() => {
+                            setPlayerAvatars((prev) => {
+                              const next =
+                                prev.length >= numPlayers
+                                  ? [...prev]
+                                  : [
+                                      ...prev,
+                                      ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
+                                        HORROR_HERO_PORTRAITS[(prev.length + j) % HORROR_HERO_PORTRAITS.length]!.path
+                                      ),
+                                    ];
+                              next[i] = h.path;
+                              return next;
+                            });
+                          }}
                           style={{
                             width: AVATAR_PICKER_BTN_PX,
                             height: AVATAR_PICKER_BTN_PX,
-                            border: `2px solid ${PLAYER_COLORS[0] ?? "#00ff88"}`,
+                            padding: 0,
+                            lineHeight: 1,
+                            border:
+                              (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
+                                ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}`
+                                : "1px solid #444",
                             borderRadius: 6,
-                            background: "rgba(0,255,136,0.2)",
-                            overflow: "hidden",
-                            flexShrink: 0,
+                            background:
+                              (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
+                                ? "rgba(0,255,136,0.2)"
+                                : "#1a1a24",
+                            cursor: "pointer",
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
+                            overflow: "hidden",
                           }}
                         >
                           <img
-                            src={heroPortraitImgSrc(PLAYER_1_FIXED_AVATAR_PATH)}
+                            src={h.path}
                             alt=""
                             draggable={false}
                             style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
                           />
-                        </div>
-                      ) : (
-                        <>
-                          {HORROR_HERO_PORTRAITS.map((h) => (
-                            <button
-                              key={h.path}
-                              type="button"
-                              title={h.title}
-                              onClick={() => {
-                                setPlayerAvatars((prev) => {
-                                  const next =
-                                    prev.length >= numPlayers
-                                      ? [...prev]
-                                      : [
-                                          ...prev,
-                                          ...Array.from({ length: numPlayers - prev.length }, (_, j) =>
-                                            HORROR_HERO_PORTRAITS[(prev.length + j) % HORROR_HERO_PORTRAITS.length]!.path
-                                          ),
-                                        ];
-                                  next[i] = h.path;
-                                  return next;
-                                });
-                              }}
-                              style={{
-                                width: AVATAR_PICKER_BTN_PX,
-                                height: AVATAR_PICKER_BTN_PX,
-                                padding: 0,
-                                lineHeight: 1,
-                                border:
-                                  (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
-                                    ? `2px solid ${PLAYER_COLORS[i] ?? "#00ff88"}`
-                                    : "1px solid #444",
-                                borderRadius: 6,
-                                background:
-                                  (playerAvatars[i] ?? HORROR_HERO_PORTRAITS[i % HORROR_HERO_PORTRAITS.length]!.path) === h.path
-                                    ? "rgba(0,255,136,0.2)"
-                                    : "#1a1a24",
-                                cursor: "pointer",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                overflow: "hidden",
-                              }}
-                            >
-                              <img
-                                src={h.path}
-                                alt=""
-                                draggable={false}
-                                style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
-                              />
-                            </button>
-                          ))}
-                        </>
-                      )}
+                        </button>
+                      ))}
                     </div>
                     <input
                       type="text"
